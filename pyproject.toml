@@ -1,0 +1,44 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["data", "backups", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle-Fehler (Syntax/echte Fehler; E501 Zeilenlänge ignorieren wir)
+    "W",     # pycodestyle-Warnungen
+    "F",     # Pyflakes (unbenutzte Namen, undefinierte Variablen)
+    "I",     # Import-Sortierung
+    "B",     # flake8-bugbear (echte Bug-Fallen, z. B. mutable Defaults)
+    "UP",    # pyupgrade (moderne Syntax)
+    "SIM",   # flake8-simplify
+    "RUF",   # ruff-spezifisch
+    "ASYNC", # Blocking-Calls in Async-Funktionen
+]
+ignore = [
+    "B008",   # FastAPI: Depends()/File()/Query() in Defaults sind idiomatisch
+    "B904",   # HTTPException ohne 'from' im Codebase-Stil (klare Meldung statt Kette)
+    "BLE001", # weite except sind hier beabsichtigt (tolerante Sammler, Best-Effort)
+    "S110",   # try-except-pass bewusst (Best-Effort-Logging/Pruning)
+    "S112",   # try-except-continue bewusst
+    "SIM105", # try-except-pass statt contextlib.suppress (Best-Effort-Stil)
+    "RUF013", # implizite Optionals (FastAPI-Stil) bewusst
+    "DTZ005", # naive datetime.now() reicht (lokale Uptime-Berechnung)
+    "E501",   # Zeilenlänge nicht erzwingen (lange URLs/Docstrings)
+    "ASYNC230", # kleine Datei-IOs im Stream bewusst blockierend (große Kopien: to_thread)
+    "ASYNC240", # kleine pathlib-Operationen im Stream bewusst blockierend
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+ignore_missing_imports = true
+check_untyped_defs = true
+# Codebase-Stil: 'param: str = None' gilt als Optional (wie RUF013-ignore in ruff)
+implicit_optional = true
+warn_redundant_casts = true
+# docker/fastapi-Interaktionen sind dynamisch getypt; harte Fehler, keine Style-Regeln
+disable_error_code = ["import-untyped"]
+
+[tool.pytest.ini_options]
+addopts = "-q"

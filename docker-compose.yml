@@ -1,0 +1,109 @@
+# ZimaOS-/Compose-Deployment — Best Practices (v2)
+#
+# Start-Verhalten:
+# - `docker compose up -d` startet Dashboard + Backup-Daemon. Es gibt KEINEN
+#   festen Hauptserver: Alle Minecraft-Server sind Instanzen, die über das
+#   Dashboard erstellt/gestartet werden (eigene itzg-Container,
+#   /data/instances/{id}, Ports 25570+; Memory-Limit + Log-Rotation setzt das
+#   Dashboard je Instanz automatisch). Instanzen mit Zeitplan (Auto-Start,
+#   täglicher Neustart, geplante Backups) verwaltet der Dashboard-Scheduler.
+# - Achtung: `docker compose down` entfernt das Compose-Netzwerk; laufende
+#   Instanz-Container verlieren dadurch ihren Anschluss und werden beim nächsten
+#   "Starten" im Dashboard automatisch neu erstellt.
+#
+# Best Practices in dieser Datei:
+# - Neustart-Policy für alle Services (restart: unless-stopped)
+# - Ressourcen-Limits (mem_limit/cpus) — Dashboard und Backup sind überschaubar
+#   begrenzt, damit sie Instanzen nie verhungern lassen (siehe SERVER-SETUP.md §1)
+# - Log-Rotation (json-file, max-size/max-file) gegen unbegrenzte Logfiles
+# - Backup-Daemon: alle 6 h automatisch, 14 Tage Retention,
+#   Volume nur lesend gemountet (:ro) (siehe SERVER-SETUP.md §5)
+# - Security: nur der Spielport + 8080 werden gemappt; Dashboard niemals direkt
+#   ins Internet (VPN/Reverse-Proxy), DASHBOARD_API_KEY setzen!
+#
+# ZimaOS-Hinweise:
+# - Dashboard läuft als UID/GID 1000; Docker-Socket-Zugriff über die Host-Gruppe
+#   (DOCKER_GID setzen, siehe unten).
+# - Volume "mcdata" speichert Mods, Modpacks und ALLE Instanzen persistent.
+# - Backups landen im Bind-Mount ./backups neben dieser Datei — in ZimaOS ggf.
+#   auf einen Pfad unter /DATA/ umlenken.
+
+services:
+  dashboard:
+    build: .
+    container_name: mc-dashboard
+    restart: unless-stopped
+    environment:
+      DASHBOARD_API_KEY: ""     # BEST PRACTICE: setzen (z. B. `openssl rand -hex 32`),
+                                # schützt alle API-Routen außer /api/health
+      CORS_ORIGINS: "*"         # lokal okay; bei Reverse-Proxy auf echte Origin setzen
+      CF_API_KEY: ""            # CurseForge-API-Key (kostenlos: console.curseforge.com)
+      # --- Multi-Server ---
+      INSTANCES_DIR: "/data/instances"
+      INSTANCES_PORT_BASE: "25570"
+      INSTANCES_MEMORY: "2G"    # Default-Heap pro Instanz (siehe SERVER-SETUP.md §1)
+      INSTANCES_HOST_DIR: ""    # leer = automatische Erkennung (empfohlen)
+      # --- Crash-Watchdog/Alerts (optional, siehe SERVER-SETUP.md §8) ---
+      ALERT_WEBHOOK_URL: ""     # Discord-kompatibler Webhook; leer = aus
+      TELEGRAM_BOT_TOKEN: ""    # alternativ Telegram (Token + Chat-ID)
+      TELEGRAM_CHAT_ID: ""
+      ALERT_EVENTS: "crash,start,stop"  # oder z. B. "crash", +update für Update-Alerts
+      # --- Scheduler (Zeitplan je Instanz, siehe Dashboard → Zeitplan-Box) ---
+      # Geplante Neustarts laufen in Container-Lokalzeit; für lokale Zeit TZ setzen:
+      # TZ: "Europe/Berlin"
+    ports:
+      - "8080:8080"             # LAN/VPN only — nie direkt ins Internet!
+    volumes:
+      - mcdata:/data
+      - /var/run/docker.sock:/var/run/docker.sock   # Instanz-Verwaltung + Ressourcen-Statistik
+    # Gehärtet: UID/GID 1000 (Dockerfile-User, identisch mit itzg/minecraft-
+    # server) statt root. Docker-Socket-Zugriff läuft über die Socket-Gruppe:
+    # DOCKER_GID auf die Host-GID von /var/run/docker.sock setzen, ermitteln mit
+    #   docker run --rm alpine:3.20 stat -c '%g' /var/run/docker.sock
+    # oder auf dem Host: stat -c '%g' /var/run/docker.sock
+    # Migration von Bestands-Volumes (früher root): einmalig
+    #   docker compose run --user 0 --rm dashboard chown -R 1000:1000 /data
+    user: "1000:1000"
+    group_add:
+      - "${DOCKER_GID:-999}"
+    # Ressourcen-Deckel: Dashboard + Docker-SDK sind leichtgewichtig (§1)
+    mem_limit: 1g
+    cpus: 1.0
+    # Log-Rotation gegen unbegrenzte Container-Logs
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backup:
+    # Wartungsfreier Backup-Daemon: tar't das gesamte mcdata-Volume (alle
+    # Instanzen + Mods) im 6-h-Takt, behält 14 Tage, legt latest.tgz-Symlink.
+    # Bewusst ohne itzg/mc-backup: jenes blockiert ohne erreichbares RCON —
+    # Instanz-Container laufen hier mit ENABLE_RCON=FALSE. Hinweis §5:
+    # Für 100 % konsistente Weltschnappschüsse Instanz vorher stoppen.
+    image: alpine:3.20
+    container_name: mc-backup
+    restart: unless-stopped
+    volumes:
+      - mcdata:/data:ro                 # ALLE Instanzen + Mods: nur lesend
+      - ./backups:/backups              # Backup-Ablageort auf dem Host
+    command: >
+      sh -c "while true; do
+               ts=$$(date +%F-%H%M);
+               tar --exclude='./backups' -czf /backups/mcdata-$$ts.tgz -C /data . &&
+               ln -sf mcdata-$$ts.tgz /backups/latest.tgz &&
+               echo backup mcdata-$$ts.tgz ok;
+               find /backups -name 'mcdata-*.tgz' -mtime +14 -delete;
+               sleep 6h;
+             done"
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+
+volumes:
+  mcdata:

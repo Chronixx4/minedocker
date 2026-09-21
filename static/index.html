@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0e14">
+<title>Minecraft Server Dashboard</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
+        <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>
+      </svg>
+    </span>
+    <h1>Minecraft Dashboard</h1>
+  </div>
+  <div class="topbar-right">
+    <span id="inst-badge" class="badge off"><span class="dot"></span><span id="inst-badge-text">–</span></span>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Hauptnavigation">
+  <button class="tab active" data-tab="overview">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    Übersicht
+  </button>
+  <button class="tab" data-tab="servers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+    Server
+  </button>
+  <button class="tab" data-tab="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
+    Mods suchen
+  </button>
+  <button class="tab" data-tab="modpacks">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
+    Modpacks
+  </button>
+  <button class="tab" data-tab="stats">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+    Statistik
+  </button>
+</nav>
+
+<main>
+  <!-- Übersicht -->
+  <section id="tab-overview" class="panel active">
+    <!-- KPI-Kacheln -->
+    <div class="stat-row">
+      <div class="stat-tile">
+        <span class="stat-icon i-instances" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+        </span>
+        <div class="stat-body">
+          <div class="stat-value" id="ov-inst-total">–</div>
+          <div class="stat-label">Instanzen</div>
+          <div class="stat-sub muted small" id="ov-inst-sub">Lade…</div>
+          <div class="dist hidden" id="ov-inst-dist" title="Verteilung: läuft / startet / gestoppt / Fehler">
+            <div class="dist-fill running"></div>
+            <div class="dist-fill starting"></div>
+            <div class="dist-fill stopped"></div>
+            <div class="dist-fill error"></div>
+          </div>
+        </div>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-icon i-players" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M3.5 20c.6-3.4 2.8-5 5.5-5s4.9 1.6 5.5 5"/><circle cx="17" cy="9.5" r="2.5"/><path d="M16 15.2c2.6.2 4 1.7 4.5 4.3"/></svg>
+        </span>
+        <div class="stat-body">
+          <div class="stat-value" id="ov-players">–</div>
+          <div class="stat-label">Spieler online</div>
+          <div class="stat-sub muted small" id="ov-players-sub">–</div>
+          <div class="stat-sub muted small ov-names" id="ov-players-names" hidden></div>
+        </div>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-icon i-cpu" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg>
+        </span>
+        <div class="stat-body">
+          <div class="stat-value" id="ov-cpu">–</div>
+          <div class="stat-label">CPU (alle Server)</div>
+          <div class="stat-sub muted small" id="ov-cpu-sub">–</div>
+          <div class="spark" id="ov-cpu-spark" title="CPU-Verlauf"></div>
+        </div>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-icon i-ram" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2"/></svg>
+        </span>
+        <div class="stat-body">
+          <div class="stat-value" id="ov-ram">–</div>
+          <div class="stat-label">RAM (alle Server)</div>
+          <div class="stat-sub muted small" id="ov-ram-sub">–</div>
+          <div class="spark ram" id="ov-ram-spark" title="RAM-Verlauf"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="ov-error" class="err hidden"></div>
+
+    <div class="ov-main">
+      <!-- Server-Karten -->
+      <div class="card ov-servers">
+        <div class="card-head">
+          <h2>Server <span id="ov-count" class="muted"></span></h2>
+          <div class="row">
+            <span id="ov-updated" class="muted small" title="Letzte Aktualisierung"></span>
+            <button id="ov-reload" class="btn small-btn" title="Jetzt aktualisieren">Aktualisieren</button>
+            <button id="ov-new" class="btn primary">+ Neuer Server</button>
+          </div>
+        </div>
+        <div class="ov-toolbar">
+          <input id="ov-search" class="search-input" type="search"
+                 placeholder="Name filtern …" autocomplete="off">
+          <label class="toolbar-field" for="ov-sort">Sortierung
+            <select id="ov-sort">
+              <option value="name">Name A–Z</option>
+              <option value="status">Status</option>
+              <option value="players">Spieler</option>
+              <option value="cpu">CPU</option>
+              <option value="ram">RAM</option>
+              <option value="created">Neueste zuerst</option>
+            </select>
+          </label>
+          <div class="seg" id="ov-filter" role="group" aria-label="Server filtern">
+            <button class="seg-btn active" data-ov-filter="all">Alle</button>
+            <button class="seg-btn" data-ov-filter="running">Läuft</button>
+            <button class="seg-btn hidden" data-ov-filter="starting">Startet</button>
+            <button class="seg-btn" data-ov-filter="stopped">Gestoppt</button>
+            <button class="seg-btn" data-ov-filter="error">Fehler</button>
+          </div>
+          <div class="row">
+            <button id="ov-start-all" class="btn" title="Alle gestoppten Server starten">Alle starten</button>
+            <button id="ov-stop-all" class="btn" title="Alle laufenden Server stoppen">Alle stoppen</button>
+          </div>
+          <div class="row">
+            <label class="toolbar-field" for="ov-group">Gruppe
+              <select id="ov-group">
+                <option value="">–</option>
+              </select>
+            </label>
+            <button id="ov-group-start" class="btn" disabled title="Alle gestoppten Server der Gruppe starten">Gruppe starten</button>
+            <button id="ov-group-stop" class="btn" disabled title="Alle laufenden Server der Gruppe stoppen">Gruppe stoppen</button>
+          </div>
+        </div>
+        <div id="ov-grid" class="inst-grid"></div>
+        <p id="ov-empty" class="empty muted hidden">Noch keine Server-Instanzen vorhanden — lege oben rechts einen an.</p>
+      </div>
+
+      <!-- Docker-Ressourcen (seitliche Spalte) -->
+      <div class="ov-side">
+        <div class="card">
+          <div class="card-head">
+            <h2>Ressourcen (Docker)</h2>
+            <span id="res-refresh-hint" class="muted small">Abfrage alle 5 s</span>
+          </div>
+          <div id="ov-res-none" class="muted hidden">Kein laufender Server-Container.</div>
+          <div class="res-total">
+            <div class="metric">
+              <div class="metric-head"><span>CPU (gesamt)</span><span id="cpu-val">–</span></div>
+              <div class="bar"><div id="cpu-bar" class="bar-fill" style="width:0%"></div></div>
+              <div class="spark" id="res-cpu-spark" title="CPU-Verlauf"></div>
+            </div>
+            <div class="metric">
+              <div class="metric-head"><span>RAM (gesamt)</span><span id="ram-val">–</span></div>
+              <div class="bar"><div id="ram-bar" class="bar-fill ram" style="width:0%"></div></div>
+              <div class="spark ram" id="res-ram-spark" title="RAM-Verlauf"></div>
+            </div>
+          </div>
+          <h3>Je Container</h3>
+          <div id="res-containers" class="res-containers"></div>
+          <p class="muted small" id="res-note" hidden>Werte kommen von der Docker Engine und erscheinen, sobald ein Server läuft.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Server-Instanzen (Multi-Server-Verwaltung) -->
+  <section id="tab-servers" class="panel">
+    <div class="card">
+      <div class="card-head">
+        <h2>Server-Instanzen <span id="inst-count" class="muted"></span></h2>
+        <div class="row">
+          <button id="inst-reload" class="btn">Aktualisieren</button>
+          <button id="inst-import" class="btn" title="Bestehenden Server-Ordner (.zip/.tar.gz) als Instanz einbinden">Importieren</button>
+          <button id="inst-new" class="btn primary">Neuen Server erstellen</button>
+        </div>
+      </div>
+      <p class="muted small" id="inst-dir"></p>
+
+      <div id="inst-create" class="hidden create-box">
+        <h3>Neuen Server erstellen</h3>
+        <div class="form-grid">
+          <label>Name
+            <input id="inst-name" type="text" maxlength="64" placeholder="z. B. Survival" autocomplete="off">
+          </label>
+          <label>Minecraft-Version
+            <select id="inst-mc-version"></select>
+          </label>
+          <label>Server-Loader
+            <select id="inst-loader"></select>
+          </label>
+          <label>Loader-Version
+            <select id="inst-loader-version"></select>
+          </label>
+          <label>Port
+            <input id="inst-port" type="number" min="1024" max="65535" placeholder="automatisch">
+          </label>
+          <label>Tags
+            <input id="inst-tags-create" type="text" maxlength="120" autocomplete="off"
+                   placeholder="Komma-getrennt, z. B. Survival, Modded">
+          </label>
+          <label>RAM pro Server
+            <select id="inst-memory">
+              <option value="">Standard (2G)</option>
+              <option value="1G">1G</option>
+              <option value="2G">2G</option>
+              <option value="4G">4G</option>
+              <option value="6G">6G</option>
+              <option value="8G">8G</option>
+              <option value="12G">12G</option>
+              <option value="16G">16G</option>
+            </select>
+            <span class="muted small">Richtwerte (SERVER-SETUP.md §1): Vanilla 2–5 Spieler 3G ·
+              leichte Modpacks 4–6G · mittlere 6–10G · schwere (ATM, GT:NH) 10–16G+
+            </span>
+          </label>
+        </div>
+        <p class="muted small" id="inst-loader-note"></p>
+        <label class="check">
+          <input type="checkbox" id="inst-eula">
+          Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
+        </label>
+        <div id="inst-create-msg" class="err hidden"></div>
+        <div class="row">
+          <button id="inst-create-btn" class="btn primary">Server erstellen</button>
+          <button id="inst-cancel" class="btn">Abbrechen</button>
+        </div>
+      </div>
+
+      <div id="inst-loading" class="loading hidden"><span class="spinner"></span> Lade Instanzen…</div>
+      <div id="inst-error" class="err hidden"></div>
+      <div id="inst-grid" class="inst-grid"></div>
+      <p id="inst-empty" class="empty muted hidden">Noch keine Server-Instanzen vorhanden — lege oben rechts einen an.</p>
+
+      <div id="inst-import-box" class="hidden create-box">
+        <h3>Bestehenden Server importieren</h3>
+        <p class="muted small">Archiv (.zip oder .tar.gz) des alten Server-Ordners hochladen —
+          Welt, Mods und Configs werden in eine neue Instanz übernommen. server.properties
+          wird auf die Container-Erfordernisse angepasst (Port/RCON), die EULA erzwungen.
+          Welt-Ordner mit <code>level.dat</code> am Anfang oder in einem Unterordner werden erkannt.</p>
+        <div class="form-grid">
+          <label>Name
+            <input id="imp-name" type="text" maxlength="64" placeholder="z. B. Altserver" autocomplete="off">
+          </label>
+          <label>Server-Archiv
+            <input id="imp-file" class="file-input" type="file" accept=".zip,.tar.gz">
+          </label>
+          <label>Minecraft-Version
+            <select id="imp-mc-version"></select>
+          </label>
+          <label>Server-Loader
+            <select id="imp-loader"></select>
+          </label>
+          <label>Loader-Version
+            <select id="imp-loader-version"></select>
+          </label>
+          <label>Port
+            <input id="imp-port" type="number" min="1024" max="65535" placeholder="automatisch">
+          </label>
+          <label>RAM pro Server
+            <select id="imp-memory">
+              <option value="">Standard (2G)</option>
+              <option value="1G">1G</option>
+              <option value="2G">2G</option>
+              <option value="4G">4G</option>
+              <option value="6G">6G</option>
+              <option value="8G">8G</option>
+              <option value="12G">12G</option>
+              <option value="16G">16G</option>
+            </select>
+          </label>
+        </div>
+        <p class="muted small" id="imp-loader-note"></p>
+        <label class="check">
+          <input type="checkbox" id="imp-eula">
+          Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
+        </label>
+        <div id="imp-msg" class="err hidden"></div>
+        <div class="row">
+          <button id="imp-create-btn" class="btn primary">Server importieren</button>
+          <button id="imp-cancel" class="btn">Abbrechen</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="inst-detail" class="card hidden">
+      <div class="card-head">
+        <h2 id="detail-title">Instanz</h2>
+        <div class="row">
+          <span id="detail-state" class="badge inst-badge off" title="Status dieser Instanz">
+            <span class="dot"></span><span id="detail-state-text">–</span>
+          </span>
+          <button id="detail-close" class="btn">Schließen</button>
+        </div>
+      </div>
+      <div id="detail-info" class="detail-info"></div>
+      <div id="detail-error" class="err hidden"></div>
+      <div class="detail-grid">
+        <div>
+          <!-- Tags (Gruppen) + Port-Wechsel -->
+          <div class="upload-box">
+            <h3>Tags &amp; Port</h3>
+            <label class="lbl-input" for="inst-tags">Tags (Komma-getrennt, max. 8 — z. B. „Survival, Modded“)
+              <input id="inst-tags" type="text" autocomplete="off"
+                     placeholder="z. B. Survival, MiniGames">
+            </label>
+            <div class="row" style="margin-top: 0.4rem;">
+              <button id="tags-save" class="btn">Tags speichern</button>
+            </div>
+            <div class="sched-row" style="margin-top: 0.6rem;">
+              <label class="check" for="inst-port-new" style="margin: 0;">Port</label>
+              <input id="inst-port-new" type="number" min="1024" max="65535" class="sched-num-wide">
+              <button id="port-save" class="btn">Port ändern</button>
+            </div>
+            <p class="muted small">Port nur bei gestoppter Instanz änderbar — wirksam beim
+              nächsten Start. RCON-Port = Port + 1000 (wird mitreserviert).</p>
+            <div id="tags-error" class="err hidden"></div>
+          </div>
+
+          <!-- Installiertes Modpack: Update-Prüfung + Pack-Update -->
+          <div class="upload-box">
+            <h3>Installiertes Modpack
+              <button id="mp-update-check" class="btn small-btn" title="Auf neuere Pack-Version prüfen">Update prüfen</button>
+            </h3>
+            <p class="muted small" id="mp-update-info">Noch kein Modpack installiert.</p>
+            <div class="row" style="margin-top: 0.4rem;">
+              <button id="mp-update-btn" class="btn primary hidden"
+                      title="Neueste kompatible Pack-Version erneut in diese Instanz installieren">Pack aktualisieren</button>
+            </div>
+            <div id="mp-update-error" class="err hidden"></div>
+          </div>
+
+          <h3>Modpack installieren</h3>
+          <div class="search-target-row">
+            <label for="pack-source">Quelle</label>
+            <select id="pack-source">
+              <option value="modrinth">Modrinth</option>
+              <option value="curseforge">CurseForge</option>
+            </select>
+          </div>
+          <input id="pack-search-input" class="search-input" type="search"
+                 placeholder="Modpacks suchen (z. B. Simply Optimized, Fabulously Optimized …)" autocomplete="off">
+          <p class="muted small" id="pack-target"></p>
+          <div id="pack-progress" class="hidden">
+            <div class="metric-head"><span id="pack-phase" class="muted small"></span><span id="pack-pct" class="muted small"></span></div>
+            <div class="bar"><div id="pack-bar" class="bar-fill" style="width:0%"></div></div>
+          </div>
+          <div id="pack-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
+          <div id="pack-error" class="err hidden"></div>
+          <div id="pack-results" class="results"></div>
+          <div class="upload-box">
+            <h3>Fertiges Modpack hochladen</h3>
+            <div class="upload-row">
+              <input id="pack-upload-file" class="file-input" type="file" accept=".mrpack,.zip">
+              <button id="pack-upload-btn" class="btn primary" disabled>Installieren</button>
+            </div>
+            <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Benötigte MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt (Server muss dafür gestoppt sein)</p>
+            <div id="upload-error" class="err hidden"></div>
+          </div>
+          <div class="upload-box">
+            <h3>Backups</h3>
+            <div class="row">
+              <button id="backup-create-btn" class="btn primary">Backup erstellen</button>
+              <button id="backup-reload-btn" class="btn">Aktualisieren</button>
+            </div>
+            <p class="muted small">Sichert Welt, Configs und Mods der Instanz im Volume. Für
+              konsistente Snapshots die Instanz vorher stoppen. Wiederherstellen
+              ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <div id="backup-error" class="err hidden"></div>
+            <ul id="backup-list" class="mod-list"></ul>
+            <p id="backup-empty" class="muted hidden">Noch keine Backups vorhanden.</p>
+          </div>
+
+          <div class="upload-box">
+            <h3>Welt <span class="muted small">(Ordner als Archiv)</span>
+              <button id="world-reload" class="btn small-btn" title="Welt-Info aktualisieren">Aktualisieren</button>
+            </h3>
+            <p class="muted small" id="world-info">–</p>
+            <div class="upload-row">
+              <button id="world-download-btn" class="btn primary" disabled>Welt herunterladen (.zip)</button>
+            </div>
+            <div class="upload-row" style="margin-top: 0.5rem;">
+              <input id="world-upload-file" class="file-input" type="file" accept=".zip,.tar.gz">
+              <button id="world-upload-btn" class="btn" disabled>Welt hochladen</button>
+            </div>
+            <p class="muted small">Ersetzt die Welt: Das Archiv enthält <code>level.dat</code> direkt
+              (Welt-Inhalt) oder in einem Unterordner (Ordner-Name wird übernommen).
+              Nur bei gestoppter Instanz möglich.</p>
+            <div id="world-error" class="err hidden"></div>
+          </div>
+
+          <div class="upload-box">
+            <h3>JVM-Optionen <span class="muted small">(wirken beim nächsten Start)</span></h3>
+            <label class="check">
+              <input type="checkbox" id="jvm-aikar">
+              Aikar-Flags (optimierte GC-Einstellungen für Server)
+            </label>
+            <textarea id="jvm-opts" class="jvm-opts" rows="3" spellcheck="false"
+                      placeholder="z. B. -XX:+UseG1GC -Dfile.encoding=UTF-8"></textarea>
+            <p class="muted small">Zusätzlich zum RAM-Wert übergebene JVM_OPTS; leer = Standard.
+              Keine Zeilenumbrüche. Gilt für den nächsten (Neu-)Start.</p>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="jvm-save" class="btn primary">Speichern</button>
+            </div>
+            <div id="jvm-error" class="err hidden"></div>
+          </div>
+
+          <!-- Zeitplan (Auto-Start, geplanter Neustart, Backups, Update-Check) -->
+          <div class="upload-box">
+            <h3>Zeitplan <span class="muted small">(Container-Lokalzeit, geprüft alle 30 s)</span></h3>
+            <label class="check">
+              <input type="checkbox" id="sched-autostart">
+              Beim Dashboard-Start automatisch starten
+            </label>
+            <div class="sched-row">
+              <label class="check">
+                <input type="checkbox" id="sched-restart-enabled">
+                Täglicher Neustart um
+              </label>
+              <input type="time" id="sched-restart-time" value="04:00">
+              <span class="muted small">Vorwarnung</span>
+              <input type="number" id="sched-restart-warn" class="sched-num" min="0" max="30" value="5">
+              <span class="muted small">Min (0 = aus)</span>
+            </div>
+            <div class="sched-row">
+              <label class="check">
+                <input type="checkbox" id="sched-backup-enabled">
+                Backup alle
+              </label>
+              <input type="number" id="sched-backup-hours" class="sched-num" min="1" max="168" value="6">
+              <span class="muted small">Stunden, behalte</span>
+              <input type="number" id="sched-backup-keep" class="sched-num" min="1" max="20" value="5">
+              <span class="muted small">Backups</span>
+            </div>
+            <div class="sched-row">
+              <label class="check">
+                <input type="checkbox" id="sched-update-enabled">
+                Mod-Update-Check alle
+              </label>
+              <input type="number" id="sched-update-hours" class="sched-num" min="1" max="168" value="24">
+              <span class="muted small">Stunden (Alert „update", opt-in über ALERT_EVENTS)</span>
+            </div>
+            <p class="muted small">Auto-Start greift beim Hochfahren des Dashboards (einmal pro Start).
+              Verpasste Neustart-Termine werden nur innerhalb von 30 Min nachgeholt.</p>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="sched-save" class="btn primary">Speichern</button>
+            </div>
+            <div id="sched-error" class="err hidden"></div>
+          </div>
+
+          <!-- Spieler verwalten (RCON: OP/Kick/Ban) -->
+          <div class="upload-box">
+            <h3>Spieler verwalten <span class="muted small">(RCON)</span>
+              <button id="rcon-reload" class="btn small-btn" title="Online-Spieler laden">Spieler laden</button>
+            </h3>
+            <p class="muted small" id="rcon-hint">Funktioniert nur bei laufendem Server. Bestehende Server müssen einmal neu gestartet werden, damit RCON aktiv ist.</p>
+            <ul id="rcon-players" class="mod-list compact"></ul>
+            <p id="rcon-players-empty" class="muted small hidden">Niemand online.</p>
+            <div class="rcon-actions">
+              <input id="rcon-target" class="search-input" type="text"
+                     placeholder="Spielername" maxlength="16" autocomplete="off">
+              <button id="rcon-op" class="btn" title="Operator-Rechte geben">OP geben</button>
+              <button id="rcon-deop" class="btn" title="Operator-Rechte entfernen">OP entfernen</button>
+              <button id="rcon-kick" class="btn" title="Spieler vom Server kicken">Kicken</button>
+              <button id="rcon-ban" class="btn danger" title="Spieler dauerhaft bannen">Bannen</button>
+              <button id="rcon-pardon" class="btn" title="Bann aufheben">Entbannen</button>
+            </div>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="rcon-banlist-btn" class="btn small-btn">Banliste anzeigen</button>
+            </div>
+            <pre id="rcon-output" class="logs rcon-log hidden"></pre>
+            <div id="rcon-error" class="err hidden"></div>
+          </div>
+
+          <!-- Freie RCON-Konsole -->
+          <div class="upload-box">
+            <h3>Konsole <span class="muted small" id="console-mode"></span></h3>
+            <p class="muted small" id="console-hint">Führt einen Befehl über RCON aus
+              (nur bei laufendem Server).</p>
+            <div class="rcon-actions">
+              <input id="console-input" class="search-input" type="text"
+                     placeholder="Befehl, z. B. say Hallo oder whitelist add Steve"
+                     maxlength="256" autocomplete="off" spellcheck="false">
+              <button id="console-send" class="btn primary">Senden</button>
+            </div>
+            <p class="muted small">Im Whitelist-Modus sind nur freigegebene Befehle erlaubt
+              (op, kick, ban, whitelist, say …) — freischaltbar via
+              <code>RCON_CONSOLE_MODE=free</code>.</p>
+            <pre id="console-log" class="logs console-log hidden"></pre>
+            <div id="console-error" class="err hidden"></div>
+          </div>
+
+          <!-- Whitelist (whitelist.json, auch offline editierbar) -->
+          <div class="upload-box">
+            <h3>Whitelist <span class="muted small">(whitelist.json)</span>
+              <button id="wl-reload-file" class="btn small-btn" title="Datei neu laden">Aktualisieren</button>
+            </h3>
+            <p class="muted small" id="wl-hint">Direkter Datei-Zugriff — funktioniert auch
+              bei gestoppter Instanz. Änderungen wirken beim nächsten Start bzw. per
+              „Auf Server laden“ (RCON).</p>
+            <div class="rcon-actions">
+              <input id="wl-input" class="search-input" type="text"
+                     placeholder="Spielername" maxlength="16" autocomplete="off">
+              <button id="wl-add" class="btn" title="Namen zur Liste hinzufügen">Hinzufügen</button>
+              <button id="wl-save" class="btn primary">Speichern</button>
+              <button id="wl-reload-server" class="btn" title="Whitelist auf dem laufenden Server neu laden (RCON)">Auf Server laden</button>
+            </div>
+            <p class="muted small" id="wl-summary"></p>
+            <ul id="wl-list" class="mod-list compact"></ul>
+            <p id="wl-empty" class="muted small hidden">Whitelist ist leer.</p>
+            <div id="wl-error" class="err hidden"></div>
+          </div>
+
+          <!-- Server-Einstellungen (server.properties) -->
+          <div class="upload-box">
+            <h3>Einstellungen <span class="muted small">(server.properties)</span>
+              <button id="cfg-toggle" class="btn small-btn">Anzeigen</button>
+            </h3>
+            <p class="muted small">Änderungen werden beim nächsten (Neu-)Start des Servers wirksam.</p>
+            <div id="cfg-editor" class="hidden">
+              <div class="mods-toolbar">
+                <div class="seg" id="cfg-mode" role="group" aria-label="Editor-Modus">
+                  <button class="seg-btn active" data-cfg-mode="form">Formular</button>
+                  <button class="seg-btn" data-cfg-mode="raw">Raw</button>
+                </div>
+                <input id="cfg-filter" class="search-input" type="search"
+                       placeholder="Eigenschaft filtern …" autocomplete="off">
+                <button id="cfg-reload" class="btn small-btn">Neu laden</button>
+              </div>
+              <p class="muted small" id="cfg-hint">Bekannte Eigenschaften mit passenden
+                Eingabefeldern und Bereichs-/Auswahl-Prüfung.</p>
+              <div id="cfg-form" class="cfg-form"></div>
+              <h4 id="cfg-unknown-head" class="cfg-unknown-head hidden">Weitere Eigenschaften (unbekannt)</h4>
+              <div id="cfg-list" class="cfg-list hidden"></div>
+              <div id="cfg-error" class="err hidden"></div>
+              <div class="row" style="margin-top: 0.6rem;">
+                <button id="cfg-save" class="btn primary">Speichern</button>
+                <span id="cfg-restart-row" class="row hidden">
+                  <span class="muted small">Neustart nötig, damit es wirkt.</span>
+                  <button id="cfg-restart" class="btn">Jetzt neu starten</button>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <h3>Mods dieser Instanz <span id="detail-mods-count" class="muted"></span></h3>
+          <div class="mods-toolbar">
+            <input id="mods-filter-input" class="search-input" type="search"
+                   placeholder="Mods filtern …" autocomplete="off">
+            <button id="mods-collapse-btn" class="btn small-btn"
+                    title="Mod-Liste ein-/ausklappen">Einklappen</button>
+          </div>
+          <p class="mods-summary muted small" id="mods-summary"></p>
+          <div class="row mods-update-row">
+            <button id="mods-update-check" class="btn small-btn">Updates prüfen</button>
+            <button id="mods-update-all" class="btn primary small-btn hidden"
+                    title="Alle Mods mit verfügbarem Update laden">Alle aktualisieren</button>
+            <span id="mods-update-summary" class="muted small"></span>
+          </div>
+          <div id="mods-update-progress" class="hidden">
+            <div class="metric-head"><span id="mods-update-phase" class="muted small"></span><span id="mods-update-pct" class="muted small"></span></div>
+            <div class="bar"><div id="mods-update-bar" class="bar-fill" style="width:0%"></div></div>
+          </div>
+          <div id="mods-update-error" class="err hidden"></div>
+          <ul id="detail-mods" class="mod-list compact"></ul>
+          <p id="detail-mods-empty" class="empty muted hidden">Keine Mods/Modpacks installiert.</p>
+          <h3>Logs
+            <button id="detail-logs-reload" class="btn small-btn">Aktualisieren</button>
+          </h3>
+          <pre id="detail-logs" class="logs">–</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Mods suchen -->
+  <section id="tab-search" class="panel">
+    <div class="card">
+      <div class="search-target-row">
+        <label for="search-source">Quelle</label>
+        <select id="search-source">
+          <option value="modrinth">Modrinth</option>
+          <option value="curseforge">CurseForge</option>
+        </select>
+        <label for="search-target-select">Installieren in Instanz</label>
+        <select id="search-target-select">
+          <option value="">Instanz wählen…</option>
+        </select>
+      </div>
+      <div class="search-target-row search-filters">
+        <label for="search-filter-sort">Sortierung</label>
+        <select id="search-filter-sort">
+          <option value="relevance">Relevanz</option>
+          <option value="downloads">Downloads</option>
+          <option value="updated">Zuletzt aktualisiert</option>
+          <option value="newest">Neueste</option>
+        </select>
+        <label for="search-filter-loader">Loader</label>
+        <select id="search-filter-loader">
+          <option value="">Wie Instanz</option>
+          <option value="any">Alle Loader</option>
+          <option value="fabric">Fabric</option>
+          <option value="forge">Forge</option>
+          <option value="neoforge">NeoForge</option>
+          <option value="quilt">Quilt</option>
+        </select>
+        <label for="search-filter-version">MC-Version</label>
+        <select id="search-filter-version">
+          <option value="">Wie Instanz</option>
+          <option value="any">Alle Versionen</option>
+        </select>
+        <label for="search-filter-environment">Server/Client</label>
+        <select id="search-filter-environment" title="Nur bei Modrinth verfügbar">
+          <option value="">Alle Mods</option>
+          <option value="server_required">Server: nötig</option>
+          <option value="server">Server: nötig/optional</option>
+          <option value="client_required">Client: nötig</option>
+          <option value="client">Client: nötig/optional</option>
+        </select>
+      </div>
+      <input id="search-input" class="search-input" type="search"
+             placeholder="Mods suchen (z. B. Lithium, Sodium, JEI …)" autocomplete="off">
+      <p class="muted small" id="search-target"></p>
+      <p class="muted small">Bereits installierte Mods sind grün hervorgehoben
+        (per Datei-Hash erkannt — auch wenn der Dateiname abweicht) und lassen sich
+        nicht doppelt installieren. Pflicht-Abhängigkeiten werden automatisch
+        mitinstalliert (Modrinth aus den Versions-Metadaten, CurseForge best
+        effort) und während der Installation angezeigt.</p>
+      <div id="search-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
+      <div id="search-error" class="err hidden"></div>
+      <div id="search-results" class="results"></div>
+      <div class="pager">
+        <button id="search-prev" class="btn" disabled>Zurück</button>
+        <span id="search-page" class="muted small"></span>
+        <button id="search-next" class="btn" disabled>Weiter</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Modpacks (global, pro Instanz) -->
+  <section id="tab-modpacks" class="panel">
+    <div class="card">
+      <div class="search-target-row">
+        <label for="mp-source">Quelle</label>
+        <select id="mp-source">
+          <option value="modrinth">Modrinth</option>
+          <option value="curseforge">CurseForge</option>
+        </select>
+        <label for="mp-target-select">Installieren in Instanz</label>
+        <select id="mp-target-select">
+          <option value="">Instanz wählen…</option>
+        </select>
+        <label for="mp-filter-version">MC-Version</label>
+        <select id="mp-filter-version">
+          <option value="">Alle</option>
+        </select>
+        <label for="mp-filter-loader">Loader</label>
+        <select id="mp-filter-loader">
+          <option value="">Alle</option>
+          <option value="fabric">Fabric</option>
+          <option value="forge">Forge</option>
+          <option value="neoforge">NeoForge</option>
+          <option value="quilt">Quilt</option>
+        </select>
+      </div>
+      <input id="mp-search-input" class="search-input" type="search"
+             placeholder="Modpacks suchen (z. B. Fabulously Optimized, Better MC …)" autocomplete="off">
+      <p class="muted small" id="mp-target"></p>
+      <div id="mp-create" class="create-box hidden">
+        <h3 id="mp-create-title">Server aus Modpack erstellen</h3>
+        <p class="muted small" id="mp-create-info"></p>
+        <div class="form-grid">
+          <label>Servername
+            <input id="mp-create-name" type="text" maxlength="64" autocomplete="off">
+          </label>
+          <label>Modpack-Version
+            <select id="mp-create-version" disabled>
+              <option value="">Neueste (Standard)</option>
+            </select>
+            <span class="muted small">Versionen werden beim Öffnen des Dialogs geladen</span>
+          </label>
+          <label>RAM pro Server
+            <select id="mp-create-memory">
+              <option value="">Standard (2G)</option>
+              <option value="1G">1G</option>
+              <option value="2G">2G</option>
+              <option value="4G">4G</option>
+              <option value="6G">6G</option>
+              <option value="8G">8G</option>
+              <option value="12G">12G</option>
+              <option value="16G">16G</option>
+            </select>
+            <span class="muted small">Richtwerte: leichte Modpacks 4–6G · mittlere 6–10G ·
+              schwere (ATM, GT:NH) 10–16G+
+            </span>
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="mp-create-eula">
+          Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
+        </label>
+        <div id="mp-create-error" class="err hidden"></div>
+        <div class="row">
+          <button id="mp-create-btn" class="btn primary">Server erstellen &amp; installieren</button>
+          <button id="mp-create-cancel" class="btn">Abbrechen</button>
+        </div>
+      </div>
+      <div id="mp-progress" class="hidden">
+        <div class="metric-head"><span id="mp-phase" class="muted small"></span><span id="mp-pct" class="muted small"></span></div>
+        <div class="bar"><div id="mp-bar" class="bar-fill" style="width:0%"></div></div>
+      </div>
+      <div id="mp-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
+      <div id="mp-error" class="err hidden"></div>
+      <div id="mp-results" class="results"></div>
+      <div class="upload-box">
+        <h3>Fertiges Modpack hochladen</h3>
+        <div class="upload-row">
+          <input id="mp-upload-file" class="file-input" type="file" accept=".mrpack,.zip">
+          <button id="mp-upload-btn" class="btn primary" disabled>Installieren</button>
+        </div>
+          <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Mit Ziel-Instanz: MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt · Ohne Ziel: neuer Server direkt aus dem Pack</p>
+          <div id="mp-upload-error" class="err hidden"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Statistik (persistenter Verlauf) -->
+  <section id="tab-stats" class="panel">
+    <div class="card">
+      <div class="stats-head">
+        <div>
+          <h2>Verlauf</h2>
+          <p class="muted small">CPU/RAM aller Server und Spielerzahlen — persistent
+            gesammelt (SQLite, Standard: 30 Tage, Intervall via
+            <code>HISTORY_INTERVAL</code>).</p>
+        </div>
+        <div class="row">
+          <select id="stats-range" class="search-input" aria-label="Zeitraum">
+            <option value="6">6 Stunden</option>
+            <option value="24" selected>24 Stunden</option>
+            <option value="168">7 Tage</option>
+            <option value="720">30 Tage</option>
+          </select>
+          <button id="stats-reload" class="btn small-btn">Aktualisieren</button>
+        </div>
+      </div>
+      <div id="stats-empty" class="empty muted hidden">Noch keine Verlaufsdaten — der
+        Sampler schreibt im Betrieb alle 30 Sekunden einen Punkt.</div>
+      <div id="stats-error" class="err hidden"></div>
+      <div class="charts">
+        <div class="chart-card">
+          <div class="chart-head"><h3>CPU (alle Container)</h3><span id="stats-cpu-now" class="muted small"></span></div>
+          <div class="chart-box" id="chart-cpu"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-head"><h3>RAM (alle Container)</h3><span id="stats-ram-now" class="muted small"></span></div>
+          <div class="chart-box" id="chart-ram"></div>
+        </div>
+        <div class="chart-card chart-wide">
+          <div class="chart-head"><h3>Spieler</h3><span id="stats-players-now" class="muted small"></span></div>
+          <div id="stats-players-legend" class="legend"></div>
+          <div class="chart-box" id="chart-players"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toasts" aria-live="polite"></div>
+
+<template id="tpl-result">
+  <article class="result">
+    <div class="result-icon"></div>
+    <div class="result-body">
+      <div class="result-title"><span class="name"></span><span class="author muted"></span></div>
+      <p class="desc muted"></p>
+      <div class="result-meta small muted">
+        <span class="version"></span><span class="downloads"></span><span class="side"></span>
+      </div>
+      <div class="dl-progress hidden">
+        <div class="dl-bar" style="width:0%"></div>
+        <div class="dl-deps muted small"></div>
+      </div>
+    </div>
+    <button class="btn primary install">Installieren</button>
+  </article>
+</template>
+
+<template id="tpl-mod-row">
+  <li class="mod-row">
+    <div class="mod-info">
+      <span class="mod-name"></span>
+      <span class="mod-meta muted small"></span>
+    </div>
+    <div class="row">
+      <button class="btn primary small-btn update hidden" title="Auf neueste Version aktualisieren">Update</button>
+      <button class="btn toggle" title="Mod aktivieren/deaktivieren (wird beim Serverstart berücksichtigt)"></button>
+      <button class="btn danger delete">Löschen</button>
+    </div>
+  </li>
+</template>
+
+<template id="tpl-inst-card">
+  <article class="inst-card">
+    <div class="inst-head">
+      <span class="inst-name"></span>
+      <span class="inst-sel" title="Diese Instanz ist im Detail-Dialog geöffnet">in Verwaltung</span>
+      <span class="inst-badge badge"><span class="dot"></span><span class="inst-state"></span></span>
+    </div>
+    <div class="inst-meta muted small"></div>
+    <div class="chips"></div>
+    <div class="inst-error err hidden"></div>
+    <div class="inst-actions row">
+      <button class="btn primary start">Starten</button>
+      <button class="btn stop">Stoppen</button>
+      <button class="btn restart">Neustart</button>
+      <button class="btn open">Verwalten</button>
+      <button class="btn clone" title="Instanz als Vorlage klonen (Welt, Mods, Configs)">Klonen</button>
+      <button class="btn danger delete">Löschen</button>
+    </div>
+  </article>
+</template>
+
+<template id="tpl-ov-card">
+  <article class="inst-card">
+    <div class="inst-head">
+      <span class="inst-name"></span>
+      <span class="inst-badge badge"><span class="dot"></span><span class="inst-state"></span></span>
+    </div>
+    <div class="chips"></div>
+    <div class="ov-ping muted small hidden"></div>
+    <div class="ov-players hidden"></div>
+    <div class="ov-res hidden">
+      <div class="ov-res-line"><span>CPU</span><span class="ov-cpu-val">–</span></div>
+      <div class="bar mini"><div class="bar-fill ov-cpu-bar" style="width:0%"></div></div>
+      <div class="ov-res-line"><span>RAM</span><span class="ov-ram-val">–</span></div>
+      <div class="bar mini"><div class="bar-fill ram ov-ram-bar" style="width:0%"></div></div>
+    </div>
+    <div class="inst-error err hidden"></div>
+    <div class="inst-actions row">
+      <button class="btn primary start">Starten</button>
+      <button class="btn stop">Stoppen</button>
+      <button class="btn restart">Neustart</button>
+      <button class="btn logs" title="Logs im Server-Tab öffnen">Logs</button>
+      <button class="btn open">Verwalten</button>
+    </div>
+  </article>
+</template>
+
+<template id="tpl-pack-row">
+  <article class="result">
+    <div class="result-icon"></div>
+    <div class="result-body">
+      <div class="result-title"><span class="name"></span><span class="pack-compat small"></span></div>
+      <p class="desc muted"></p>
+      <div class="result-meta small muted">
+        <span class="loaders"></span><span class="versions"></span><span class="downloads"></span>
+      </div>
+    </div>
+    <div class="row">
+      <button class="btn primary install">Installieren</button>
+      <button class="btn server-create">Neuer Server</button>
+    </div>
+  </article>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
