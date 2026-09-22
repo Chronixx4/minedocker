@@ -15,7 +15,8 @@ gestartet und verwaltet über das Dashboard.
 
 - **Beliebig viele Instanzen** — Vanilla, Forge, NeoForge, Fabric, Quilt, Paper,
   Bukkit/Spigot; eigene Ports ab 25570 (Spiel) und Port+1000 (RCON), RAM-Limit
-  und Log-Rotation je Instanz
+  je Instanz (**jederzeit nachträglich änderbar**, wirksam beim nächsten
+  Start/Neustart), Log-Rotation je Instanz
 - **Übersicht mit Live-Daten** — CPU/RAM (Sparklines), Spieler online (Server-List-
   Ping), Uptime, MOTD, Statusfilter, Suche, Sortierung, Gruppen- und Sammel-Aktionen
 - **Mods & Modpacks** — Modrinth- und CurseForge-Suche je Instanz (Pflicht-

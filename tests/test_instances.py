@@ -64,6 +64,14 @@ class TestCreateInstance:
             _create(name="RamFalsch", memory="2GB")
         assert e.value.status_code == 400
 
+    def test_ram_null_ungueltig(self):
+        """0G/08G ist kein sinnvolles RAM-Limit → abgelehnt."""
+        with pytest.raises(HTTPException) as e:
+            _create(name="RamNull", memory="0G")
+        assert e.value.status_code == 400
+        with pytest.raises(HTTPException):
+            _create(name="RamNull2", memory="08G")
+
     def test_get_unbekannt_404(self):
         with pytest.raises(HTTPException) as e:
             instances.get_instance("gibtsnicht")
@@ -266,6 +274,29 @@ class TestInstanceApi:
     def test_unbekannte_instanz_404(self, client):
         assert client.get("/api/instances/gibtsnicht").status_code == 404
         assert client.get("/api/instances/gibtsnicht/mods").status_code == 404
+
+    def test_patch_ram_laufend_erlaubt(self, client, fake_docker):
+        """RAM-Änderung ist auch bei laufender Instanz erlaubt (anders als der
+        Port, der 409 liefert) — sie wirkt beim nächsten (Neu-)Start."""
+        resp = client.post("/api/instances", json={
+            "name": "RamPatch-Srv", "loader": "fabric", "game_version": "1.21.4",
+            "port": 25621, "accept_eula": True})
+        assert resp.status_code == 201
+        iid = resp.json()["id"]
+        resp = client.patch(f"/api/instances/{iid}", json={"memory": "4G"})
+        assert resp.status_code == 200
+        assert resp.json()["memory"] == "4G"
+        assert instances.get_instance(iid)["memory"] == "4G"
+
+    def test_patch_ram_ungueltig_400(self, client, fake_docker):
+        resp = client.post("/api/instances", json={
+            "name": "RamBad-Srv", "loader": "fabric", "game_version": "1.21.4",
+            "port": 25622, "accept_eula": True})
+        assert resp.status_code == 201
+        iid = resp.json()["id"]
+        resp = client.patch(f"/api/instances/{iid}", json={"memory": "0G"})
+        assert resp.status_code == 400
+        assert instances.get_instance(iid)["memory"] is None
 
 
 class TestLiveApi:

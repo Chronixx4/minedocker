@@ -412,7 +412,19 @@
           </div>
 
           <div class="upload-box">
-            <h3>JVM-Optionen <span class="muted small">(wirken beim nächsten Start)</span></h3>
+            <h3>JVM &amp; RAM <span class="muted small">(RAM wirksam beim nächsten Start)</span></h3>
+            <div class="row" style="margin-top: 0.5rem;">
+              <label class="muted small" for="jvm-memory-value">RAM</label>
+              <input id="jvm-memory-value" type="number" min="1" max="4096" step="1"
+                     style="width: 7rem;" placeholder="2">
+              <select id="jvm-memory-unit">
+                <option value="G">GB</option>
+                <option value="M">MB</option>
+              </select>
+            </div>
+            <p class="muted small">Ram-Limit der Instanz (Container + JVM-Heap).
+              Änderungen greifen beim nächsten Start/Neustart; ein laufender Server
+              behält sein aktuelles Limit bis dahin.</p>
             <label class="check">
               <input type="checkbox" id="jvm-aikar">
               Aikar-Flags (optimierte GC-Einstellungen für Server)

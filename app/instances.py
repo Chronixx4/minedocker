@@ -23,7 +23,7 @@ from .config import ALLOWED_LOADERS, settings
 from .security import validate_identifier
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,63}$")
-_MEMORY_RE = re.compile(r"^\d{1,4}[GgMm]$")
+_MEMORY_RE = re.compile(r"^(?:[1-9]\d{0,3})[GgMm]$")
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$")
 _META_FILE = "instance.json"

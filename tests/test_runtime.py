@@ -237,3 +237,17 @@ class TestNetzwerkAutoHeilung:
         self._registriere_self(fake_docker, {"bridge": {}})
         runtime.start_instance(instanz)
         assert fake_docker.containers.run_kwargs["network"] == "mc-dashboard-net"
+
+
+class TestRamNachtraeglich:
+    def test_ram_aenderung_wirkt_beim_start(self, fake_docker, instanz):
+        """Nachträglich geändertes RAM-Limit (PATCH memory) greift beim
+        nächsten (Neu-)Start: Container-Memory-Limit = Heap + 1 GB Headroom,
+        itzg-MEMORY-Env setzt den JVM-Heap."""
+        instances.update_settings(instanz["id"], memory="3G")
+        meta = instances.get_instance(instanz["id"])
+        runtime.start_instance(meta)
+        kwargs = fake_docker.containers.run_kwargs
+        assert kwargs["mem_limit"] == 4 * 1024 ** 3  # 3G Heap + 1G Headroom
+        env = dict(item.split("=", 1) for item in kwargs["environment"])
+        assert env["MEMORY"] == "3G"

@@ -1633,9 +1633,11 @@
     $("#world-upload-btn").disabled = true;
     const detail = await loadDetail();
     if (detail) {
-      // JVM-Optionen der Instanz in den Editor laden
+      // JVM-Optionen + RAM der Instanz in den Editor laden
       $("#jvm-opts").value = detail.jvm_opts || "";
       $("#jvm-aikar").checked = !!detail.use_aikar;
+      setRamFields(detail.memory);
+      state.detailMemory = (detail.memory || "2G").toUpperCase();
       show($("#jvm-error"), false);
       // Zeitplan der Instanz in die Felder laden
       loadSchedule(detail);
@@ -2740,22 +2742,38 @@
     }
   });
 
-  /* ---------- JVM-Optionen je Instanz ---------- */
+  /* ---------- JVM-Optionen + RAM je Instanz ---------- */
+  function setRamFields(memory) {
+    const match = /^(\d{1,4})([GgMm])$/.exec(memory || "2G");
+    $("#jvm-memory-value").value = match ? parseInt(match[1], 10) : 2;
+    $("#jvm-memory-unit").value = match ? match[2].toUpperCase() : "G";
+  }
+
   $("#jvm-save").addEventListener("click", async () => {
     const btn = $("#jvm-save");
     btn.disabled = true;
     btn.textContent = "Speichere…";
     show($("#jvm-error"), false);
+    const value = $("#jvm-memory-value").value;
+    const unit = $("#jvm-memory-unit").value;
+    const memory = value ? `${parseInt(value, 10)}${unit}` : null;
+    const body = {
+      jvm_opts: $("#jvm-opts").value || "",
+      use_aikar: $("#jvm-aikar").checked,
+    };
+    if (memory && memory !== state.detailMemory) body.memory = memory;
     try {
       await api(`/api/instances/${state.detailId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jvm_opts: $("#jvm-opts").value || "",
-          use_aikar: $("#jvm-aikar").checked,
-        }),
+        body: JSON.stringify(body),
       });
-      toast("JVM-Optionen gespeichert — wirksam beim nächsten (Neu-)Start.", "success");
+      if (body.memory) {
+        state.detailMemory = body.memory;
+        toast("JVM & RAM gespeichert — RAM wirksam beim nächsten (Neu-)Start.", "success");
+      } else {
+        toast("JVM-Optionen gespeichert — wirksam beim nächsten (Neu-)Start.", "success");
+      }
     } catch (e) {
       setText($("#jvm-error"), `Speichern fehlgeschlagen: ${e.message}`);
       show($("#jvm-error"), true);

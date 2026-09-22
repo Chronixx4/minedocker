@@ -30,7 +30,9 @@ Checkliste, Dashboard-Schnellstart).
     Restore via worlds._patch_properties) auf den Dateistand gezwungen bzw.
     nicht neu angelegt; _PROPS_SCHEMA/properties_schema() liefert das Schema
     für den Formular-Editor),
-     update_settings() (PATCH: Name/RAM/jvm_opts/use_aikar/tags/port; JVM-Flags
+     update_settings() (PATCH: Name/RAM/jvm_opts/use_aikar/tags/port; RAM
+     jederzeit änderbar — auch bei laufender Instanz, wirksam beim nächsten
+     (Neu-)Start; RAM-Regex [1-9]\d{0,3}[GM] lehnt 0G/08G ab; JVM-Flags
      einzeilig, max 2000 Zeichen, keine Steuerzeichen; Tags: 1-32 Zeichen
      ^[A-Za-z0-9][A-Za-z0-9 _-]*$, max 8, Dedupe case-insensitive; Port-Wechsel:
      nur bei gestoppter Instanz, fail-closed über runtime.running_state
@@ -222,8 +224,10 @@ Checkliste, Dashboard-Schnellstart).
   angezeigt statt 'neueste Version installiert'; 'Pack aktualisieren'
   startet den Update-Job; Check läuft automatisch beim Öffnen des
   Detail-Dialogs),
-  Welt-Box (Info, Download als .zip, Upload .zip/.tar.gz nur bei
-   gestoppter Instanz), JVM-Box (Aikar-Checkbox + JVM_OPTS-Textarea, PATCH),
+    Welt-Box (Info, Download als .zip, Upload .zip/.tar.gz nur bei
+    gestoppter Instanz), JVM- & RAM-Box (RAM-Limit nachträglich änderbar —
+    auch bei laufender Instanz, wirksam beim nächsten (Neu-)Start;
+    Aikar-Checkbox + JVM_OPTS-Textarea, PATCH),
    Zeitplan-Box (Auto-Start-Checkbox, täglicher Neustart mit Zeit + Vorwarn-
     Minuten, Backup-Intervall + Behalte-Anzahl, Update-Check-Intervall,
     PATCH schedule; Hinweise zu Container-Lokalzeit und 30-min-Nachhol-Fenster),
