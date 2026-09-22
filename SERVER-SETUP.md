@@ -127,9 +127,9 @@ Installationsskript. **Kein Vanilla-Server vorher aufsetzen.**
   für hübsche Adressen:
   `_minecraft._tcp.play` SRV 0 5 25565 server.meinedomain.de →
   Spieler verbinden mit `play.meinedomain.de`.
-- **ZimaOS/NAS:** Ports im App-Store/Container-UI mappen (Dashboard 8080;
-  Instanz-Ports werden vom Dashboard direkt auf dem Host veröffentlicht).
-  Port-Weiterleitung am NAS-Router wie oben.
+- **ZimaOS/NAS:** Dashboard-Port über `.env` (`DASHBOARD_HTTP_PORT`, Default
+  8080; siehe Abschnitt 11); Instanz-Ports werden vom Dashboard direkt auf dem
+  Host veröffentlicht. Port-Weiterleitung am NAS-Router wie oben.
 - **Dashboard niemals direkt ins Internet** — nur VPN (WireGuard/Tailscale)
   oder Reverse-Proxy mit Auth; optional `DASHBOARD_API_KEY` setzen.
 
@@ -142,8 +142,10 @@ Kern: `world*/`, `configs/`, `mods/`, `server.properties`, `eula.txt`.
 
 **Docker/Volume (dieses Projekt):**
 ```bash
-# Backup des gesamten mcdata-Volumes (Instanzen inklusive):
-docker run --rm -v mcdata:/data -v /pfad/zum/backup:/backup alpine \
+# Backup des gesamten mcdata-Volumes (Instanzen inklusive). /data-Quelle:
+#   Named Volume: <projekt>_mcdata (z. B. minedocker_mcdata, `docker volume ls`)
+#   ZimaOS/Bind:  MCDATA_DIR aus .env (z. B. /DATA/AppData/mc-dashboard/data)
+docker run --rm -v minedocker_mcdata:/data -v /pfad/zum/backup:/backup alpine \
   tar czf /backup/mcdata-$(date +%F-%H%M).tar.gz -C /data .
 ```
 
@@ -152,16 +154,14 @@ Der Service `backup` (Alpine-Tar-Loop) sichert alle 6 h das gesamte
 `mcdata`-Volume (alle Instanzen + Mods) nach `./backups`, löscht Archive
 älter als 14 Tage und pflegt `latest.tgz` als Symlink auf das Neueste.
 Anpassbar: `sleep 6h` (Intervall), `-mtime +14` (Retention), Backup-Pfad
-(bei ZimaOS auf `/DATA/...` umleiten). Für 100 % konsistente Weltschnapp-
+(.env: `BACKUPS_DIR`, bei ZimaOS unter `/DATA/`). Für 100 % konsistente
+Weltschnapp-
 schüsse die Instanz vorher im Dashboard stoppen.
 ```bash
-# Restore (alle Instanzen):
-docker run --rm -v mcdata:/data -v ./backups:/backup alpine \
-  sh -c "rm -rf /data/* && tar xzf /backup/latest.tgz -C /data"
-```
-```bash
-# Restore (alle Instanzen):
-docker run --rm -v mcdata:/data -v ./backups:/backup alpine \
+# Restore (alle Instanzen) — /data-Quelle analog zum Backup-Kommentar oben:
+#   Named Volume: <projekt>_mcdata, sonst MCDATA_DIR-Pfad aus .env
+#   (ZimaOS: -v /DATA/AppData/mc-dashboard/data:/data -v .../backups:/backup)
+docker run --rm -v minedocker_mcdata:/data -v ./backups:/backup alpine \
   sh -c "rm -rf /data/* && tar xzf /backup/latest.tgz -C /data"
 ```
 
@@ -263,7 +263,8 @@ hilfreich gegen Watchdog-Kicks) nach Bedarf.
   Docker-Gruppe — in der `docker-compose.yml` `DOCKER_GID` auf die Host-GID
   von `/var/run/docker.sock` setzen (ermitteln mit
   `stat -c '%g' /var/run/docker.sock`). Bestands-`mcdata`-Volume (früher
-  root) einmalig migrieren:
+  root) migriert der `init`-Service beim nächsten `docker compose up`
+  automatisch; manuell als Fallback:
   `docker compose run --rm --user 0 dashboard chown -R 1000:1000 /data`
 
 ---
@@ -302,3 +303,80 @@ Automatisch erledigt: Java-Auswahl, Loader-Installation (inkl. Beta-Handling),
 EULA, Server-Pack-Installation, Speicherorte (`INSTANCES_DIR`), Start/Stop.
 Nur **Portweiterleitung** (Abschnitt 4) und **Backups** (Abschnitt 5) bleiben
 Host-Aufgabe.
+
+---
+
+## 11. ZimaOS-Deployment (NAS)
+
+ZimaOS verwaltet App-Daten unter `/DATA` (im Dateimanager/Samba sichtbar);
+die Systemplatte ist klein — Daten und Backups gehören auf das Storage-Array.
+
+**Weg 1 — SSH (empfohlen, hier funktioniert `build:`):**
+
+1. Per SSH auf dem ZimaOS-Gerät anmelden, Projekt nach
+   `/DATA/AppData/mc-dashboard` kopieren (git clone oder Ordner-Upload).
+2. Vorlage kopieren und anpassen:
+   ```bash
+   cp .env.example .env
+   stat -c '%g' /var/run/docker.sock   # GID notieren (typisch 999)
+   ```
+   `.env` für ZimaOS:
+   ```ini
+   DOCKER_GID=999
+   MCDATA_DIR=/DATA/AppData/mc-dashboard/data
+   BACKUPS_DIR=/DATA/AppData/mc-dashboard/backups
+   #DASHBOARD_HTTP_PORT=8080   # nur setzen, wenn 8080 belegt ist
+   ```
+3. Starten: `docker compose up -d --build`
+4. Öffnen: `http://<zima-ip>:8080` → Tab „Server" → Instanz erstellen.
+
+Der `init`-Service setzt beim ersten Start die Ownership (1000:1000) auf
+dem Datenordner — keine manuelle `chown`-Aktion nötig.
+
+**Weg 2 — App-Import in der ZimaOS-UI (mit fertigen Images):** Der
+Import-Dialog baut **keine** Images (`build:` wird dort nicht ausgeführt,
+nur Image-Pull) und mag keine Swarm-spezifischen Optionen. GitHub Actions
+baut das Dashboard-Image bei jedem Push auf `main` und pusht es nach
+`ghcr.io/chronixx4/minedocker:latest` (Workflow `docker-publish.yml`). Für
+den UI-Import in der Compose-Datei `build: .` durch
+`image: ghcr.io/chronixx4/minedocker:latest` ersetzen; Compose-Interpolation
+(`.env`) greift beim Import nicht — Pfade und `DOCKER_GID` direkt in der
+YAML einsetzen (siehe INSTALL-ZIMAOS.md). Wichtig: Nach dem ersten Push ist
+das GHCR-Package privat — einmalig auf GitHub unter „Packages" die
+Sichtbarkeit auf **Public** stellen, sonst kann ZimaOS ohne Login nicht
+ziehen. Die „Compose Toolbox"-App (App Store) hilft beim Validieren/Loggen
+eigener Stacks.
+
+**ZimaOS-Besonderheiten:**
+
+- **Docker-Socket-Gruppe:** `DOCKER_GID` wie oben setzen; ohne passende GID
+  meldet das Dashboard „Permission denied" beim Socket-Zugriff (Start/Stop
+  und Ressourcen-Karte bleiben leer).
+- **`MCDATA_DIR` exklusiv:** Der Pfad muss ein dediziertes Unterverzeichnis
+  sein — nie `/DATA` selbst oder ein Ordner mit fremden Daten. Der
+  `init`-Service bricht das `chown` sonst mit FATAL ab (Diagnose:
+  `docker compose logs init`); Notfall-Start ohne init:
+  `docker compose up -d --no-deps dashboard`.
+- **Projektordner umziehen:** Der Name des Daten-Volumes hängt am Compose-
+  Projektnamen (`<projekt>_mcdata`). Bei einem Ordnerwechsel das Volume
+  umbenennen (`docker volume rename alt_mcdata neu_mcdata`) oder in `.env`
+  `MCDATA_DIR` setzen und die Daten dorthin umziehen — sonst startet das
+  Dashboard gegen ein leeres Volume (siehe `.env.example`).
+- **init-Service hängt:** `docker compose logs init` zeigt Pull-/chown-
+  Fehler; `restart: on-failure` retryt automatisch, bis der Ownership-Fix
+  klappt, und das Dashboard startet erst danach.
+- **Scheduler-Zeiten** (täglicher Neustart, geplante Backups) laufen in
+  Container-Lokalzeit → in der dashboard-Umgebung `TZ: "Europe/Berlin"`
+  setzen (in docker-compose.yml vorgemerkt), sonst gilt UTC.
+- **Instanz-Container & Compose-Netz:** `docker compose down` entfernt das
+  Netzwerk; laufende Instanzen verlieren den Anschluss und werden beim
+  nächsten „Starten" im Dashboard automatisch neu erstellt (kein Daten-
+  verlust — die Instanzdaten liegen unter `MCDATA_DIR`).
+- **Storage umziehen:** ZimaOS-Einstellungen → Apps → „App data location"
+  steuert nur App-Store-Apps; bei diesem Stack `MCDATA_DIR`/`BACKUPS_DIR`
+  in `.env` ändern und die Ordner verschieben (Instanzen vorher stoppen).
+- **Ports:** Dashboard-Port nur LAN/VPN (nicht ins Internet), Minecraft-
+  Ports 25570+ je nach Bedarf weiterleiten (siehe Abschnitt 4).
+- **Docker-Images:** liegen auf der Systemplatte (`/var/lib/docker`); bei
+  Platzmangel den ZimaOS-„Data Migration"-Mechanismus nutzen (Docker-
+  Daten zwischen Platten verschieben) — Instanzdaten sind davon unabhängig.

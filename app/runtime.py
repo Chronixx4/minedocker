@@ -57,7 +57,14 @@ def _get_client():
             try:
                 _client = docker.from_env()
             except Exception as exc:
-                raise RuntimeError(f"Docker nicht erreichbar: {exc}") from exc
+                hint = ""
+                if "permission denied" in str(exc).lower():
+                    hint = (
+                        " — Socket-Zugriff verweigert: DOCKER_GID (docker-compose.yml"
+                        " bzw. .env) auf die Host-GID von /var/run/docker.sock setzen,"
+                        " ermitteln mit: stat -c '%g' /var/run/docker.sock"
+                    )
+                raise RuntimeError(f"Docker nicht erreichbar: {exc}{hint}") from exc
         return _client
 
 

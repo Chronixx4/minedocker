@@ -273,11 +273,16 @@ Checkliste, Dashboard-Schnellstart).
   Suche/Pack-Installation, Server-aus-Modpack-Abläufe, Klonen, Import, Welt-
   Download/Upload, JVM-Flags, Disk-Usage, Scheduler)
 - Dockerfile – Python 3.12-slim, UID 1000, docker-Paket, Healthcheck
-- docker-compose.yml – NUR das Dashboard (Docker-Socket-Mount!, gehärtet:
-  user 1000:1000 + group_add ${DOCKER_GID:-999} für die Socket-Gruppe des
-  Hosts; Bestands-Volumes einmalig mit chown 1000:1000 migrieren),
-  Volume mcdata enthaelt /data/instances; Instanz-Ports 25570+ direkt auf dem
-  Host; kein minecraft-Service mehr
+- docker-compose.yml – init (Ownership-Fix 1000:1000 auf /data, idempotent,
+  Fremdordner-Guard: kein chown bei Daten ohne instances/, restart
+  on-failure; Dashboard startet erst nach Erfolg) + Dashboard (Docker-Socket-
+  Mount!, gehärtet: user 1000:1000 + group_add ${DOCKER_GID:-999} für die
+  Socket-Gruppe des Hosts) + Backup-Daemon; Compose-Interpolation per .env
+  (Vorlage .env.example): DOCKER_GID (ZimaOS typisch 999, Docker Desktop 0),
+  MCDATA_DIR (leer = Named Volume mcdata, sonst Bind-Mount — ZimaOS:
+  /DATA/AppData/mc-dashboard/data), BACKUPS_DIR (Default ./backups),
+  DASHBOARD_HTTP_PORT (Default 8080); Instanz-Ports 25570+ direkt auf dem
+  Host; kein minecraft-Service mehr; ZimaOS-Weg: SERVER-SETUP.md §11
 
 ## Wichtige Endpunkte
 - GET /api/health, GET /api/settings (Legacy-Felder für Bestands-APIs)
@@ -400,12 +405,16 @@ Hinweis: Instanz-Start/Stop benoetigt einen Docker-Daemon (ohne -> 503).
 
 ## Docker/ZimaOS starten
 docker compose up -d --build   # Dashboard 8080; Instanzen 25570+ (manuell, keine Auto-Starts)
+Compose-Parameter (DOCKER_GID, MCDATA_DIR, BACKUPS_DIR, DASHBOARD_HTTP_PORT)
+kommen aus .env — Vorlage .env.example; ZimaOS-Einrichtung: SERVER-SETUP.md §11.
 
 ## Tests
 python -m pytest tests/   # 494 bestanden (1 Skip: Symlinks unter Windows)
 CI: .github/workflows/ci.yml — ruff check app tests, mypy (app/, Regeln in
 pyproject.toml inkl. dokumentierter Ausnahmen), pytest; Dev-Abhängigkeiten
-in requirements-dev.txt.
+in requirements-dev.txt. Docker-Image: .github/workflows/docker-publish.yml
+— bei Push auf main/tags nach ghcr.io/chronixx4/minedocker:latest
+(Grundlage für die ZimaOS-UI-Installation, Vorlage INSTALL-ZIMAOS.md).
 Abgedeckt: API, Instanz-CRUD/Ports/EULA, Runtime-Env/Start/Stop (Fake-Docker),
 Katalog (alle Loader + Fehlerfaelle), Modpack-Install (Erfolg/Fehler/Speicher/Pfade),
 mrpack-Kompatibilitaet (altes + neues Format), Upload-End-to-End (mrpack +

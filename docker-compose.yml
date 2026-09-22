@@ -21,18 +21,71 @@
 # - Security: nur der Spielport + 8080 werden gemappt; Dashboard niemals direkt
 #   ins Internet (VPN/Reverse-Proxy), DASHBOARD_API_KEY setzen!
 #
+# Anpassbar über .env (Vorlage: .env.example):
+# - DOCKER_GID            Host-GID von /var/run/docker.sock (Socket-Gruppe)
+# - DASHBOARD_HTTP_PORT   Host-Port des Dashboards (Default 8080)
+# - MCDATA_DIR            Datenablage: leer/„mcdata" = Named Volume; sonst
+#                         Bind-Mount (ZimaOS: /DATA/AppData/mc-dashboard/data)
+# - BACKUPS_DIR           Backup-Ablage (Default ./backups; ZimaOS: unter /DATA)
+#
 # ZimaOS-Hinweise:
-# - Dashboard läuft als UID/GID 1000; Docker-Socket-Zugriff über die Host-Gruppe
-#   (DOCKER_GID setzen, siehe unten).
-# - Volume "mcdata" speichert Mods, Modpacks und ALLE Instanzen persistent.
-# - Backups landen im Bind-Mount ./backups neben dieser Datei — in ZimaOS ggf.
-#   auf einen Pfad unter /DATA/ umlenken.
+# - Deployment bevorzugt per SSH: Projekt nach /DATA/AppData/mc-dashboard
+#   kopieren, .env anlegen (Vorlage .env.example) und
+#   `docker compose up -d --build` starten. Der App-Import in der ZimaOS-UI
+#   baut KEINE Images (`build:` wird dort nicht ausgeführt).
+# - Daten/Backups auf /DATA legen (Systemplatte von ZimaOS ist klein):
+#   MCDATA_DIR=/DATA/AppData/mc-dashboard/data, BACKUPS_DIR=.../backups.
+#   MCDATA_DIR muss ein dediziertes, exklusives Unterverzeichnis sein (nie
+#   /DATA selbst) — der init-Service setzt beim Start automatisch die
+#   Ownership (1000:1000) und bricht bei fremden Inhalten sicher ab.
+# - DOCKER_GID ermitteln: `stat -c '%g' /var/run/docker.sock` (typisch 999;
+#   Docker Desktop/WSL2: 0). Ohne passende GID meldet das Dashboard
+#   „Permission denied" beim Socket-Zugriff.
+# - Dashboard läuft als UID/GID 1000 (identisch mit itzg/minecraft-server),
+#   damit die Zugriffsrechte auf das gemeinsame /data passen.
+# - Scheduler-Zeiten laufen in Container-Lokalzeit → TZ setzen (z. B.
+#   Europe/Berlin), sonst gilt UTC.
+# - Port 8080 belegt? DASHBOARD_HTTP_PORT auf einen freien Port setzen.
 
 services:
+  init:
+    # Ownership-Fix vor dem Dashboard-Start: Bind-Mounts und Bestands-Volumes
+    # werden auf dem Host ggf. als root angelegt. Der Service setzt alles
+    # unter /data auf UID/GID 1000 (Dashboard-User) und beendet sich.
+    # Sicherungsleisten: idempotent (UID schon 1000 → sofortiges Exit 0) und
+    # mit Fremdordner-Guard — enthält /data Daten ohne instances/ (z. B. weil
+    # MCDATA_DIR versehentlich auf /DATA selbst oder ein fremdes Verzeichnis
+    # zeigt), wird NICHT chown't, sondern mit FATAL abgebrochen.
+    # restart: on-failure retryt bis zum Erfolg; Notfall-Start ohne init:
+    #   docker compose up -d --no-deps dashboard   (Diagnose: compose logs init)
+    image: alpine:3.20
+    user: "0:0"
+    restart: on-failure
+    volumes:
+      - ${MCDATA_DIR:-mcdata}:/data
+    command: |
+      uid=$$(stat -c %u /data) || true
+      [ "$$uid" = "1000" ] && exit 0
+      if [ -n "$$(ls -A /data 2>/dev/null)" ] && [ ! -d /data/instances ]; then
+        echo "FATAL: /data enthaelt Daten ohne instances/ - MCDATA_DIR zeigt vermutlich auf ein fremdes Verzeichnis (z. B. /DATA selbst). Kein chown, Abbruch." >&2
+        exit 1
+      fi
+      chown -R 1000:1000 /data
+    mem_limit: 64m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "2"
+
   dashboard:
     build: .
     container_name: mc-dashboard
     restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
     environment:
       DASHBOARD_API_KEY: ""     # BEST PRACTICE: setzen (z. B. `openssl rand -hex 32`),
                                 # schützt alle API-Routen außer /api/health
@@ -52,16 +105,17 @@ services:
       # Geplante Neustarts laufen in Container-Lokalzeit; für lokale Zeit TZ setzen:
       # TZ: "Europe/Berlin"
     ports:
-      - "8080:8080"             # LAN/VPN only — nie direkt ins Internet!
+      - "${DASHBOARD_HTTP_PORT:-8080}:8080"  # LAN/VPN only — nie direkt ins Internet!
     volumes:
-      - mcdata:/data
+      - ${MCDATA_DIR:-mcdata}:/data
       - /var/run/docker.sock:/var/run/docker.sock   # Instanz-Verwaltung + Ressourcen-Statistik
     # Gehärtet: UID/GID 1000 (Dockerfile-User, identisch mit itzg/minecraft-
     # server) statt root. Docker-Socket-Zugriff läuft über die Socket-Gruppe:
     # DOCKER_GID auf die Host-GID von /var/run/docker.sock setzen, ermitteln mit
     #   docker run --rm alpine:3.20 stat -c '%g' /var/run/docker.sock
     # oder auf dem Host: stat -c '%g' /var/run/docker.sock
-    # Migration von Bestands-Volumes (früher root): einmalig
+    # Migration von Bestands-Volumes (früher root): übernimmt der init-Service
+    # automatisch (Named Volume oder Bind) — manuell als Fallback:
     #   docker compose run --user 0 --rm dashboard chown -R 1000:1000 /data
     user: "1000:1000"
     group_add:
@@ -86,8 +140,8 @@ services:
     container_name: mc-backup
     restart: unless-stopped
     volumes:
-      - mcdata:/data:ro                 # ALLE Instanzen + Mods: nur lesend
-      - ./backups:/backups              # Backup-Ablageort auf dem Host
+      - ${MCDATA_DIR:-mcdata}:/data:ro                 # ALLE Instanzen + Mods: nur lesend
+      - ${BACKUPS_DIR:-./backups}:/backups             # Backup-Ablageort auf dem Host
     command: >
       sh -c "while true; do
                ts=$$(date +%F-%H%M);
