@@ -1,11 +1,11 @@
 # Docker-Image bauen und nach GHCR pushen — Grundlage für die
 # ZimaOS-UI-Installation (App-Import führt KEIN `build:` aus, nur Pull).
+# Release-Tags (v* → Semver) baut docker-build.yml; hier nur `latest` von main.
 name: docker-publish
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
