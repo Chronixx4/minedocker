@@ -409,7 +409,7 @@ Compose-Parameter (DOCKER_GID, MCDATA_DIR, BACKUPS_DIR, DASHBOARD_HTTP_PORT)
 kommen aus .env — Vorlage .env.example; ZimaOS-Einrichtung: SERVER-SETUP.md §11.
 
 ## Tests
-python -m pytest tests/   # 494 bestanden (1 Skip: Symlinks unter Windows)
+python -m pytest tests/   # 499 Tests (Windows: 1 Skip — Symlink-Test, CI/Linux: alle grün)
 CI: .github/workflows/ci.yml — ruff check app tests, mypy (app/, Regeln in
 pyproject.toml inkl. dokumentierter Ausnahmen), pytest; Dev-Abhängigkeiten
 in requirements-dev.txt. Docker-Image: .github/workflows/docker-publish.yml

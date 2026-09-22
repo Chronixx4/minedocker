@@ -76,12 +76,13 @@ class TestSafeModsPath:
 
     def test_symlink_escape_blockiert(self, tmp_path):
         try:
-            (tmp_path / "sub").mkdir()
-            (tmp_path / "link.jar").symlink_to(tmp_path / "sub", target_is_directory=True)
+            # Ziel LIEGT AUSSERHALB des mods-Ordners (hängender Symlink):
+            # resolve() folgt dem Link -> Pfad verlässt base -> Block.
+            # (Ein Link auf ein Unterverzeichnis INNERHALB von base ist
+            # kein Escape und wird zu Recht durchgelassen.)
+            (tmp_path / "link.jar").symlink_to(tmp_path.parent / "escape-target.jar")
         except (OSError, NotImplementedError):
             pytest.skip("Symlinks auf diesem System nicht verfügbar (Windows-Rechte)")
-        # Symlink im mods-Ordner, der auf ein Verzeichnis zeigt: resolve()
-        # verschiebt den Pfad -> parent != base -> Block
         with pytest.raises(HTTPException) as e:
             safe_mods_path(tmp_path, "link.jar")
         assert e.value.status_code == 400
