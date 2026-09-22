@@ -29,6 +29,23 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _isoliere_auth():
+    """users.json/.auth_secret vor und nach JEDEM Test löschen — die Dateien
+    liegen im geteilten conftest-tmp; ohne Reset würde ein Login-Test, der
+    Benutzer anlegt, alle Folge-Tests (401) sperren. In-Memory-Sperrliste
+    und Secret-Cache werden ebenfalls zurückgesetzt."""
+    from app import auth as auth_mod
+
+    auth_mod.reset_for_tests()
+    for path in (auth_mod.users_path(), auth_mod._secret_path()):
+        path.unlink(missing_ok=True)
+    yield
+    auth_mod.reset_for_tests()
+    for path in (auth_mod.users_path(), auth_mod._secret_path()):
+        path.unlink(missing_ok=True)
+
+
 # ---------------------------------------------------------------------------
 # Fake-Docker-Client für runtime-Tests (kein Docker-Daemon nötig)
 # ---------------------------------------------------------------------------

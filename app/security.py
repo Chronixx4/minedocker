@@ -1,9 +1,9 @@
-"""Sicherheits-Helfer: Dateinamen-Validierung, Pfadschutz, API-Key."""
+"""Sicherheits-Helfer: Dateinamen-Validierung, Pfadschutz, Auth-Guard."""
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 # Erlaubte Mod-Dateinamen: einfache Zeichen, muss auf .jar enden;
 # ".disabled" markiert deaktivierte Mods (werden vom Server ignoriert)
@@ -54,10 +54,35 @@ def safe_mods_path(mods_dir: Path, filename: str) -> Path:
     return path
 
 
-async def api_key_guard(x_api_key: str | None = Header(default=None)) -> None:
-    """Optionaler Schutz aller /api-Routen: Ist DASHBOARD_API_KEY gesetzt,
-    muss der Header X-API-Key übereinstimmen."""
-    from .config import settings  # lazy, vermeidet Import-Zirkel
+# Schreibende Methoden erfordern die Admin-Rolle (Viewer: strikt nur lesen —
+# inkl. Konsole/Whitelist/Start-Stop). GET/HEAD/OPTIONS bleiben offen.
+_WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
-    if settings.api_key and x_api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Ungültiger oder fehlender API-Key")
+
+async def auth_guard(request: Request,
+                     x_api_key: str | None = Header(default=None)) -> None:
+    """Kombinierter Guard aller /api-Routen (außer /api/health und /api/auth/*):
+
+    1. DASHBOARD_API_KEY (Header X-API-Key) bleibt voll gültig — implizit
+       Rolle Admin (Skripte/curl).
+    2. Session-Cookie ('mcd_session', HMAC-signiert) → Rolle aus dem Token.
+    3. Ist gar nichts konfiguriert (kein API-Key, keine Benutzer), bleibt das
+       Bestandsverhalten: anonymer Zugriff mit vollen Rechten.
+
+    Rollen-Prüfung zentral hier: schreibende Methoden (POST/PATCH/PUT/DELETE)
+    erfordern Admin — 403 für Viewer. GET (inkl. SSE-Log-Stream) bleibt für
+    Viewer offen."""
+    from . import auth as auth_mod  # lazy, vermeidet Import-Zirkel
+
+    role = auth_mod.role_from_request(request, x_api_key)
+    if role is None:
+        if auth_mod.anonymous_allowed():
+            role = "admin"
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="Anmeldung erforderlich (Login oder X-API-Key)")
+    request.state.role = role
+    if role != "admin" and request.method in _WRITE_METHODS:
+        raise HTTPException(status_code=403,
+                            detail="Diese Aktion erfordert die Admin-Rolle")

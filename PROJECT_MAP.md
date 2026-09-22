@@ -16,9 +16,18 @@ Checkliste, Dashboard-Schnellstart).
   - main.py – App, CORS, API-Routen (/api/*), Static-Mount, Fehlerhandler,
     Lifespan (startet den Verlauf-Sampler, den Job-Spiegel-Flush alle 5 s,
     den Crash-Watchdog-Thread und den Scheduler-Thread; lädt beim Start
-    gespiegelte Jobs)
+    gespiegelte Jobs); /api-Routen hängen am Router mit auth_guard
+    (DASHBOARD_API_KEY ODER Login-Cookie, Rollen-Prüfung), /api/health und
+    /api/auth/* bleiben offen: Setup (erster Admin, 409 danach, API-Key-
+    Pflicht wenn DASHBOARD_API_KEY gesetzt), login (Lockout + Delay),
+    logout, me, setup-available, users-CRUD (Admin), change-password
+    (eigene Session); neue Instanz-Routen: /files (Datei-Browser:
+    Liste/content GET+PUT/download/upload/mkdir/rename/DELETE),
+    /datapacks (Liste/upload/enable/disable/DELETE), /gamerules
+    (GET/POST), /players/playtime (Spielzeit-Leaderboard)
   - config.py – Settings aus Env + MC-Version-Autoerkennung; Multi-Server:
-    INSTANCES_DIR, INSTANCES_PORT_BASE (25570), INSTANCES_MEMORY, INSTANCES_HOST_DIR
+    INSTANCES_DIR, INSTANCES_PORT_BASE (25570), INSTANCES_MEMORY, INSTANCES_HOST_DIR,
+    FILEBROWSER_MAX_UPLOAD_MB (300)
   - instances.py – Instanz-Verwaltung: create/list/update/delete, getrennte Ordner
     unter {INSTANCES_DIR}/{id}/ (instance.json, eula.txt, server.properties, mods/),
     EULA-Pflicht, Name-Port-Kollisionsschutz (Thread-Lock; RCON-Port = port+1000
@@ -141,6 +150,52 @@ Checkliste, Dashboard-Schnellstart).
     nameUUIDFromBytes('OfflinePlayer:'+Name), dedupe case-insensitive,
     Namens-Regex ^[A-Za-z0-9_]{1,16}$, max 200 Einträge; reload_on_server()
     (RCON 'whitelist reload', nur bei laufender Instanz)
+  - auth.py – Login & Rollen (stdlib-only, keine neuen Abhängigkeiten):
+    Benutzer in /data/users.json (Geschwister von scheduler_state.json,
+    Atomic-Write + Defekt-Toleranz: defekte Datei = Login gilt als aus,
+    Cache 2 s bzw. mtime-basiert), Passwort-Hashing scrypt (n=2^14, r=8,
+    p=1, 32-Byte-Salt, min. 8 Zeichen), Username ^[A-Za-z0-9_.-]{1,32}$
+    (keine ./-Duplikate), Rollen admin/viewer (max 50 Benutzer);
+    Session = base64url(JSON {u, r, exp}) + HMAC-SHA256 mit Secret aus
+    /data/.auth_secret (64 hex, 0600, einmalig generiert, fail-closed bei
+    Schreib-/Lesefehlern), Cookie 'mcd_session' (HttpOnly, SameSite=Strict,
+    Pfad /, 30 Tage, kein CSRF-Token nötig — same-origin + CORS ohne
+    credentials), Logout löscht nur den Cookie (zustandslose Tokens);
+    In-Memory-Lockout: 10 Fehlversuche je Username → 5 min Sperre
+    (Neustart resettet), Login-Fehler mit 0,5 s konstantem Delay (async,
+    Event-Loop-schonend); last-admin-/Selbst-Lösch-Schutz; Setup nur bei
+    leerer users.json (bei gesetztem DASHBOARD_API_KEY ist der Key für
+    Setup     Pflicht); /api/auth/me liefert authenticated + login_active +
+    setup_available + api_key_required für Overlay/Setup-Fluss; Admin-
+    Routen (users-Verwaltung) prüfen Rolle selbst (API-Key = Admin,
+    anonym-Admin wenn nichts konfiguriert)
+  - filebrowser.py – Datei-Browser je Instanz: Pfade relativ zum
+    Instanz-Ordner (resolve()-Doppelprüfung gegen Traversal + Symlink-
+    Escapes), Backslashes→Slashes, .. und Absolute abgelehnt, max 512
+    Zeichen; verwaltete Ziele gesperrt: server.properties/instance.json
+    (lesbar wie schreibbar 400, dedizierte Editoren) und alles unter
+    packs/ (nur lesbar); Liste (Ordner zuerst, managed-Flag), Text-Editor
+    ≤ 1 MiB mit NUL-Probe + UTF-8-Prüfung (Binär → 400), atomares Schreiben
+    (tmp+os.replace), Upload-Zielprüfung (409 ohne overwrite), mkdir nur
+    eine Ebene, rename innerhalb der Instanz (Ziel nicht existent), delete
+    ohne Rekursion (Ordner nur leer); Upload-Limit via
+    FILEBROWSER_MAX_UPLOAD_MB (Default 300 MiB), 413 überschritten
+  - datapacks.py – Datapacks je Instanz im Welt-Ordner ({world}/datapacks,
+    vanilla disabled_datapacks/-Ordner = deaktiviert): Liste (aktiv +
+    deaktiviert), Upload nur bei gestoppter Instanz (.zip ≤ 50 MiB,
+    Namens-Regex), enable (gestoppt: Datei zurück; laufend: Datei zuerst,
+    dann RCON '/datapack enable "file/{name}"' — RCON-Fehler = 503 mit
+    Hinweis, dass es beim nächsten Start lädt), disable + delete bei
+    laufender Instanz RCON-ZUERST (fail-closed: RCON-Fehler = 503 und
+    NICHTS an Dateien ändern), delete ohne RCON nur gestoppt
+  - gamerules.py – Gamerule-Quick-Editor: kuratierte Vanilla-1.21.x-Liste
+    (~48 Regeln, bool/int mit Default + Bereich; pvp/showCoordinates
+    bewusst weggelassen — Bedrock-only), GET = RCON 'gamerule' (Listen-
+    output 'gamerule <name> = <value>' plus Abfrage-Format geparst), nur
+    laufend (409); POST {name, value} — Name gegen Liste (400 unbekannt),
+    Wert typisiert validiert (bool true/false, int mit min/max) → RCON
+    'gamerule <name> <value>'; nicht gemeldete Regeln value=None
+    (Frontend zeigt Default)
   - updates.py – Mod-Update-Prüfung per Hash, ohne Registry: jede .jar/.jar.disabled
     wird einmal eingelesen → SHA1 + CurseForge-Murmur2 (Java-Referenz, seed=1,
     signed int32); Modrinth /version_file/{sha1}?multiple=true identifiziert
@@ -153,14 +208,31 @@ Checkliste, Dashboard-Schnellstart).
     (.part→rename, SHA1-Prüfung, CF-CDN-Host-Check), alte Datei entfernt,
     deaktiviert-Zustand (.disabled) bleibt erhalten; Fehler je Mod sammeln
     sich in job.summary, brechen den Job nicht ab
-  - security.py – Dateinamen-/Pfad-Validierung (Anti-Path-Traversal), API-Key-Guard
+  - security.py – Dateinamen-/Pfad-Validierung (Anti-Path-Traversal),
+    auth_guard: kombinierter Guard aller /api-Routen (außer /api/health und
+    /api/auth/*) — DASHBOARD_API_KEY (X-API-Key) = Admin, Session-Cookie =
+    Rolle aus Token, gar nichts konfiguriert = anonym Admin (Bestandsver-
+    halten); Rollen-Prüfung zentral: schreibende Methoden (POST/PATCH/PUT/
+    DELETE) nur für Admin (403 für Viewer), GET (inkl. SSE-Log-Stream) offen
   - history.py – Persistenter Statistik-Verlauf (SQLite/WAL, Default
     /data/history.db): Sampler-Lauf (HISTORY_INTERVAL, Default 30 s) via
     Lifespan-Task sammelt docker_resources() (CPU/RAM je Container) und
-    Spieler-Zahlen (SLP je laufender Instanz, parallel, 2 s Timeout);
-    Retention-Prune täglich + bei Start (HISTORY_RETENTION_DAYS, Default 30);
-    query_series() buckettet serverseitig (~300 Punkte) auf: Summen CPU/RAM/
-    Spieler + Spieler je Instanz; wirft nie — Sampling-Fehler nur geloggt
+    Spieler-Zahlen (SLP je laufender Instanz, parallel, 2 s Timeout, mit
+    Spielernamen aus players.sample; RCON-'list'-Fallback bei leerem
+    Sample/hide-online-players); Retention-Prune täglich + bei Start
+    (HISTORY_RETENTION_DAYS, Default 30; player_sessions geprunt,
+    player_daily bleibt); query_series() buckettet serverseitig (~300
+    Punkte) auf: Summen CPU/RAM/Spieler + Spieler je Instanz; wirft nie —
+    Sampling-Fehler nur geloggt. Spielzeit je Spieler: Session-Tracking im
+    Sampler (in-memory _OPEN_SESSIONS mit Lock): SLP-/RCON-Namen öffnen/
+    verlängern Sessions (Lücke > 2 Intervalle = alte schließen + neue
+    öffnen), 2 Misses hintereinander, gestoppte Instanz oder Shutdown
+    schließen (end_ts = letzte Sicht; Gutschrift (end-start)+Intervall);
+    flush_sessions() schreibt player_sessions + anteilige Sekunden in
+    player_daily (Tages-Upsert, von Retention ausgenommen);
+    query_playtime() = Leaderboard (24/168/720 h oder 'all') aus
+    player_daily + offenen Sessions (per_instance, last_seen); Schema
+    idempotent (CREATE TABLE IF NOT EXISTS)
   - backups.py – Instanz-Backups (tar.gz-Snapshots je Instanz in
     /data/backups/{id}); safety_backup() Sicherheits-Snapshots: 'pre-install'
     vor Modpack-Installationen (ohne Welt/packs) und 'pre-restore' vor
@@ -236,9 +308,17 @@ Checkliste, Dashboard-Schnellstart).
     Update-Check: 'Updates prüfen' → je Mod 'Update'-Button + Versions-Chip,
     'Alle aktualisieren' mit Fortschrittsbalken über den update-Job),
     Konsole (freie RCON-Befehle mit Verlauf per Pfeiltasten, zeigt Modus
-    aus /api/settings), Whitelist-Editor (Liste mit Entfernen, Hinzufügen,
+    aus /api/settings), Gamerule-Quick-Editor (kuratierte Liste mit Such-
+    filter, bool als An/Aus-Segmente, int als Zahlenfeld + 'Setzen', sofort
+    per RCON angewendet, nur bei laufender Instanz — 409-Hinweis), Whitelist-Editor (Liste mit Entfernen, Hinzufügen,
     Speichern → whitelist.json inkl. UUID-Auflösung, 'Auf Server laden'
     = RCON-Reload bei laufender Instanz, offline-mode-Erkennung),
+    Datapacks-Box (Liste aktiv/deaktiviert, Upload .zip ≤ 50 MiB nur
+    gestoppt, Aktivieren/Deaktivieren/Löschen — laufend über RCON),
+    Dateien-Box (Browser über den Instanz-Ordner: Breadcrumb, Liste mit
+    Größe/Datum/geschützt-Markierung, Download je Datei, Bearbeiten im
+    Modal-Editor ≤ 1 MiB, Upload/MKDIR/Umbenennen/Löschen admin-only,
+    server.properties/instance.json/packs/ geschützt),
     Einstellungs-Editor (server.properties) mit Formular-/Raw-Umschalter:
     Formular-Modus rendert bekannte Keys per Schema (bool → Auswahl true/false,
     enum → Auswahlliste, int → Zahlenfeld mit min/max, str → Textfeld;
@@ -263,7 +343,17 @@ Checkliste, Dashboard-Schnellstart).
    Suchergebnisse laden automatisch beim Tab-Öffnen),
    Statistik-Tab (persistenter Verlauf: CPU/RAM-Gesamt-Charts + Spieler-
    Linien je Instanz mit Legende, Zeitraum 6 h/24 h/7 Tage/30 Tage,
-   serverseitig gebuckett über /api/history; SVG-Charts ohne Framework),
+   serverseitig gebuckett über /api/history; SVG-Charts ohne Framework;
+   Spielzeit-Leaderboard je Spieler mit Zeitraum 24 h/7 Tage/30 Tage/
+   Gesamt, Rang, pro-Instanz-Aufteilung und letzter Sichtung),
+   Login-/Setup-Overlay (Vollbild bei 401: Login-Formular, Setup für den
+   ersten Admin — bei DASHBOARD_API_KEY mit Key-Feld, alternativ reines
+   API-Key-Formular; Polling startet erst nach erfolgreichem Auth-Check),
+   Topbar-Benutzermenü (Rolle-Anzeige, Passwort ändern, Benutzerverwalten-
+   Dialog für Admin: Anlegen/Rolle/Passwort/Löschen, Abmelden; Setup-
+   Einstieg, solange kein Benutzer existiert und nichts geschützt ist),
+   Viewer-Rolle blendet schreibende Buttons per body.role-viewer CSS aus
+   (`.admin-only`) — die API bleibt die harte Grenze mit 403;
    Instanz-Badge in der Topbar; responsiv: fluides Layout (clamp-Breiten,
    max 1320 px), Breakpoints 1020/760/640/420 px — ≤1020 px einspaltige
    Übersicht, ≤760 px einspaltige Formulare/Detail-Grid + 2 KPI-Spalten,
@@ -275,7 +365,13 @@ Checkliste, Dashboard-Schnellstart).
   Modpack-Mocks inkl. mrpack/CF-ZIP, Upload-End-to-End, CF-Download/Redirects,
   Overrides-Pfadschutz, SLP, Modrinth, CurseForge-API inkl. Key-Guard/
   Suche/Pack-Installation, Server-aus-Modpack-Abläufe, Klonen, Import, Welt-
-  Download/Upload, JVM-Flags, Disk-Usage, Scheduler)
+  Download/Upload, JVM-Flags, Disk-Usage, Scheduler, Auth (Setup/Login/
+  Lockout/Rollen-Matrix/Cookie-Flags; users.json/.auth_secret werden global
+  per conftest-Fixture je Test isoliert), Datei-Browser (Traversal, geschützte
+  Ziele, Binär-Erkennung, Limits, CRUD-Routen), Spielzeit (Session-Logik mit
+  Fake-Zeiten, Tag-Aufteilung, Leaderboard, Sampler-Integration, RCON-Fallback),
+  Datapacks (Liste/Upload-Caps/Enable-Disable/Delete mit RCON fail-closed),
+  Gamerules (Parser, Typ-Validierung, Routen mit Fake-RCON))
 - Dockerfile – Python 3.12-slim, UID 1000, docker-Paket, tzdata (für TZ im
   Scheduler), Healthcheck (Startphase 30 s); /app nur lesend (root-eigentümlich)
 - docker-compose.yml – init (Ownership-Fix 1000:1000 auf /data, idempotent,
@@ -398,6 +494,14 @@ RCON_CONSOLE_WHITELIST (Komma-separierte Zusatzbefehle für den
 Whitelist-Modus), HISTORY_DB (SQLite-Verlauf, Default /data/history.db),
 HISTORY_INTERVAL (Sampling-Sekunden, Default 30, min 10),
 HISTORY_RETENTION_DAYS (Default 30),
+FILEBROWSER_MAX_UPLOAD_MB (Default 300 — Upload-Limit je Datei im
+Datei-Browser).
+Login & Rollen (keine Pflicht-Env): Benutzer in /data/users.json
+(geschwisterlich zu scheduler_state.json), Session-Secret in
+/data/.auth_secret (0600, einmalig generiert); ohne DASHBOARD_API_KEY und
+ohne Benutzer bleibt die API offen (Bestandsverhalten) — erster Admin wird
+beim ersten Aufruf per Setup-Dialog angelegt; DASHBOARD_API_KEY bleibt
+Admin-Bypass für Skripte.
 Crash-Watchdog/Alerts (optional): ALERT_WEBHOOK_URL (Discord-kompatibler
 Webhook, POST {"content": …}), TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
 (Telegram sendMessage), ALERT_EVENTS (Komma-separiert crash,start,stop,
@@ -421,7 +525,7 @@ Compose-Parameter (DOCKER_GID, MCDATA_DIR, BACKUPS_DIR, DASHBOARD_HTTP_PORT)
 kommen aus .env — Vorlage .env.example; ZimaOS-Einrichtung: SERVER-SETUP.md §11.
 
 ## Tests
-python -m pytest tests/   # 499 Tests (Windows: 1 Skip — Symlink-Test, CI/Linux: alle grün)
+python -m pytest tests/   # 613 Tests (Windows: 2 Skips — Symlink-Tests, CI/Linux: alle grün)
 CI: .github/workflows/ci.yml — ruff check app tests, mypy (app/, Regeln in
 pyproject.toml inkl. dokumentierter Ausnahmen), pytest; Dev-Abhängigkeiten
 in requirements-dev.txt. Docker-Image: .github/workflows/docker-publish.yml
@@ -472,7 +576,26 @@ upload nicht prüfbar, Modrinth inkl. Loader-Filter über gemeinsamen Helfer
 Versions-ID → einmal pinnen), Pack-Update (400 ohne Pack, force-Rufe
 Modrinth/CF inkl. version_id/file_id, CF pinnt gewählte Datei-ID via
 resolve_pack 6-Tuple, End-to-End-Job mit Meta-Aktualisierung) in
-tests/test_new_features.py.
+tests/test_new_features.py,
+Auth (users.json/Hash/Token, Setup nur einmal + API-Key-Pflicht, Login/
+Logout/me, Lockout nach 10 Fehlversuchen, Rollen-Matrix API-Key/Viewer/
+Admin inkl. 403-Matrix, abgelaufene Session, users-CRUD inkl. Selbst-/
+Letzter-Admin-Schutz, change-password, Cookie-Flags, health bleibt offen)
+in tests/test_auth.py,
+Datei-Browser (Pfad-Normalisierung/Traversal/Symlink-Escape, geschützte
+Ziele server.properties/instance.json/packs, Liste/Text-Roundtrip/Binär-
+Erkennung/Limits, mkdir/rename/delete-Grenzen, Upload-409/overwrite,
+CRUD-Routen, Viewer-403) in tests/test_filebrowser.py,
+Spielzeit (Session öffnen/verlängern/Misses/Lücke/Instanz-Stopp/Shutdown,
+Namen-Cap, Tag-Aufteilung inkl. Mitternacht/Rundung, query_playtime
+Daily/offene Sessions/Filter/Zeitfenster, sample_tick-Integration mit
+SLP-Namen + RCON-Fallback, /api/players/playtime) in tests/test_playtime.py,
+Datapacks (Namens-Validierung, Liste aktiv/deaktiviert, Upload/Kollision,
+enable gestoppt/laufend mit RCON-Reihenfolge, disable/delete RCON-zuerst
+fail-closed bei RCON-Fehler, Routen, Viewer-403) in tests/test_datapacks.py,
+Gamerules (kuratierte Liste ohne Bedrock-only-Regeln, bool/int-Validierung
+inkl. Bereiche, Parser Listen-/Abfrage-Format, GET nur laufend 409,
+GET/POST mit Fake-RCON, Viewer-403) in tests/test_gamerules.py.
 
 ## Bekannte Eigenheiten
 - mrpack-Format: aktuelle Packs tragen die MC-Version in dependencies.minecraft

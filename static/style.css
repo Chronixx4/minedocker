@@ -1469,3 +1469,267 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ============================================================================
+   Login & Rollen: Vollbild-Overlay, Topbar-Benutzermenü, Modals
+   ========================================================================== */
+
+/* Viewer-Rolle: schreibende Aktionen ausblenden (die API bleibt die harte
+   Grenze mit 403 — hier geht es nur ums Decken der Bedienoberfläche) */
+body.role-viewer .admin-only { display: none !important; }
+
+/* ---------- Topbar-Benutzermenü ---------- */
+.user-menu { position: relative; }
+.user-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.42rem 0.7rem;
+  border-radius: var(--radius-full);
+}
+.user-btn svg { width: 17px; height: 17px; }
+.user-btn .caret { width: 13px; height: 13px; opacity: 0.7; }
+.user-drop {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  min-width: 220px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 0.4rem;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.user-drop-info {
+  padding: 0.4rem 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.25rem;
+  overflow-wrap: anywhere;
+}
+.user-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 38px;
+}
+.user-item:hover { background: var(--surface-2); color: var(--accent-2); }
+
+/* ---------- Login-/Setup-Overlay ---------- */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.2rem;
+  background: rgba(6, 9, 14, 0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  overflow: auto;
+}
+.auth-box {
+  width: min(430px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 1.6rem 1.6rem 1.5rem;
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: 1.1rem;
+}
+.auth-brand .brand-mark {
+  width: 38px;
+  height: 38px;
+  flex-basis: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: var(--grad);
+  color: #04120c;
+}
+.auth-brand .brand-mark svg { width: 21px; height: 21px; }
+.auth-brand h1 { font-size: 1.05rem; margin: 0; }
+.auth-form h2 { margin: 0 0 0.7rem; font-size: 1.1rem; }
+.auth-field {
+  display: block;
+  margin: 0.75rem 0;
+  font-size: 0.82rem;
+  color: var(--text-2);
+}
+.auth-field input {
+  display: block;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.6rem 0.75rem;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.auth-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.auth-submit { width: 100%; margin-top: 0.9rem; }
+
+/* ---------- Modals (Benutzerverwaltung, Passwort) ---------- */
+.modal {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0;
+  width: min(620px, calc(100vw - 2rem));
+  max-height: min(84vh, 720px);
+  box-shadow: var(--shadow-lg);
+}
+.modal::backdrop {
+  background: rgba(6, 9, 14, 0.7);
+  backdrop-filter: blur(4px);
+}
+.modal-body { padding: 1.2rem 1.3rem 1.3rem; overflow: auto; }
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+}
+.modal-head h2 { margin: 0; font-size: 1.05rem; }
+.modal .rcon-actions { flex-wrap: wrap; }
+.modal .cfg-input {
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.88rem;
+}
+.modal .auth-field input {
+  display: inline-block;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .user-btn #user-name { max-width: 5.5rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .auth-box { padding: 1.2rem 1.1rem 1.1rem; }
+}
+
+/* ============================================================================
+   Datei-Browser (Detail-Dialog)
+   ========================================================================== */
+.fb-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  margin: 0.4rem 0 0.6rem;
+  padding: 0.35rem 0.55rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.fb-crumb {
+  background: none;
+  border: none;
+  color: var(--accent-2);
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 30px;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fb-crumb:hover { background: var(--surface-2); text-decoration: none; }
+.fb-crumb-sep { color: var(--muted); }
+.fb-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.fb-actions .file-input { flex: 1 1 12rem; }
+.fb-icon { flex: none; font-size: 0.95rem; }
+.fb-dir-link {
+  color: var(--accent-2);
+  cursor: pointer;
+  text-decoration: underline dotted transparent;
+}
+.fb-dir-link:hover { text-decoration-color: currentColor; }
+.fb-managed { opacity: 0.62; }
+.modal-editor { width: min(860px, calc(100vw - 2rem)); }
+.fb-editor-text {
+  width: 100%;
+  min-height: 46vh;
+  resize: vertical;
+  padding: 0.7rem 0.8rem;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+.fb-editor-text:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+/* ---------- Spielzeit-Leaderboard ---------- */
+.pt-rank {
+  width: 1.6rem;
+  flex: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pt-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ---------- Gamerule-Editor ---------- */
+.gr-num {
+  width: 6.5rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-soft);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.85rem;
+}

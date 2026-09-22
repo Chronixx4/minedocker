@@ -30,6 +30,18 @@ gestartet und verwaltet über das Dashboard.
   Server-Ordner importieren (`.zip`/`.tar.gz`), Instanzen klonen als Vorlage
 - **RCON-Konsole & Spielerverwaltung** — freie Befehle (Whitelist- oder Free-Modus),
   Whitelist-Editor mit UUID-Auflösung, op/kick/ban direkt aus der Übersicht
+- **Gamerule-Quick-Editor** — kuratierte Vanilla-1.21.x-Gamerules mit Toggles und
+  Zahlenfeldern, sofort per RCON gesetzt (nur bei laufender Instanz)
+- **Datapacks** — hochladen (nur gestoppt), aktivieren/deaktivieren (bei laufendem
+  Server per RCON), löschen; deaktivierte Packs liegen in `disabled_datapacks/`
+- **Datei-Browser** — Instanz-Ordner durchstöbern, Textdateien ≤ 1 MiB bearbeiten,
+  Dateien hochladen/umbenennen/löschen; verwaltete Dateien (`server.properties`,
+  `instance.json`, `packs/`) sind geschützt
+- **Spielzeit je Spieler** — Leaderboard 24 h/7 Tage/30 Tage/Gesamt aus Session-
+  Tracking des Verlauf-Samplers (SLP-Spielerliste, RCON-Fallback)
+- **Login & Rollen** — Benutzer mit Admin/Viewer-Rolle (`users.json`, scrypt-Hash),
+  Session-Cookie (HttpOnly, SameSite=Strict), Setup-Dialog für den ersten Admin,
+  Lockout nach 10 Fehlversuchen; `DASHBOARD_API_KEY` bleibt als Admin-Bypass
 - **Zeitplan je Instanz** — Auto-Start, täglicher Neustart mit Vorwarnung,
   geplante Backups mit Rotation, geplanter Mod-Update-Check (Container-Lokalzeit)
 - **Crash-Watchdog & Alerts** — erkennt abgestürzte Instanzen und meldet per
@@ -87,7 +99,8 @@ ZimaOS-UI gibt es eine angepasste Import-YAML ohne Build-Schritt und ohne
 
 | Variable | Default | Zweck |
 |---|---|---|
-| `DASHBOARD_API_KEY` | *(leer)* | Schützt alle API-Routen außer `/api/health` — **setzen!** (z. B. `openssl rand -hex 32`) |
+| `DASHBOARD_API_KEY` | *(leer)* | Admin-Bypass für alle API-Routen außer `/api/health` (Skripte/curl) — **setzen, wenn fremde Nutzer im Netz!** (z. B. `openssl rand -hex 32`) |
+| `FILEBROWSER_MAX_UPLOAD_MB` | `300` | Upload-Limit je Datei im Datei-Browser |
 | `CORS_ORIGINS` | `*` | Bei Reverse-Proxy auf die echte Origin einschränken |
 | `CF_API_KEY` | *(leer)* | CurseForge-API-Key für Mod-/Modpack-Suche ([console.curseforge.com](https://console.curseforge.com)) |
 | `INSTANCES_DIR` | `/data/instances` | Instanz-Ordner im Dashboard-Container |
@@ -97,13 +110,36 @@ ZimaOS-UI gibt es eine angepasste Import-YAML ohne Build-Schritt und ohne
 | `ALERT_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `ALERT_EVENTS` | *(leer)* | Crash-Watchdog-Alerts; leer = aus |
 | `TZ` | UTC | Container-Lokalzeit für Scheduler-Zeiten (z. B. `Europe/Berlin`) |
 
+## Login & Rollen
+
+Beim ersten Aufruf öffnet das Dashboard den **Setup-Dialog** — erster Benutzer
+wird Admin. Danach schützt das Login alle `/api`-Routen:
+
+- **Admin**: alles (Start/Stop, Konsole, Dateien, Datapacks, Benutzer verwalten)
+- **Viewer**: strikt nur lesen (Verlauf, Logs, Listen) — schreibende Aufrufe
+  werden zusätzlich serverseitig mit 403 abgewiesen
+- **Benutzer verwalten** über das Topbar-Menü (Rolle wechseln, Passwort
+  zurücksetzen, löschen; letzter Admin bleibt geschützt); eigenes Passwort
+  über „Passwort ändern"
+- **Sitzung**: HMAC-signiertes Cookie (HttpOnly, SameSite=Strict, 30 Tage,
+  Secret in `/data/.auth_secret`, 0600); Logout löscht den Cookie
+- **Lockout**: 10 Fehlversuche pro Benutzername → 5 Minuten Sperre (in-memory,
+  Neustart resettet); Login-Fehler mit konstantem Delay
+- **Ohne Setup** (kein Benutzer, kein `DASHBOARD_API_KEY`): API offen wie zuvor
+  — Homelab-Bestandsverhalten
+- **`DASHBOARD_API_KEY`** bleibt als Alternative voll gültig (implizit Admin),
+  auch parallel zum Login; das Frontend merkt sich ihn im Browser (localStorage)
+
 ## Sicherheit
 
 - Das Dashboard hat vollen Zugriff auf die Docker-Engine (Socket-Mount) und
   verwaltet Server-Container — **nur im LAN/VPN betreiben** (WireGuard/Tailscale)
   oder hinter einen authentifizierten Reverse-Proxy hängen.
-- `DASHBOARD_API_KEY` setzen, sobald das Netzwerk nicht vollständig vertrauens-
-  würdig ist.
+- Login & Rollen nutzen (Setup-Dialog beim ersten Aufruf) und/oder
+  `DASHBOARD_API_KEY` setzen, sobald das Netzwerk nicht vollständig vertrauens-
+  würdig ist. Bei Reverse-Proxy: HTTPS-Terminierung am Proxy (Cookie ist
+  HttpOnly + SameSite=Strict; `secure`-Flag ist bewusst nicht gesetzt, damit
+  HTTP-LAN-Zugänge funktionieren).
 - Das Dashboard läuft als unprivilegierter User (UID/GID 1000), Docker-Socket-
   Zugriff nur über die Socket-Gruppe (`DOCKER_GID`).
 

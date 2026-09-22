@@ -61,6 +61,12 @@ class Settings:
             self.history_retention_days = max(1, int(os.getenv("HISTORY_RETENTION_DAYS", "30")))
         except ValueError:
             self.history_retention_days = 30
+        # Datei-Browser: Upload-Deckel je Datei in MiB (gegen Speicher-Füllung)
+        try:
+            self.filebrowser_max_upload_mb = max(
+                1, int(os.getenv("FILEBROWSER_MAX_UPLOAD_MB", "300")))
+        except ValueError:
+            self.filebrowser_max_upload_mb = 300
         # Crash-Watchdog/Alerts (optional): Discord-kompatibler Webhook und/oder
         # Telegram; ALERT_EVENTS wählt die Ereignisse (crash/start/stop).
         self.alert_webhook_url = os.getenv("ALERT_WEBHOOK_URL", "").strip()

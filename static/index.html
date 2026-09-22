@@ -25,6 +25,20 @@
   </div>
   <div class="topbar-right">
     <span id="inst-badge" class="badge off"><span class="dot"></span><span id="inst-badge-text">–</span></span>
+    <div class="user-menu">
+      <button id="user-menu-btn" class="btn user-btn" title="Konto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.7-3.6 3.3-5.5 7-5.5s6.3 1.9 7 5.5"/></svg>
+        <span id="user-name">…</span>
+        <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div id="user-menu-drop" class="user-drop hidden">
+        <div id="user-menu-info" class="user-drop-info muted small"></div>
+        <button id="menu-change-password" class="user-item hidden">Passwort ändern</button>
+        <button id="menu-users" class="user-item hidden">Benutzer verwalten</button>
+        <button id="menu-setup" class="user-item hidden">Zugang einrichten…</button>
+        <button id="menu-logout" class="user-item hidden">Abmelden</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -117,7 +131,7 @@
           <div class="row">
             <span id="ov-updated" class="muted small" title="Letzte Aktualisierung"></span>
             <button id="ov-reload" class="btn small-btn" title="Jetzt aktualisieren">Aktualisieren</button>
-            <button id="ov-new" class="btn primary">+ Neuer Server</button>
+            <button id="ov-new" class="btn primary admin-only">+ Neuer Server</button>
           </div>
         </div>
         <div class="ov-toolbar">
@@ -141,8 +155,8 @@
             <button class="seg-btn" data-ov-filter="error">Fehler</button>
           </div>
           <div class="row">
-            <button id="ov-start-all" class="btn" title="Alle gestoppten Server starten">Alle starten</button>
-            <button id="ov-stop-all" class="btn" title="Alle laufenden Server stoppen">Alle stoppen</button>
+            <button id="ov-start-all" class="btn admin-only" title="Alle gestoppten Server starten">Alle starten</button>
+            <button id="ov-stop-all" class="btn admin-only" title="Alle laufenden Server stoppen">Alle stoppen</button>
           </div>
           <div class="row">
             <label class="toolbar-field" for="ov-group">Gruppe
@@ -150,8 +164,8 @@
                 <option value="">–</option>
               </select>
             </label>
-            <button id="ov-group-start" class="btn" disabled title="Alle gestoppten Server der Gruppe starten">Gruppe starten</button>
-            <button id="ov-group-stop" class="btn" disabled title="Alle laufenden Server der Gruppe stoppen">Gruppe stoppen</button>
+            <button id="ov-group-start" class="btn admin-only" disabled title="Alle gestoppten Server der Gruppe starten">Gruppe starten</button>
+            <button id="ov-group-stop" class="btn admin-only" disabled title="Alle laufenden Server der Gruppe stoppen">Gruppe stoppen</button>
           </div>
         </div>
         <div id="ov-grid" class="inst-grid"></div>
@@ -193,8 +207,8 @@
         <h2>Server-Instanzen <span id="inst-count" class="muted"></span></h2>
         <div class="row">
           <button id="inst-reload" class="btn">Aktualisieren</button>
-          <button id="inst-import" class="btn" title="Bestehenden Server-Ordner (.zip/.tar.gz) als Instanz einbinden">Importieren</button>
-          <button id="inst-new" class="btn primary">Neuen Server erstellen</button>
+          <button id="inst-import" class="btn admin-only" title="Bestehenden Server-Ordner (.zip/.tar.gz) als Instanz einbinden">Importieren</button>
+          <button id="inst-new" class="btn primary admin-only">Neuen Server erstellen</button>
         </div>
       </div>
       <p class="muted small" id="inst-dir"></p>
@@ -244,7 +258,7 @@
         </label>
         <div id="inst-create-msg" class="err hidden"></div>
         <div class="row">
-          <button id="inst-create-btn" class="btn primary">Server erstellen</button>
+          <button id="inst-create-btn" class="btn primary admin-only">Server erstellen</button>
           <button id="inst-cancel" class="btn">Abbrechen</button>
         </div>
       </div>
@@ -299,7 +313,7 @@
         </label>
         <div id="imp-msg" class="err hidden"></div>
         <div class="row">
-          <button id="imp-create-btn" class="btn primary">Server importieren</button>
+          <button id="imp-create-btn" class="btn primary admin-only">Server importieren</button>
           <button id="imp-cancel" class="btn">Abbrechen</button>
         </div>
       </div>
@@ -327,12 +341,12 @@
                      placeholder="z. B. Survival, MiniGames">
             </label>
             <div class="row" style="margin-top: 0.4rem;">
-              <button id="tags-save" class="btn">Tags speichern</button>
+              <button id="tags-save" class="btn admin-only">Tags speichern</button>
             </div>
             <div class="sched-row" style="margin-top: 0.6rem;">
               <label class="check" for="inst-port-new" style="margin: 0;">Port</label>
               <input id="inst-port-new" type="number" min="1024" max="65535" class="sched-num-wide">
-              <button id="port-save" class="btn">Port ändern</button>
+              <button id="port-save" class="btn admin-only">Port ändern</button>
             </div>
             <p class="muted small">Port nur bei gestoppter Instanz änderbar — wirksam beim
               nächsten Start. RCON-Port = Port + 1000 (wird mitreserviert).</p>
@@ -342,11 +356,11 @@
           <!-- Installiertes Modpack: Update-Prüfung + Pack-Update -->
           <div class="upload-box">
             <h3>Installiertes Modpack
-              <button id="mp-update-check" class="btn small-btn" title="Auf neuere Pack-Version prüfen">Update prüfen</button>
+              <button id="mp-update-check" class="btn small-btn admin-only" title="Auf neuere Pack-Version prüfen">Update prüfen</button>
             </h3>
             <p class="muted small" id="mp-update-info">Noch kein Modpack installiert.</p>
             <div class="row" style="margin-top: 0.4rem;">
-              <button id="mp-update-btn" class="btn primary hidden"
+              <button id="mp-update-btn" class="btn primary hidden admin-only"
                       title="Neueste kompatible Pack-Version erneut in diese Instanz installieren">Pack aktualisieren</button>
             </div>
             <div id="mp-update-error" class="err hidden"></div>
@@ -373,8 +387,8 @@
           <div class="upload-box">
             <h3>Fertiges Modpack hochladen</h3>
             <div class="upload-row">
-              <input id="pack-upload-file" class="file-input" type="file" accept=".mrpack,.zip">
-              <button id="pack-upload-btn" class="btn primary" disabled>Installieren</button>
+              <input id="pack-upload-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
+              <button id="pack-upload-btn" class="btn primary admin-only" disabled>Installieren</button>
             </div>
             <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Benötigte MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt (Server muss dafür gestoppt sein)</p>
             <div id="upload-error" class="err hidden"></div>
@@ -382,7 +396,7 @@
           <div class="upload-box">
             <h3>Backups</h3>
             <div class="row">
-              <button id="backup-create-btn" class="btn primary">Backup erstellen</button>
+              <button id="backup-create-btn" class="btn primary admin-only">Backup erstellen</button>
               <button id="backup-reload-btn" class="btn">Aktualisieren</button>
             </div>
             <p class="muted small">Sichert Welt, Configs und Mods der Instanz im Volume. Für
@@ -402,8 +416,8 @@
               <button id="world-download-btn" class="btn primary" disabled>Welt herunterladen (.zip)</button>
             </div>
             <div class="upload-row" style="margin-top: 0.5rem;">
-              <input id="world-upload-file" class="file-input" type="file" accept=".zip,.tar.gz">
-              <button id="world-upload-btn" class="btn" disabled>Welt hochladen</button>
+              <input id="world-upload-file" class="file-input admin-only" type="file" accept=".zip,.tar.gz">
+              <button id="world-upload-btn" class="btn admin-only" disabled>Welt hochladen</button>
             </div>
             <p class="muted small">Ersetzt die Welt: Das Archiv enthält <code>level.dat</code> direkt
               (Welt-Inhalt) oder in einem Unterordner (Ordner-Name wird übernommen).
@@ -412,8 +426,41 @@
           </div>
 
           <div class="upload-box">
-            <h3>JVM &amp; RAM <span class="muted small">(RAM wirksam beim nächsten Start)</span></h3>
-            <div class="row" style="margin-top: 0.5rem;">
+            <h3>Datapacks <span class="muted small">(Welt)</span>
+              <button id="dp-reload" class="btn small-btn" title="Liste aktualisieren">Aktualisieren</button>
+            </h3>
+            <div class="upload-row">
+              <input id="dp-upload-file" class="file-input admin-only" type="file" accept=".zip">
+              <button id="dp-upload-btn" class="btn admin-only" disabled>Hochladen</button>
+            </div>
+            <p class="muted small">Hochladen nur bei gestoppter Instanz (.zip, max. 50 MiB).
+              Aktivieren/Deaktivieren bei laufendem Server läuft über RCON; deaktivierte
+              Packs liegen in <code>disabled_datapacks/</code>.</p>
+            <div id="dp-error" class="err hidden"></div>
+            <ul id="dp-list" class="mod-list compact"></ul>
+            <p id="dp-empty" class="muted small hidden">Keine Datapacks gefunden.</p>
+          </div>
+
+          <div class="upload-box">
+            <h3>Dateien <span class="muted small">(Instanz-Ordner)</span>
+              <button id="fb-reload" class="btn small-btn" title="Liste aktualisieren">Aktualisieren</button>
+            </h3>
+            <nav id="fb-breadcrumb" class="fb-breadcrumb" aria-label="Ordnerpfad"></nav>
+            <div class="fb-actions admin-only">
+              <input id="fb-upload-file" class="file-input" type="file" multiple>
+              <button id="fb-upload-btn" class="btn" disabled>Hochladen</button>
+              <button id="fb-mkdir-btn" class="btn">Neuer Ordner</button>
+            </div>
+            <p class="muted small"><code>server.properties</code> und <code>instance.json</code>
+              sind geschützt (Einstellungs-Editor/verwaltet), <code>packs/</code> ist nur
+              lesbar. Ordner lassen sich nur löschen, wenn sie leer sind.</p>
+            <div id="fb-error" class="err hidden"></div>
+            <ul id="fb-list" class="mod-list compact"></ul>
+            <p id="fb-empty" class="muted small hidden">Ordner ist leer.</p>
+          </div>
+
+          <div class="upload-box">
+            <h3>JVM &amp; RAM <span class="muted small">(RAM wirksam beim nächsten Start)</span></h3>            <div class="row" style="margin-top: 0.5rem;">
               <label class="muted small" for="jvm-memory-value">RAM</label>
               <input id="jvm-memory-value" type="number" min="1" max="4096" step="1"
                      style="width: 7rem;" placeholder="2">
@@ -434,7 +481,7 @@
             <p class="muted small">Zusätzlich zum RAM-Wert übergebene JVM_OPTS; leer = Standard.
               Keine Zeilenumbrüche. Gilt für den nächsten (Neu-)Start.</p>
             <div class="row" style="margin-top: 0.5rem;">
-              <button id="jvm-save" class="btn primary">Speichern</button>
+              <button id="jvm-save" class="btn primary admin-only">Speichern</button>
             </div>
             <div id="jvm-error" class="err hidden"></div>
           </div>
@@ -477,7 +524,7 @@
             <p class="muted small">Auto-Start greift beim Hochfahren des Dashboards (einmal pro Start).
               Verpasste Neustart-Termine werden nur innerhalb von 30 Min nachgeholt.</p>
             <div class="row" style="margin-top: 0.5rem;">
-              <button id="sched-save" class="btn primary">Speichern</button>
+              <button id="sched-save" class="btn primary admin-only">Speichern</button>
             </div>
             <div id="sched-error" class="err hidden"></div>
           </div>
@@ -490,7 +537,7 @@
             <p class="muted small" id="rcon-hint">Funktioniert nur bei laufendem Server. Bestehende Server müssen einmal neu gestartet werden, damit RCON aktiv ist.</p>
             <ul id="rcon-players" class="mod-list compact"></ul>
             <p id="rcon-players-empty" class="muted small hidden">Niemand online.</p>
-            <div class="rcon-actions">
+            <div class="rcon-actions admin-only">
               <input id="rcon-target" class="search-input" type="text"
                      placeholder="Spielername" maxlength="16" autocomplete="off">
               <button id="rcon-op" class="btn" title="Operator-Rechte geben">OP geben</button>
@@ -511,7 +558,7 @@
             <h3>Konsole <span class="muted small" id="console-mode"></span></h3>
             <p class="muted small" id="console-hint">Führt einen Befehl über RCON aus
               (nur bei laufendem Server).</p>
-            <div class="rcon-actions">
+            <div class="rcon-actions admin-only">
               <input id="console-input" class="search-input" type="text"
                      placeholder="Befehl, z. B. say Hallo oder whitelist add Steve"
                      maxlength="256" autocomplete="off" spellcheck="false">
@@ -524,6 +571,23 @@
             <div id="console-error" class="err hidden"></div>
           </div>
 
+          <!-- Gamerule-Quick-Editor (nur bei laufender Instanz) -->
+          <div class="upload-box">
+            <h3>Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
+              <button id="gr-reload" class="btn small-btn" title="Aktuelle Werte laden">Laden</button>
+            </h3>
+            <p class="muted small" id="gr-hint">Werte werden sofort per RCON gesetzt
+              (nur bei laufender Instanz). Nicht gemeldete Regeln zeigen den Vanilla-Default.</p>
+            <div class="row">
+              <input id="gr-filter" class="search-input" type="text"
+                     placeholder="Gamerule suchen…" autocomplete="off">
+            </div>
+            <div id="gr-error" class="err hidden"></div>
+            <ul id="gr-list" class="mod-list compact"></ul>
+            <p id="gr-empty" class="muted small hidden">Noch nicht geladen —
+              „Laden“ drücken (nur bei laufendem Server).</p>
+          </div>
+
           <!-- Whitelist (whitelist.json, auch offline editierbar) -->
           <div class="upload-box">
             <h3>Whitelist <span class="muted small">(whitelist.json)</span>
@@ -532,7 +596,7 @@
             <p class="muted small" id="wl-hint">Direkter Datei-Zugriff — funktioniert auch
               bei gestoppter Instanz. Änderungen wirken beim nächsten Start bzw. per
               „Auf Server laden“ (RCON).</p>
-            <div class="rcon-actions">
+            <div class="rcon-actions admin-only">
               <input id="wl-input" class="search-input" type="text"
                      placeholder="Spielername" maxlength="16" autocomplete="off">
               <button id="wl-add" class="btn" title="Namen zur Liste hinzufügen">Hinzufügen</button>
@@ -568,10 +632,10 @@
               <div id="cfg-list" class="cfg-list hidden"></div>
               <div id="cfg-error" class="err hidden"></div>
               <div class="row" style="margin-top: 0.6rem;">
-                <button id="cfg-save" class="btn primary">Speichern</button>
+                <button id="cfg-save" class="btn primary admin-only">Speichern</button>
                 <span id="cfg-restart-row" class="row hidden">
                   <span class="muted small">Neustart nötig, damit es wirkt.</span>
-                  <button id="cfg-restart" class="btn">Jetzt neu starten</button>
+                  <button id="cfg-restart" class="btn admin-only">Jetzt neu starten</button>
                 </span>
               </div>
             </div>
@@ -587,8 +651,8 @@
           </div>
           <p class="mods-summary muted small" id="mods-summary"></p>
           <div class="row mods-update-row">
-            <button id="mods-update-check" class="btn small-btn">Updates prüfen</button>
-            <button id="mods-update-all" class="btn primary small-btn hidden"
+            <button id="mods-update-check" class="btn small-btn admin-only">Updates prüfen</button>
+            <button id="mods-update-all" class="btn primary small-btn hidden admin-only"
                     title="Alle Mods mit verfügbarem Update laden">Alle aktualisieren</button>
             <span id="mods-update-summary" class="muted small"></span>
           </div>
@@ -750,8 +814,8 @@
       <div class="upload-box">
         <h3>Fertiges Modpack hochladen</h3>
         <div class="upload-row">
-          <input id="mp-upload-file" class="file-input" type="file" accept=".mrpack,.zip">
-          <button id="mp-upload-btn" class="btn primary" disabled>Installieren</button>
+          <input id="mp-upload-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
+          <button id="mp-upload-btn" class="btn primary admin-only" disabled>Installieren</button>
         </div>
           <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Mit Ziel-Instanz: MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt · Ohne Ziel: neuer Server direkt aus dem Pack</p>
           <div id="mp-upload-error" class="err hidden"></div>
@@ -798,8 +862,155 @@
         </div>
       </div>
     </div>
+
+    <div class="card">
+      <div class="stats-head">
+        <div>
+          <h2>Spielzeit</h2>
+          <p class="muted small">Gesamt-Spielzeit je Spieler — Sessions aus dem
+            Verlauf-Sampler (SLP-Spielerliste, Fallback RCON <code>list</code>).
+            Tages-Aggregate bleiben dauerhaft gespeichert, Einzelsessions wie der Verlauf.</p>
+        </div>
+        <div class="row">
+          <select id="playtime-range" class="search-input" aria-label="Zeitraum Spielzeit">
+            <option value="24" selected>24 Stunden</option>
+            <option value="168">7 Tage</option>
+            <option value="720">30 Tage</option>
+            <option value="all">Gesamt</option>
+          </select>
+          <button id="playtime-reload" class="btn small-btn">Aktualisieren</button>
+        </div>
+      </div>
+      <div id="playtime-error" class="err hidden"></div>
+      <ul id="playtime-list" class="mod-list compact"></ul>
+      <p id="playtime-empty" class="empty muted hidden">Noch keine Spielzeit-Daten —
+        Spieler erscheinen, sobald der Sampler sie auf einem laufenden Server sieht.</p>
+    </div>
   </section>
 </main>
+
+<!-- Login-/Setup-Overlay (Vollbild, blockiert die App bis zur Anmeldung) -->
+<div id="auth-overlay" class="auth-overlay hidden">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
+          <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>
+        </svg>
+      </span>
+      <h1>Minecraft Dashboard</h1>
+    </div>
+
+    <form id="auth-login-form" class="auth-form hidden" autocomplete="on">
+      <h2>Anmelden</h2>
+      <label class="auth-field">Benutzername
+        <input id="auth-user" type="text" maxlength="32" autocomplete="username" required>
+      </label>
+      <label class="auth-field">Passwort
+        <input id="auth-pass" type="password" autocomplete="current-password" required>
+      </label>
+      <div id="auth-error" class="err hidden"></div>
+      <button id="auth-login-btn" type="submit" class="btn primary auth-submit">Anmelden</button>
+    </form>
+
+    <form id="auth-setup-form" class="auth-form hidden" autocomplete="off">
+      <h2>Ersten Administrator anlegen</h2>
+      <p class="muted small">Das Dashboard ist noch ohne Benutzer — lege den ersten
+        Admin an. Danach können weitere Benutzer (Admin/Viewer) angelegt werden.</p>
+      <label class="auth-field" id="setup-key-field" hidden>API-Key
+        <input id="setup-key" type="password" autocomplete="off" placeholder="DASHBOARD_API_KEY">
+      </label>
+      <label class="auth-field">Benutzername
+        <input id="setup-user" type="text" maxlength="32" autocomplete="username" required>
+      </label>
+      <label class="auth-field">Passwort (min. 8 Zeichen)
+        <input id="setup-pass" type="password" minlength="8" autocomplete="new-password" required>
+      </label>
+      <label class="auth-field">Passwort wiederholen
+        <input id="setup-pass2" type="password" minlength="8" autocomplete="new-password" required>
+      </label>
+      <div id="setup-error" class="err hidden"></div>
+      <button id="setup-btn" type="submit" class="btn primary auth-submit">Admin anlegen</button>
+    </form>
+
+    <form id="auth-apikey-form" class="auth-form hidden" autocomplete="off">
+      <h2>API-Key erforderlich</h2>
+      <p class="muted small">Das Dashboard ist per <code>DASHBOARD_API_KEY</code>
+        geschützt. Der Key gilt mit vollen Admin-Rechten.</p>
+      <label class="auth-field">API-Key
+        <input id="auth-apikey" type="password" autocomplete="off" required>
+      </label>
+      <div id="apikey-error" class="err hidden"></div>
+      <button id="apikey-btn" type="submit" class="btn primary auth-submit">Anmelden</button>
+    </form>
+  </div>
+</div>
+
+<!-- Benutzerverwalten (Admin) -->
+<dialog id="users-dialog" class="modal">
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2>Benutzer verwalten</h2>
+      <button id="users-close" type="button" class="btn">Schließen</button>
+    </div>
+    <div class="upload-box">
+      <h3>Benutzer anlegen</h3>
+      <div class="rcon-actions">
+        <input id="nu-name" class="search-input" type="text" placeholder="Benutzername" maxlength="32" autocomplete="off">
+        <input id="nu-pass" class="search-input" type="password" placeholder="Passwort (min. 8 Zeichen)" autocomplete="new-password">
+        <select id="nu-role" class="cfg-input" title="Rolle">
+          <option value="viewer">Viewer (nur lesen)</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button id="nu-create" class="btn primary">Anlegen</button>
+      </div>
+      <div id="nu-error" class="err hidden"></div>
+    </div>
+    <ul id="users-list" class="mod-list compact"></ul>
+    <p id="users-empty" class="muted small hidden">Keine Benutzer vorhanden.</p>
+    <div id="users-error" class="err hidden"></div>
+  </div>
+</dialog>
+
+<!-- Eigenes Passwort ändern (Admin & Viewer) -->
+<dialog id="password-dialog" class="modal">
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2>Passwort ändern</h2>
+      <button id="pw-close" type="button" class="btn">Schließen</button>
+    </div>
+    <form id="pw-form">
+      <label class="auth-field">Aktuelles Passwort
+        <input id="pw-current" type="password" autocomplete="current-password" required>
+      </label>
+      <label class="auth-field">Neues Passwort (min. 8 Zeichen)
+        <input id="pw-new" type="password" minlength="8" autocomplete="new-password" required>
+      </label>
+      <label class="auth-field">Neues Passwort wiederholen
+        <input id="pw-new2" type="password" minlength="8" autocomplete="new-password" required>
+      </label>
+      <div id="pw-error" class="err hidden"></div>
+      <button id="pw-save" type="submit" class="btn primary">Speichern</button>
+    </form>
+  </div>
+</dialog>
+
+<!-- Datei-Editor (Textdateien ≤ 1 MiB, UTF-8) -->
+<dialog id="fb-editor" class="modal modal-editor">
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2 id="fb-editor-title">Datei</h2>
+      <button id="fb-editor-close" type="button" class="btn">Schließen</button>
+    </div>
+    <textarea id="fb-editor-text" class="fb-editor-text" spellcheck="false"></textarea>
+    <div id="fb-editor-error" class="err hidden"></div>
+    <div class="row" style="margin-top: 0.6rem;">
+      <button id="fb-editor-save" class="btn primary">Speichern</button>
+      <span class="muted small" id="fb-editor-meta"></span>
+    </div>
+  </div>
+</dialog>
 
 <div id="toasts" aria-live="polite"></div>
 
@@ -817,7 +1028,7 @@
         <div class="dl-deps muted small"></div>
       </div>
     </div>
-    <button class="btn primary install">Installieren</button>
+    <button class="btn primary install admin-only">Installieren</button>
   </article>
 </template>
 
@@ -828,9 +1039,9 @@
       <span class="mod-meta muted small"></span>
     </div>
     <div class="row">
-      <button class="btn primary small-btn update hidden" title="Auf neueste Version aktualisieren">Update</button>
-      <button class="btn toggle" title="Mod aktivieren/deaktivieren (wird beim Serverstart berücksichtigt)"></button>
-      <button class="btn danger delete">Löschen</button>
+      <button class="btn primary small-btn update hidden admin-only" title="Auf neueste Version aktualisieren">Update</button>
+      <button class="btn toggle admin-only" title="Mod aktivieren/deaktivieren (wird beim Serverstart berücksichtigt)"></button>
+      <button class="btn danger delete admin-only">Löschen</button>
     </div>
   </li>
 </template>
@@ -846,12 +1057,12 @@
     <div class="chips"></div>
     <div class="inst-error err hidden"></div>
     <div class="inst-actions row">
-      <button class="btn primary start">Starten</button>
-      <button class="btn stop">Stoppen</button>
-      <button class="btn restart">Neustart</button>
+      <button class="btn primary start admin-only">Starten</button>
+      <button class="btn stop admin-only">Stoppen</button>
+      <button class="btn restart admin-only">Neustart</button>
       <button class="btn open">Verwalten</button>
-      <button class="btn clone" title="Instanz als Vorlage klonen (Welt, Mods, Configs)">Klonen</button>
-      <button class="btn danger delete">Löschen</button>
+      <button class="btn clone admin-only" title="Instanz als Vorlage klonen (Welt, Mods, Configs)">Klonen</button>
+      <button class="btn danger delete admin-only">Löschen</button>
     </div>
   </article>
 </template>
@@ -873,9 +1084,9 @@
     </div>
     <div class="inst-error err hidden"></div>
     <div class="inst-actions row">
-      <button class="btn primary start">Starten</button>
-      <button class="btn stop">Stoppen</button>
-      <button class="btn restart">Neustart</button>
+      <button class="btn primary start admin-only">Starten</button>
+      <button class="btn stop admin-only">Stoppen</button>
+      <button class="btn restart admin-only">Neustart</button>
       <button class="btn logs" title="Logs im Server-Tab öffnen">Logs</button>
       <button class="btn open">Verwalten</button>
     </div>
@@ -893,8 +1104,8 @@
       </div>
     </div>
     <div class="row">
-      <button class="btn primary install">Installieren</button>
-      <button class="btn server-create">Neuer Server</button>
+      <button class="btn primary install admin-only">Installieren</button>
+      <button class="btn server-create admin-only">Neuer Server</button>
     </div>
   </article>
 </template>

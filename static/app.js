@@ -13,6 +13,11 @@
     searchTimer: null,
     searchSource: "modrinth",
     packSource: "modrinth",
+    // Auth (Login & Rollen): null = noch nicht geprüft
+    user: null,
+    role: null,
+    me: null,
+    authOverlay: false,
   };
 
   /* ---------- API-Client ---------- */
@@ -25,13 +30,9 @@
     } catch (e) {
       throw Object.assign(new Error("Server nicht erreichbar"), { status: 0 });
     }
-    if (res.status === 401 && !opts._retried) {
-      const key = window.prompt("API-Key erforderlich:");
-      if (key) {
-        state.apiKey = key.trim();
-        localStorage.setItem("dash_api_key", state.apiKey);
-        return api(path, Object.assign({}, opts, { _retried: true }));
-      }
+    if (res.status === 401) {
+      // Nicht angemeldet → Login-/Setup-Overlay zeigen (idempotent statt prompt)
+      showAuthOverlay();
     }
     let data = {};
     try { data = await res.json(); } catch (e) { /* leere/HTML-Antwort */ }
@@ -74,6 +75,350 @@
   const show = (el, on = true) => el.classList.toggle("hidden", !on);
   const setText = (el, text) => { el.textContent = text; };
 
+  /* ---------- Auth: Login, Setup, Rollen, Benutzerverwaltung ---------- */
+  function applyRoleUi() {
+    const body = document.body;
+    body.classList.toggle("role-viewer", state.role === "viewer");
+    body.classList.toggle("role-admin", state.role === "admin");
+    setText($("#user-name"), state.user || "Anmelden");
+    const info = state.user
+      ? `${state.user} · ${state.role === "admin" ? "Admin" : "Viewer (nur lesen)"}`
+      : "Nicht angemeldet";
+    setText($("#user-menu-info"), info);
+    show($("#menu-change-password"), !!state.user);
+    show($("#menu-users"), state.role === "admin");
+    show($("#menu-setup"),
+      !state.user && !!state.me?.setup_available && !state.me?.api_key_required);
+    show($("#menu-logout"), !!state.user);
+  }
+
+  function showAuthOverlay(me = null) {
+    // Idempotent: Polls liefern laufend 401 — Overlay nur einmal aufbauen
+    if (state.authOverlay) return;
+    if (me) state.me = me;
+    const m = state.me;
+    if (!m) return; // noch nicht geprüft → init() regelt es
+    // Nicht anzeigen, wenn gar nichts geschützt ist (Bestandsverhalten):
+    // kein API-Key, keine Benutzer, GET/POST offen.
+    if (!m.api_key_required && !m.login_active && !m.setup_available) return;
+    state.authOverlay = true;
+    stopPolling();
+    const login = $("#auth-login-form");
+    const setup = $("#auth-setup-form");
+    const keyForm = $("#auth-apikey-form");
+    const wantLogin = !!m.login_active;
+    const wantSetup = !!m.setup_available && !wantLogin;
+    const wantKey = !!m.api_key_required && !wantLogin && !wantSetup;
+    show(login, wantLogin);
+    show(setup, wantSetup);
+    show(keyForm, wantKey);
+    // Setup + zugleich API-Key geschützt: Key-Feld im Setup-Formular Pflicht
+    show($("#setup-key-field"), wantSetup && m.api_key_required);
+    $("#setup-key").required = !!m.api_key_required;
+    show($("#auth-overlay"), true);
+    if (wantLogin) $("#auth-user").focus();
+    else if (wantSetup) $("#setup-user").focus();
+    else $("#auth-apikey").focus();
+  }
+
+  function hideAuthOverlay() {
+    state.authOverlay = false;
+    show($("#auth-overlay"), false);
+  }
+
+  function authError(sel, message) {
+    const box = $(sel);
+    if (message) {
+      setText(box, message);
+      show(box, true);
+    } else {
+      show(box, false);
+    }
+  }
+
+  function reloadAfterAuth() {
+    location.reload();
+  }
+
+  async function initAuth() {
+    try {
+      const headers = state.apiKey ? { "X-API-Key": state.apiKey } : {};
+      const res = await fetch("/api/auth/me", { headers });
+      if (res.ok) {
+        const me = await res.json();
+        state.me = me;
+        if (me.authenticated) {
+          state.user = me.username;
+          state.role = me.role;
+          applyRoleUi();
+          return true;
+        }
+      }
+    } catch (e) {
+      // Server nicht erreichbar → wie bisher weiterlaufen, Polls zeigen Fehler
+      applyRoleUi();
+      return true;
+    }
+    applyRoleUi();
+    // Geschützt, aber nicht angemeldet → Overlay statt Polls
+    if (state.me.api_key_required || state.me.login_active) {
+      showAuthOverlay();
+      return false;
+    }
+    // Nichts konfiguriert: wie heute offen — Setup optional über das Menü
+    return true;
+  }
+
+  $("#auth-login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    authError("#auth-error", "");
+    const btn = $("#auth-login-btn");
+    btn.disabled = true;
+    btn.textContent = "Anmelden…";
+    try {
+      const resp = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: $("#auth-user").value.trim(),
+          password: $("#auth-pass").value,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        authError("#auth-error", data.detail || `Anmeldung fehlgeschlagen (${resp.status})`);
+        return;
+      }
+      reloadAfterAuth();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Anmelden";
+    }
+  });
+
+  $("#auth-setup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    authError("#setup-error", "");
+    if ($("#setup-pass").value !== $("#setup-pass2").value) {
+      authError("#setup-error", "Passwörter stimmen nicht überein");
+      return;
+    }
+    const btn = $("#setup-btn");
+    btn.disabled = true;
+    btn.textContent = "Lege an…";
+    try {
+      const key = $("#setup-key").value.trim();
+      const resp = await fetch("/api/auth/setup", {
+        method: "POST",
+        headers: Object.assign(
+          { "Content-Type": "application/json" },
+          key ? { "X-API-Key": key } : (state.apiKey ? { "X-API-Key": state.apiKey } : {})),
+        body: JSON.stringify({
+          username: $("#setup-user").value.trim(),
+          password: $("#setup-pass").value,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        authError("#setup-error", data.detail || `Setup fehlgeschlagen (${resp.status})`);
+        return;
+      }
+      reloadAfterAuth();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Admin anlegen";
+    }
+  });
+
+  $("#auth-apikey-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    authError("#apikey-error", "");
+    const key = $("#auth-apikey").value.trim();
+    if (!key) return;
+    // Key merken und verifizieren — bei Fehlschlag Overlay erneut zeigen
+    state.apiKey = key;
+    localStorage.setItem("dash_api_key", state.apiKey);
+    state.authOverlay = false;
+    initAuth().then((ok) => {
+      if (ok) reloadAfterAuth();
+      else state.authOverlay = false;
+    });
+  });
+
+  /* ---------- Topbar-Benutzermenü ---------- */
+  $("#user-menu-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    show($("#user-menu-drop"), $("#user-menu-drop").classList.contains("hidden"));
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest?.("#user-menu")) show($("#user-menu-drop"), false);
+  });
+  $("#menu-logout").addEventListener("click", async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      reloadAfterAuth();
+    }
+  });
+  $("#menu-setup").addEventListener("click", () => {
+    show($("#user-menu-drop"), false);
+    state.me = Object.assign({}, state.me, { setup_available: true });
+    showAuthOverlay(state.me);
+  });
+  $("#menu-users").addEventListener("click", async () => {
+    show($("#user-menu-drop"), false);
+    openUsersDialog();
+  });
+  $("#menu-change-password").addEventListener("click", () => {
+    show($("#user-menu-drop"), false);
+    openPasswordDialog();
+  });
+
+  /* ---------- Benutzerverwalten-Dialog (Admin) ---------- */
+  function usersError(msg) { authError("#users-error", msg); }
+
+  async function openUsersDialog() {
+    $("#users-dialog").showModal();
+    usersError("");
+    await renderUsersList();
+  }
+
+  async function renderUsersList() {
+    const list = $("#users-list");
+    list.textContent = "";
+    try {
+      const data = await api("/api/auth/users");
+      const users = data.users || [];
+      show($("#users-empty"), users.length === 0);
+      for (const user of users) {
+        const li = document.createElement("li");
+        li.className = "mod-row";
+        const info = document.createElement("div");
+        info.className = "mod-info";
+        const name = document.createElement("span");
+        name.className = "mod-name";
+        name.textContent = user.username;
+        const meta = document.createElement("span");
+        meta.className = "mod-meta muted small";
+        meta.textContent =
+          `${user.role === "admin" ? "Admin" : "Viewer"} · seit ${fmtDate(user.created || 0)}`;
+        info.append(name, meta);
+        const actions = document.createElement("div");
+        actions.className = "row";
+        const roleBtn = document.createElement("button");
+        roleBtn.className = "btn small-btn";
+        roleBtn.textContent = user.role === "admin" ? "→ Viewer" : "→ Admin";
+        roleBtn.title = "Rolle wechseln";
+        roleBtn.addEventListener("click", async () => {
+          try {
+            await api(`/api/auth/users/${encodeURIComponent(user.username)}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ role: user.role === "admin" ? "viewer" : "admin" }),
+            });
+            renderUsersList();
+          } catch (e2) { usersError(e2.message); }
+        });
+        const passBtn = document.createElement("button");
+        passBtn.className = "btn small-btn";
+        passBtn.textContent = "Passwort";
+        passBtn.title = "Passwort zurücksetzen";
+        passBtn.addEventListener("click", async () => {
+          const pw = window.prompt(`Neues Passwort für ${user.username} (min. 8 Zeichen):`);
+          if (!pw) return;
+          try {
+            await api(`/api/auth/users/${encodeURIComponent(user.username)}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ password: pw }),
+            });
+            toast(`Passwort für ${user.username} gesetzt.`, "success");
+          } catch (e2) { usersError(e2.message); }
+        });
+        const delBtn = document.createElement("button");
+        delBtn.className = "btn danger small-btn";
+        delBtn.textContent = "Löschen";
+        delBtn.addEventListener("click", async () => {
+          if (!window.confirm(`Benutzer ${user.username} wirklich löschen?`)) return;
+          try {
+            await api(`/api/auth/users/${encodeURIComponent(user.username)}`,
+              { method: "DELETE" });
+            renderUsersList();
+          } catch (e2) { usersError(e2.message); }
+        });
+        actions.append(roleBtn, passBtn, delBtn);
+        li.append(info, actions);
+        list.appendChild(li);
+      }
+    } catch (e) {
+      usersError(`Benutzer nicht ladbar: ${e.message}`);
+      show($("#users-empty"), true);
+    }
+  }
+
+  $("#nu-create").addEventListener("click", async () => {
+    usersError("");
+    const btn = $("#nu-create");
+    btn.disabled = true;
+    try {
+      await api("/api/auth/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: $("#nu-name").value.trim(),
+          password: $("#nu-pass").value,
+          role: $("#nu-role").value,
+        }),
+      });
+      $("#nu-name").value = "";
+      $("#nu-pass").value = "";
+      toast("Benutzer angelegt.", "success");
+      renderUsersList();
+    } catch (e) {
+      usersError(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $("#users-close").addEventListener("click", () => $("#users-dialog").close());
+
+  /* ---------- Eigenes Passwort ändern ---------- */
+  function pwError(msg) { authError("#pw-error", msg); }
+
+  function openPasswordDialog() {
+    $("#pw-form").reset();
+    pwError("");
+    $("#password-dialog").showModal();
+  }
+
+  $("#pw-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    pwError("");
+    if ($("#pw-new").value !== $("#pw-new2").value) {
+      pwError("Neue Passwörter stimmen nicht überein");
+      return;
+    }
+    const btn = $("#pw-save");
+    btn.disabled = true;
+    try {
+      await api("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          current: $("#pw-current").value,
+          password: $("#pw-new").value,
+        }),
+      });
+      $("#password-dialog").close();
+      toast("Passwort geändert.", "success");
+    } catch (e2) {
+      pwError(e2.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $("#pw-close").addEventListener("click", () => $("#password-dialog").close());
+
   /* ---------- Tab-Umschaltung ---------- */
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -95,7 +440,10 @@
         loadMpFilters(); // Filter-Optionen (MC-Versionen) einmalig laden
         if (!$("#mp-results").childElementCount) mpSearch(0); // direkt laden
       }
-      if (state.tab === "stats") loadHistory();
+      if (state.tab === "stats") {
+        loadHistory();
+        loadPlaytime();
+      }
     });
   });
 
@@ -677,6 +1025,7 @@
 
   function startPolling() {
     if (state.statusTimer) return;
+    if (!state.pollingAllowed) return; // erst nach erfolgreichem Auth-Check
     refreshOverview();
     state.statusTimer = setInterval(refreshOverview, 5000);
     state.liveTimer = setInterval(refreshLive, 15000);
@@ -692,7 +1041,12 @@
   }
   document.addEventListener("visibilitychange", () =>
     document.hidden ? stopPolling() : startPolling());
-  startPolling();
+  // Erst Auth prüfen (Login-Overlay?), dann Polling starten — sonst laufen
+  // die 5-s-Polls gegen 401, während der Login noch offen ist.
+  initAuth().then((authorized) => {
+    state.pollingAllowed = authorized;
+    if (authorized) startPolling();
+  });
 
   document.querySelectorAll("#ov-filter .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1631,6 +1985,16 @@
     show($("#world-error"), false);
     $("#world-upload-file").value = "";
     $("#world-upload-btn").disabled = true;
+    // Datei-Browser zurücksetzen (Wurzel der neuen Instanz laden)
+    state.fb = { path: "", entries: [] };
+    fbReload();
+    dpReload();
+    // Gamerules zurücksetzen (werden per „Laden" geholt — nur laufend)
+    state.grRules = [];
+    $("#gr-filter").value = "";
+    renderGamerules();
+    show($("#gr-empty"), true);
+    grSetError("");
     const detail = await loadDetail();
     if (detail) {
       // JVM-Optionen + RAM der Instanz in den Editor laden
@@ -2030,6 +2394,70 @@
 
   $("#stats-reload").addEventListener("click", loadHistory);
   $("#stats-range").addEventListener("change", loadHistory);
+
+  /* ---------- Spielzeit-Leaderboard ---------- */
+  function fmtDuration(seconds) {
+    if (typeof seconds !== "number" || seconds <= 0) return "0 min";
+    const s = Math.round(seconds);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d} d ${h} h`;
+    if (h > 0) return m > 0 ? `${h} h ${m} min` : `${h} h`;
+    return `${m} min`;
+  }
+
+  async function loadPlaytime() {
+    const range = $("#playtime-range").value || "24";
+    show($("#playtime-error"), false);
+    try {
+      const data = await api(`/api/players/playtime?hours=${encodeURIComponent(range)}`);
+      renderPlaytime(data.players || []);
+    } catch (e) {
+      show($("#playtime-list"), false);
+      setText($("#playtime-error"), `Spielzeit nicht ladbar: ${e.message}`);
+      show($("#playtime-error"), true);
+    }
+  }
+
+  function renderPlaytime(players) {
+    const list = $("#playtime-list");
+    list.textContent = "";
+    show($("#playtime-empty"), players.length === 0);
+    show($("#playtime-list"), players.length > 0);
+    const names = state.ovInstances?.instances
+      ? new Map(state.ovInstances.instances.map((i) => [i.id, i.name]))
+      : new Map();
+    players.slice(0, 50).forEach((p, idx) => {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const rank = document.createElement("span");
+      rank.className = "pt-rank muted";
+      rank.textContent = String(idx + 1);
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = p.player;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      const parts = [];
+      if (p.last_seen) parts.push(`zuletzt ${fmtDate(p.last_seen)}`);
+      const instNames = Object.entries(p.per_instance || {})
+        .map(([id, secs]) => `${names.get(id) || id.slice(0, 8)}: ${fmtDuration(secs)}`);
+      if (instNames.length) parts.push(instNames.join(", "));
+      meta.textContent = parts.join(" · ");
+      info.append(rank, name, meta);
+      const value = document.createElement("span");
+      value.className = "pt-value";
+      value.textContent = fmtDuration(p.seconds);
+      li.append(info, value);
+      list.appendChild(li);
+    });
+  }
+
+  $("#playtime-reload").addEventListener("click", loadPlaytime);
+  $("#playtime-range").addEventListener("change", loadPlaytime);
 
   // Mod-Liste: Filter + Ein-/Ausklappen
   $("#mods-filter-input").addEventListener("input", applyModFilter);
@@ -2742,6 +3170,417 @@
     }
   });
 
+  /* ---------- Datei-Browser je Instanz ---------- */
+  state.fb = { path: "", entries: [] };
+
+  function fbSetError(msg) { authError("#fb-error", msg); }
+
+  function fbJoin(dir, name) {
+    return dir ? `${dir}/${name}` : name;
+  }
+
+  function fbParent(rel) {
+    const idx = rel.lastIndexOf("/");
+    return idx >= 0 ? rel.slice(0, idx) : "";
+  }
+
+  function fbBaseName(rel) {
+    return rel.split("/").pop() || rel;
+  }
+
+  async function fbReload() {
+    if (!state.detailId) return;
+    fbSetError("");
+    try {
+      const data = await api(`/api/instances/${state.detailId}/files`
+        + `?path=${encodeURIComponent(state.fb.path)}`);
+      state.fb.entries = data.entries || [];
+      renderFbList();
+    } catch (e) {
+      state.fb.entries = [];
+      renderFbList();
+      fbSetError(`Ordner nicht lesbar: ${e.message}`);
+    }
+  }
+
+  function renderFbBreadcrumb() {
+    const nav = $("#fb-breadcrumb");
+    nav.textContent = "";
+    const root = document.createElement("button");
+    root.className = "fb-crumb";
+    root.textContent = "Instanz";
+    root.addEventListener("click", () => {
+      state.fb.path = "";
+      fbReload();
+    });
+    nav.appendChild(root);
+    let acc = "";
+    for (const part of state.fb.path.split("/").filter(Boolean)) {
+      acc = fbJoin(acc, part);
+      const sep = document.createElement("span");
+      sep.className = "fb-crumb-sep";
+      sep.textContent = "›";
+      const crumb = document.createElement("button");
+      crumb.className = "fb-crumb";
+      crumb.textContent = part;
+      const target = acc;
+      crumb.addEventListener("click", () => {
+        state.fb.path = target;
+        fbReload();
+      });
+      nav.append(sep, crumb);
+    }
+  }
+
+  function renderFbList() {
+    renderFbBreadcrumb();
+    const list = $("#fb-list");
+    list.textContent = "";
+    const entries = state.fb.entries || [];
+    show($("#fb-empty"), entries.length === 0);
+    for (const entry of entries) {
+      const li = document.createElement("li");
+      li.className = `mod-row${entry.managed ? " fb-managed" : ""}`;
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const icon = document.createElement("span");
+      icon.className = "fb-icon";
+      icon.textContent = entry.type === "dir" ? "📁" : "📄";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = entry.name;
+      if (entry.type === "dir" && !entry.managed) {
+        name.classList.add("fb-dir-link");
+        name.title = "Ordner öffnen";
+        const target = fbJoin(state.fb.path, entry.name);
+        name.addEventListener("click", () => {
+          state.fb.path = target;
+          fbReload();
+        });
+      }
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = entry.type === "dir"
+        ? "Ordner"
+        : [fmtBytes(entry.size), fmtDate(entry.mtime)].filter(Boolean).join(" · ");
+      info.append(icon, name, meta);
+
+      const actions = document.createElement("div");
+      actions.className = "row";
+      const relPath = fbJoin(state.fb.path, entry.name);
+      if (entry.type === "file") {
+        const dl = document.createElement("button");
+        dl.className = "btn small-btn";
+        dl.textContent = "Download";
+        dl.addEventListener("click", () => fbDownload(relPath, dl));
+        actions.appendChild(dl);
+        if (!entry.managed) {
+          const edit = document.createElement("button");
+          edit.className = "btn small-btn admin-only";
+          edit.textContent = "Bearbeiten";
+          edit.addEventListener("click", () => fbOpenEditor(relPath));
+          actions.appendChild(edit);
+        }
+      }
+      if (!entry.managed) {
+        const ren = document.createElement("button");
+        ren.className = "btn small-btn admin-only";
+        ren.textContent = "Umbenennen";
+        ren.addEventListener("click", () => {
+          const next = window.prompt("Neuer Name/Pfad:", relPath);
+          if (!next || next.trim() === relPath) return;
+          fbRename(relPath, next.trim());
+        });
+        const del = document.createElement("button");
+        del.className = "btn danger small-btn admin-only";
+        del.textContent = "Löschen";
+        del.addEventListener("click", () => {
+          if (!window.confirm(`"${relPath}" löschen?`)) return;
+          fbDelete(relPath);
+        });
+        actions.append(ren, del);
+      }
+      if (!actions.childElementCount) {
+        const hint = document.createElement("span");
+        hint.className = "muted small";
+        hint.textContent = "geschützt";
+        actions.appendChild(hint);
+      }
+      li.append(info, actions);
+      list.appendChild(li);
+    }
+  }
+
+  async function fbDownload(relPath, btn) {
+    btn.disabled = true;
+    try {
+      const res = await fetch(
+        `/api/instances/${state.detailId}/files/download`
+        + `?path=${encodeURIComponent(relPath)}`,
+        { headers: state.apiKey ? { "X-API-Key": state.apiKey } : {} });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fbBaseName(relPath);
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast(`Download fehlgeschlagen: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function fbOpenEditor(relPath) {
+    $("#fb-editor-title").textContent = relPath;
+    $("#fb-editor-text").value = "";
+    fbEditorError("");
+    $("#fb-editor").dataset.path = relPath;
+    $("#fb-editor").showModal();
+    const btn = $("#fb-editor-save");
+    btn.disabled = true;
+    try {
+      const data = await api(`/api/instances/${state.detailId}/files/content`
+        + `?path=${encodeURIComponent(relPath)}`);
+      $("#fb-editor-text").value = data.content ?? "";
+      setText($("#fb-editor-meta"),
+        `${fmtBytes(data.size)} · UTF-8 · max. 1 MiB`);
+    } catch (e) {
+      fbEditorError(e.message);
+      $("#fb-editor").close();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function fbEditorError(msg) { authError("#fb-editor-error", msg); }
+
+  $("#fb-editor-save").addEventListener("click", async () => {
+    const dlg = $("#fb-editor");
+    const relPath = dlg.dataset.path;
+    if (!relPath) return;
+    const btn = $("#fb-editor-save");
+    btn.disabled = true;
+    btn.textContent = "Speichere…";
+    fbEditorError("");
+    try {
+      await api(`/api/instances/${state.detailId}/files/content`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: relPath, content: $("#fb-editor-text").value }),
+      });
+      dlg.close();
+      toast(`"${relPath}" gespeichert.`, "success");
+      fbReload();
+    } catch (e) {
+      fbEditorError(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Speichern";
+    }
+  });
+  $("#fb-editor-close").addEventListener("click", () => $("#fb-editor").close());
+
+  async function fbRename(fromPath, toPath) {
+    try {
+      await api(`/api/instances/${state.detailId}/files/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_path: fromPath, to_path: toPath }),
+      });
+      toast(`"${fromPath}" → "${toPath}".`, "success");
+      fbReload();
+    } catch (e) {
+      toast(`Umbenennen fehlgeschlagen: ${e.message}`, "error");
+    }
+  }
+
+  async function fbDelete(relPath) {
+    try {
+      await api(`/api/instances/${state.detailId}/files`
+        + `?path=${encodeURIComponent(relPath)}`, { method: "DELETE" });
+      toast(`"${relPath}" gelöscht.`, "success");
+      fbReload();
+    } catch (e) {
+      toast(`Löschen fehlgeschlagen: ${e.message}`, "error");
+    }
+  }
+
+  $("#fb-reload").addEventListener("click", fbReload);
+  $("#fb-mkdir-btn").addEventListener("click", async () => {
+    const name = window.prompt("Name des neuen Ordners:", "neuer-ordner");
+    if (!name) return;
+    try {
+      await api(`/api/instances/${state.detailId}/files/mkdir`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: fbJoin(state.fb.path, name.trim()) }),
+      });
+      fbReload();
+    } catch (e) {
+      toast(`Ordner nicht anlegbar: ${e.message}`, "error");
+    }
+  });
+  $("#fb-upload-file").addEventListener("change", () => {
+    $("#fb-upload-btn").disabled = !$("#fb-upload-file").files.length;
+  });
+  $("#fb-upload-btn").addEventListener("click", async () => {
+    const files = [...$("#fb-upload-file").files];
+    if (!files.length || !state.detailId) return;
+    const btn = $("#fb-upload-btn");
+    btn.disabled = true;
+    btn.textContent = "Lade hoch…";
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append("path", fbJoin(state.fb.path, file.name));
+        form.append("overwrite", "false");
+        form.append("file", file);
+        try {
+          await api(`/api/instances/${state.detailId}/files/upload`,
+            { method: "POST", body: form });
+          toast(`"${file.name}" hochgeladen.`, "success");
+        } catch (e) {
+          // 409 (existiert) mit Hinweis zeigen; Rest weiter versuchen
+          if (e.status === 409 && window.confirm(
+            `"${file.name}" existiert bereits. Überschreiben?`)) {
+            form.set("overwrite", "true");
+            try {
+              await api(`/api/instances/${state.detailId}/files/upload`,
+                { method: "POST", body: form });
+              toast(`"${file.name}" überschrieben.`, "success");
+            } catch (e2) {
+              toast(`Upload fehlgeschlagen: ${e2.message}`, "error");
+            }
+          } else {
+            toast(`Upload "${file.name}" fehlgeschlagen: ${e.message}`, "error");
+          }
+        }
+      }
+      $("#fb-upload-file").value = "";
+      $("#fb-upload-btn").disabled = true;
+      fbReload();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Hochladen";
+    }
+  });
+
+  /* ---------- Datapacks je Instanz ---------- */
+  function dpSetError(msg) { authError("#dp-error", msg); }
+
+  async function dpReload() {
+    if (!state.detailId) return;
+    dpSetError("");
+    $("#dp-upload-btn").disabled = !$("#dp-upload-file").files.length
+      || state.detailRunning;
+    try {
+      const data = await api(`/api/instances/${state.detailId}/datapacks`);
+      renderDatapacks(data.datapacks || []);
+    } catch (e) {
+      renderDatapacks([]);
+      dpSetError(`Datapacks nicht ladbar: ${e.message}`);
+    }
+  }
+
+  function renderDatapacks(packs) {
+    const list = $("#dp-list");
+    list.textContent = "";
+    show($("#dp-empty"), packs.length === 0);
+    for (const pack of packs) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = pack.name;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = [fmtBytes(pack.size), fmtDate(pack.mtime),
+        pack.enabled ? "aktiv" : "deaktiviert"].filter(Boolean).join(" · ");
+      info.append(name, meta);
+      const actions = document.createElement("div");
+      actions.className = "row";
+      const toggle = document.createElement("button");
+      toggle.className = "btn small-btn admin-only";
+      toggle.textContent = pack.enabled ? "Deaktivieren" : "Aktivieren";
+      toggle.addEventListener("click", () => {
+        dpToggle(pack.name, pack.enabled ? "disable" : "enable");
+      });
+      const del = document.createElement("button");
+      del.className = "btn danger small-btn admin-only";
+      del.textContent = "Löschen";
+      del.addEventListener("click", () => {
+        if (!window.confirm(`Datapack "${pack.name}" löschen?`)) return;
+        dpDelete(pack.name, pack.enabled);
+      });
+      actions.append(toggle, del);
+      li.append(info, actions);
+      list.appendChild(li);
+    }
+  }
+
+  async function dpToggle(name, action) {
+    try {
+      await api(`/api/instances/${state.detailId}/datapacks/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      toast(`Datapack "${name}" ${action === "enable" ? "aktiviert" : "deaktiviert"}.`,
+        "success");
+    } catch (e) {
+      toast(`${action === "enable" ? "Aktivieren" : "Deaktivieren"} fehlgeschlagen: `
+        + e.message, "error");
+    }
+    dpReload();
+  }
+
+  async function dpDelete(name, enabled) {
+    try {
+      await api(`/api/instances/${state.detailId}/datapacks/`
+        + `${encodeURIComponent(name)}?enabled=${enabled}`, { method: "DELETE" });
+      toast(`Datapack "${name}" gelöscht.`, "success");
+    } catch (e) {
+      toast(`Löschen fehlgeschlagen: ${e.message}`, "error");
+    }
+    dpReload();
+  }
+
+  $("#dp-reload").addEventListener("click", dpReload);
+  $("#dp-upload-file").addEventListener("change", () => {
+    $("#dp-upload-btn").disabled = !$("#dp-upload-file").files.length
+      || state.detailRunning;
+  });
+  $("#dp-upload-btn").addEventListener("click", async () => {
+    const file = $("#dp-upload-file").files[0];
+    if (!file || !state.detailId) return;
+    const btn = $("#dp-upload-btn");
+    btn.disabled = true;
+    btn.textContent = "Lade hoch…";
+    dpSetError("");
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const result = await api(`/api/instances/${state.detailId}/datapacks/upload`,
+        { method: "POST", body: form });
+      toast(`Datapack "${result.name}" hochgeladen.`, "success");
+      $("#dp-upload-file").value = "";
+    } catch (e) {
+      dpSetError(`Upload fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Hochladen";
+    }
+    dpReload();
+  });
+
   /* ---------- JVM-Optionen + RAM je Instanz ---------- */
   function setRamFields(memory) {
     const match = /^(\d{1,4})([GgMm])$/.exec(memory || "2G");
@@ -3002,6 +3841,111 @@
     } catch (e) { /* Hinweis optional */ }
   }
   loadConsoleMode();
+
+  /* ---------- Gamerule-Quick-Editor ---------- */
+  state.grRules = [];
+
+  function grSetError(msg) { authError("#gr-error", msg); }
+
+  async function grReload() {
+    if (!state.detailId) return;
+    grSetError("");
+    show($("#gr-empty"), false);
+    try {
+      const data = await api(`/api/instances/${state.detailId}/gamerules`);
+      state.grRules = data.gamerules || [];
+      renderGamerules();
+    } catch (e) {
+      state.grRules = [];
+      renderGamerules();
+      grSetError(e.status === 409
+        ? "Gamerules sind nur bei laufender Instanz verfügbar — Server starten."
+        : `Gamerules nicht ladbar: ${e.message}`);
+    }
+  }
+
+  function renderGamerules() {
+    const list = $("#gr-list");
+    list.textContent = "";
+    const query = ($("#gr-filter").value || "").trim().toLowerCase();
+    const matches = state.grRules.filter((g) => !query
+      || g.name.toLowerCase().includes(query)
+      || (g.desc || "").toLowerCase().includes(query));
+    for (const rule of matches) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = rule.name;
+      name.title = rule.desc || rule.name;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = rule.value == null
+        ? `Default: ${rule.default}`
+        : (rule.value !== rule.default ? "geändert" : "Standard");
+      info.append(name, meta);
+      const actions = document.createElement("div");
+      actions.className = "row";
+      if (rule.type === "bool") {
+        const seg = document.createElement("div");
+        seg.className = "seg";
+        for (const option of [true, false]) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "seg-btn admin-only";
+          btn.textContent = option ? "An" : "Aus";
+          btn.classList.toggle("active", rule.value === option);
+          btn.addEventListener("click", () => grSet(rule.name, option));
+          seg.appendChild(btn);
+        }
+        actions.appendChild(seg);
+      } else {
+        const input = document.createElement("input");
+        input.type = "number";
+        input.className = "cfg-input gr-num";
+        input.value = rule.value == null ? rule.default : rule.value;
+        if (rule.min != null) input.min = String(rule.min);
+        if (rule.max != null) input.max = String(rule.max);
+        input.dataset.rule = rule.name;
+        input.title = `Bereich ${rule.min}–${rule.max} · ${rule.desc || ""}`;
+        const apply = document.createElement("button");
+        apply.type = "button";
+        apply.className = "btn small-btn admin-only";
+        apply.textContent = "Setzen";
+        apply.addEventListener("click", () => grSet(rule.name, input.value));
+        actions.append(input, apply);
+      }
+      li.append(info, actions);
+      list.appendChild(li);
+    }
+    if (!matches.length && state.grRules.length) {
+      const li = document.createElement("li");
+      li.className = "muted small";
+      li.textContent = "Keine Treffer.";
+      list.appendChild(li);
+    }
+  }
+
+  async function grSet(name, value) {
+    try {
+      const data = await api(`/api/instances/${state.detailId}/gamerules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, value }),
+      });
+      const rule = state.grRules.find((g) => g.name === name);
+      if (rule) rule.value = data.value;
+      renderGamerules();
+      toast(`${name} = ${data.value}`, "success");
+    } catch (e) {
+      toast(`Gamerule nicht gesetzt: ${e.message}`, "error");
+    }
+  }
+
+  $("#gr-reload").addEventListener("click", grReload);
+  $("#gr-filter").addEventListener("input", renderGamerules);
 
   /* ---------- Whitelist (whitelist.json) ---------- */
   function wlSetError(msg) {

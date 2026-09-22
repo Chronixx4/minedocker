@@ -267,6 +267,37 @@ hilfreich gegen Watchdog-Kicks) nach Bedarf.
   automatisch; manuell als Fallback:
   `docker compose run --rm --user 0 dashboard chown -R 1000:1000 /data`
 
+## 8a. Benutzer & Fernzugriff (Login & Rollen)
+
+Das Dashboard hat volle Docker-Rechte — Zugriff sollte eingeschränkt sein.
+Seit der Dashboard-Erweiterung gibt es **Login mit Rollen**:
+
+- **Erster Aufruf:** Setup-Dialog im Frontend — der erste Benutzer wird
+  **Admin** (Benutzer + Passwort in `/data/users.json`, scrypt-gehasht).
+  Ab diesem Moment schützt das Login alle `/api`-Routen.
+- **Rollen:** **Admin** (alles) und **Viewer** (strikt nur lesen: Verlauf,
+  Logs, Listen; schreibende Aufrufe antworten serverseitig mit 403 — auch
+  wenn die Buttons per CSS ausgeblendet sind, die API bleibt die Grenze).
+  Weitere Benutzer legt der Admin unter *Benutzer verwalten* (Topbar-Menü)
+  an; der letzte Admin kann nicht gelöscht/herabgestuft werden.
+- **Sitzung:** HttpOnly-Cookie (`SameSite=Strict`, 30 Tage, HMAC-signiert mit
+  dem Secret in `/data/.auth_secret`, Rechte 0600). „Abmelden" löscht den
+  Cookie. Nach 10 Fehlversuchen sperrt das Login den Namen für 5 Minuten
+  (in-memory, ein Dashboard-Neustart resettet).
+- **Skripte/curl:** `DASHBOARD_API_KEY` bleibt als Admin-Bypass gültig
+  (Header `X-API-Key`) und kann parallel zum Login genutzt werden. Ohne
+  Benutzer und ohne Key ist die API offen (Homelab-Bestandsverhalten).
+- **Fernzugriff (Reverse-Proxy):** Das Dashboard bitte nie ungeschützt ins
+  Internet hängen. Empfehlung: VPN (WireGuard/Tailscale) **oder** Reverse-Proxy
+  mit HTTPS (z. B. Caddy/Traefik/NPM). Das Session-Cookie ist HttpOnly +
+  SameSite=Strict — das blockt Cross-Site-Angriffe; die `secure`-Fahne ist
+  bewusst nicht gesetzt, damit reiner HTTP-LAN-Zugang funktioniert. Beim
+  Proxy: `CORS_ORIGINS` auf die echte Origin einschränken und ggf.
+  `X-Forwarded-Proto`-Headers durchreichen.
+- **Datenschutz-Dateien im Volume:** `/data/users.json`, `/data/.auth_secret`
+  und `/data/.rcon_salt` niemals in Backups/Commits außerhalb des Volumes
+  kopieren.
+
 ---
 
 ## 9. Checkliste (komplett)
@@ -282,7 +313,8 @@ hilfreich gegen Watchdog-Kicks) nach Bedarf.
 - [ ] Ports: 25565/tcp (Java) bzw. 19132/udp (Bedrock) weitergeleitet +
       Firewall; Instanzen 25570+ (Abschnitt 4)
 - [ ] DynDNS/SRV eingerichtet (Heimnetz) bzw. DNS auf VPS
-- [ ] Dashboard gesichert: `DASHBOARD_API_KEY`, 8080 nur LAN/VPN
+- [ ] Dashboard gesichert: Login (erster Admin via Setup) und/oder
+      `DASHBOARD_API_KEY`, 8080 nur LAN/VPN (Abschnitt 8a)
 - [ ] Backups automatisiert (Abschnitt 5) + extern + Restore getestet
 - [ ] Erster Join über `<ip>:<port>`; „Done (…s)!" in Logs; Ressourcen beobachtet
 

@@ -2,12 +2,13 @@
 import asyncio
 import json
 import logging
+import os
 import threading
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -15,8 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+from . import auth as auth_mod
 from . import backups as backups_mod
 from . import catalog, curseforge, instances, modrinth, packs, runtime, worlds
+from . import datapacks as datapacks_mod
+from . import filebrowser as filebrowser_mod
+from . import gamerules as gamerules_mod
 from . import history as history_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
@@ -25,7 +30,7 @@ from . import watchdog as watchdog_mod
 from . import whitelist as whitelist_mod
 from .config import ALLOWED_LOADERS, current_game_version, settings
 from .minecraft import server_status
-from .security import api_key_guard, safe_mods_path, validate_identifier
+from .security import auth_guard, safe_mods_path, validate_identifier
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -92,12 +97,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
-# Alle /api-Routen (außer /api/health) sind durch den optionalen API-Key geschützt
-api = APIRouter(prefix="/api", dependencies=[Depends(api_key_guard)])
+# Alle /api-Routen (außer /api/health und /api/auth/*) durchlaufen den
+# kombinierten Guard: DASHBOARD_API_KEY (Admin) ODER Login-Cookie; Rollen-
+# Prüfung (schreibende Methoden nur für Admin) passiert im Guard selbst.
+api = APIRouter(prefix="/api", dependencies=[Depends(auth_guard)])
 
 
 class DownloadRequest(BaseModel):
@@ -237,9 +244,215 @@ class UpdateInstanceRequest(BaseModel):
     schedule: ScheduleModel | None = None
 
 
+class AuthSetupRequest(BaseModel):
+    """Ersten Admin anlegen (nur solange kein Benutzer existiert)."""
+    username: str = Field(min_length=1, max_length=32,
+                          pattern=r"^[A-Za-z0-9_.-]{1,32}$")
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AuthLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=32,
+                          pattern=r"^[A-Za-z0-9_.-]{1,32}$")
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AuthUserCreateRequest(AuthSetupRequest):
+    role: str = Field(default="viewer", pattern=r"^(admin|viewer)$")
+
+
+class AuthUserPatchRequest(BaseModel):
+    role: str | None = Field(default=None, pattern=r"^(admin|viewer)$")
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class AuthChangePasswordRequest(BaseModel):
+    current: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class FilePathRequest(BaseModel):
+    """Relativer Pfad im Instanz-Ordner (Datei-Browser)."""
+    path: str = Field(min_length=1, max_length=512)
+
+
+class FileContentRequest(FilePathRequest):
+    content: str = Field(default="", max_length=1 * 1024 * 1024)
+
+
+class FileRenameRequest(BaseModel):
+    from_path: str = Field(min_length=1, max_length=512)
+    to_path: str = Field(min_length=1, max_length=512)
+
+
+class DatapackNameRequest(BaseModel):
+    """Datapack-Dateiname (nur .zip)."""
+    name: str = Field(min_length=1, max_length=128)
+
+
+class GameruleSetRequest(BaseModel):
+    """Gamerule setzen (name aus kuratierter Liste, value bool/int)."""
+    name: str = Field(min_length=1, max_length=64)
+    value: bool | int | str | None = None
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Auth: Setup, Login/Logout, Session, Benutzerverwaltung (Login & Rollen)
+# ---------------------------------------------------------------------------
+
+def _session_cookie_args() -> dict:
+    """Cookie-Attribute zentral (HttpOnly + SameSite=Strict; CORS bleibt
+    allow_credentials=False, das Frontend ist same-origin)."""
+    return {"key": auth_mod.SESSION_COOKIE, "max_age": auth_mod.SESSION_TTL,
+            "path": "/", "httponly": True, "samesite": "strict"}
+
+
+def _issue_session(resp: JSONResponse, username: str, role: str) -> None:
+    resp.set_cookie(value=auth_mod.create_token(username, role),
+                    secure=False, **_session_cookie_args())
+
+
+def _api_key_or_setup_open(request: Request) -> None:
+    """Setup absichern, wenn DASHBOARD_API_KEY gesetzt ist: Der Key-Halter
+    gilt als vertrauenswürdig, anonyme Anfragen werden abgelehnt (fail-closed
+    — ohne Key-Schutz darf der erste Besucher den Admin anlegen, Homelab-Annahme)."""
+    if settings.api_key and request.headers.get("X-API-Key") != settings.api_key:
+        raise HTTPException(status_code=401,
+                            detail="Setup erfordert den gültigen API-Key")
+
+
+@app.get("/api/auth/setup-available")
+async def auth_setup_available():
+    return {"available": auth_mod.setup_available()}
+
+
+@app.post("/api/auth/setup")
+async def auth_setup(request: Request, req: AuthSetupRequest):
+    """Ersten Benutzer (Admin) anlegen — nur solange users.json leer ist;
+    sonst 409. Bei gesetztem DASHBOARD_API_KEY ist der Key Pflicht."""
+    _api_key_or_setup_open(request)
+    if not auth_mod.setup_available():
+        raise HTTPException(status_code=409,
+                            detail="Setup bereits abgeschlossen — es existiert "
+                                   "bereits ein Benutzer")
+    user = auth_mod.create_user(req.username, req.password, "admin")
+    logger.info("Erster Admin angelegt: %s (Setup)", user["username"])
+    resp = JSONResponse(status_code=201,
+                        content={"username": user["username"], "role": user["role"]})
+    _issue_session(resp, user["username"], user["role"])
+    return resp
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, req: AuthLoginRequest):
+    """Login mit Benutzername/Passwort → Set-Cookie (HMAC-Session).
+    Lockout (in-memory) + konstanter Delay bei Fehlversuchen."""
+    username = (req.username or "").strip().lower()
+    if auth_mod.login_locked(username):
+        await auth_mod.login_delay()
+        raise HTTPException(status_code=429,
+                            detail="Zu viele Fehlversuche — bitte 5 Minuten warten")
+    user = auth_mod.find_user(username)
+    password_ok = user is not None and auth_mod.verify_password(
+        req.password or "", user.get("salt") or "", user.get("scrypt_hash") or "")
+    if user is None or not password_ok:
+        remaining = auth_mod.register_login_fail(username)
+        await auth_mod.login_delay()
+        if remaining:
+            raise HTTPException(status_code=429,
+                                detail="Zu viele Fehlversuche — Account für "
+                                       "5 Minuten gesperrt")
+        raise HTTPException(status_code=401,
+                            detail="Benutzername oder Passwort falsch")
+    auth_mod.clear_login_fails(username)
+    resp = JSONResponse(content={"username": user["username"],
+                                 "role": user["role"]})
+    _issue_session(resp, user["username"], user["role"])
+    logger.info("Login: %s (%s)", user["username"], user["role"])
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    """Abmelden: Cookie löschen (Server-seitig bleibt die zustandslose
+    Session bis zum Ablauf formal gültig — dokumentierte Homelab-Vereinfachung)."""
+    resp = JSONResponse(content={"logged_out": True})
+    resp.delete_cookie(key=auth_mod.SESSION_COOKIE, path="/",
+                       httponly=True, samesite="strict")
+    return resp
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request,
+                  x_api_key: str | None = Header(default=None)):
+    """Aktuelle Session für das Frontend: {username, role} oder
+    {authenticated: false} plus Hinweise für Login-/Setup-Overlay.
+    Ein gültiger API-Key zählt als angemeldeter Admin (Skripte/Bestands-
+    Frontends mit gespeichertem Key)."""
+    from .config import settings  # lazy (gleiche Datei, aber klarer)
+    if settings.api_key and x_api_key == settings.api_key:
+        return {"authenticated": True, "username": "(api-key)", "role": "admin",
+                "login_active": auth_mod.login_active(),
+                "setup_available": auth_mod.setup_available(),
+                "api_key_required": True}
+    session = auth_mod.current_session(request)
+    if session:
+        return {"authenticated": True, "username": session.get("u"),
+                "role": session.get("r"), "login_active": auth_mod.login_active(),
+                "setup_available": False, "api_key_required": bool(settings.api_key)}
+    return {"authenticated": False, "username": None, "role": None,
+            "login_active": auth_mod.login_active(),
+            "setup_available": auth_mod.setup_available(),
+            "api_key_required": bool(settings.api_key)}
+
+
+@app.get("/api/auth/users")
+async def auth_users_list(request: Request):
+    auth_mod.require_admin(request)
+    users = [{k: u.get(k) for k in ("username", "role", "created")}
+             for u in auth_mod.list_users()]
+    return {"users": users}
+
+
+@app.post("/api/auth/users", status_code=201)
+async def auth_users_create(request: Request, req: AuthUserCreateRequest):
+    admin = auth_mod.require_admin(request)
+    user = auth_mod.create_user(req.username, req.password, req.role)
+    logger.info("Benutzer angelegt: %s (%s) durch %s",
+                user["username"], user["role"], admin.get("u"))
+    return user
+
+
+@app.patch("/api/auth/users/{username}")
+async def auth_users_patch(request: Request, username: str,
+                           req: AuthUserPatchRequest):
+    auth_mod.require_admin(request)
+    result = auth_mod.update_user(username, role=req.role, password=req.password)
+    logger.info("Benutzer geändert: %s (%s)", username,
+                ", ".join(result["changed"]))
+    return result
+
+
+@app.delete("/api/auth/users/{username}")
+async def auth_users_delete(request: Request, username: str):
+    session = auth_mod.require_admin(request)
+    result = auth_mod.delete_user(username, session.get("u") or "")
+    logger.info("Benutzer gelöscht: %s", username)
+    return result
+
+
+@app.post("/api/auth/change-password")
+async def auth_change_password(request: Request, req: AuthChangePasswordRequest):
+    """Eigenes Passwort ändern (Admin und Viewer) — aktuelles Passwort Pflicht."""
+    session = auth_mod.require_session(request)
+    result = auth_mod.change_own_password(session["u"], req.current, req.password)
+    logger.info("Passwort geändert: %s", result["username"])
+    return result
 
 
 @api.get("/settings")
@@ -592,7 +805,8 @@ def _instance_ping_host(instance: dict) -> tuple:
     return "127.0.0.1", int(instance["port"])
 
 
-async def _stream_upload(file: UploadFile, dest: Path, max_bytes: int) -> int:
+async def _stream_upload(file: UploadFile, dest: Path, max_bytes: int,
+                         label: str = "4 GiB") -> int:
     """Streamend in eine Datei schreiben (Deckel gegen Speicher-Füllung);
     schließt den Upload und wirft 413 bei Überschreitung."""
     written = 0
@@ -602,7 +816,7 @@ async def _stream_upload(file: UploadFile, dest: Path, max_bytes: int) -> int:
                 written += len(chunk)
                 if written > max_bytes:
                     raise HTTPException(status_code=413,
-                                        detail="Datei zu groß (max 4 GiB)")
+                                        detail=f"Datei zu groß (max {label})")
                 fh.write(chunk)
     finally:
         await file.close()
@@ -1164,6 +1378,28 @@ async def history_series(hours: int = Query(24, ge=1, le=720)):
     return data
 
 
+@api.get("/players/playtime")
+async def players_playtime(
+        hours: str = Query("24", pattern=r"^(all|[1-9]\d{0,3})$"),
+        instance: str | None = Query(None)):
+    """Spielzeit-Leaderboard: Zeitfenster 24/168/720 Stunden oder 'all'
+    (seit Aufzeichnung); optional gefiltert auf eine Instanz."""
+    if hours != "all" and not (1 <= int(hours) <= 720):
+        raise HTTPException(status_code=422,
+                            detail="hours muss 1-720 oder 'all' sein")
+    if instance:
+        instances.get_instance(instance)  # 404 bei unbekannter Instanz
+    try:
+        data = await asyncio.to_thread(
+            history_mod.query_playtime,
+            None if hours == "all" else int(hours), instance)
+    except Exception as exc:
+        logger.exception("Spielzeit nicht lesbar")
+        raise HTTPException(status_code=503,
+                            detail=f"Spielzeit nicht lesbar: {exc}")
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Backups pro Instanz (tar.gz im Volume, unter /data/backups/{id})
 # ---------------------------------------------------------------------------
@@ -1285,6 +1521,170 @@ async def instance_world_upload(instance_id: str, file: UploadFile = File(...)):
         staging_path.unlink(missing_ok=True)
     logger.info("Welt ersetzt: %s → %s", original, instance_id)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Datei-Browser je Instanz (CRUD auf dem Instanz-Ordner, Pfadschutz in
+# filebrowser.py — verwaltete Dateien/packs/ sind geschützt)
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/files")
+async def instance_files_list(instance_id: str, path: str = ""):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(filebrowser_mod.list_dir, instance_id, path)
+
+
+@api.get("/instances/{instance_id}/files/download")
+async def instance_files_download(instance_id: str, path: str):
+    instances.get_instance(instance_id)
+    file_path, rel = await asyncio.to_thread(
+        filebrowser_mod.download_path, instance_id, path)
+    return FileResponse(file_path, filename=Path(rel).name)
+
+
+@api.get("/instances/{instance_id}/files/content")
+async def instance_files_content_get(instance_id: str, path: str):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(filebrowser_mod.read_text, instance_id, path)
+
+
+@api.put("/instances/{instance_id}/files/content")
+async def instance_files_content_put(instance_id: str, req: FileContentRequest):
+    instances.get_instance(instance_id)
+    result = await asyncio.to_thread(
+        filebrowser_mod.write_text, instance_id, req.path, req.content)
+    logger.info("Datei gespeichert: %s (%d Bytes) → %s",
+                result["path"], result["size"], instance_id)
+    return result
+
+
+@api.post("/instances/{instance_id}/files/upload")
+async def instance_files_upload(instance_id: str,
+                                path: str = Form(...),
+                                overwrite: bool = Form(False),
+                                file: UploadFile = File(...)):
+    """Streamender Upload in den Instanz-Ordner (Deckel über
+    FILEBROWSER_MAX_UPLOAD_MB, Default 300 MiB; 409 ohne overwrite)."""
+    instances.get_instance(instance_id)
+    dest = filebrowser_mod.upload_dest(instance_id, path, overwrite)
+    max_bytes = settings.filebrowser_max_upload_mb * 1024 * 1024
+    tmp = dest.with_name(dest.name + ".upload.tmp")
+    try:
+        written = await _stream_upload(
+            file, tmp, max_bytes,
+            label=f"{settings.filebrowser_max_upload_mb} MiB")
+        os.replace(tmp, dest)
+    except HTTPException:
+        tmp.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
+    logger.info("Datei hochgeladen: %s (%d Bytes) → %s", dest.name, written,
+                instance_id)
+    return {"path": dest.name, "size": written}
+
+
+@api.post("/instances/{instance_id}/files/mkdir")
+async def instance_files_mkdir(instance_id: str, req: FilePathRequest):
+    instances.get_instance(instance_id)
+    result = await asyncio.to_thread(filebrowser_mod.mkdir, instance_id, req.path)
+    logger.info("Ordner angelegt: %s → %s", result["created"], instance_id)
+    return result
+
+
+@api.post("/instances/{instance_id}/files/rename")
+async def instance_files_rename(instance_id: str, req: FileRenameRequest):
+    instances.get_instance(instance_id)
+    result = await asyncio.to_thread(
+        filebrowser_mod.rename, instance_id, req.from_path, req.to_path)
+    logger.info("Umbenannt: %s → %s (%s)", result["renamed"], result["to"],
+                instance_id)
+    return result
+
+
+@api.delete("/instances/{instance_id}/files")
+async def instance_files_delete(instance_id: str, path: str):
+    instances.get_instance(instance_id)
+    result = await asyncio.to_thread(filebrowser_mod.delete, instance_id, path)
+    logger.info("Gelöscht: %s → %s", result["deleted"], instance_id)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Datapacks pro Instanz (Welt-Ordner /datapacks, vanilla disabled_datapacks)
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/datapacks")
+async def instance_datapacks_list(instance_id: str):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(datapacks_mod.list_datapacks, instance_id)
+
+
+@api.post("/instances/{instance_id}/datapacks/upload")
+async def instance_datapacks_upload(instance_id: str, file: UploadFile = File(...)):
+    """Datapack-Upload (nur bei gestoppter Instanz, .zip ≤ 50 MiB)."""
+    detail = instances.get_instance(instance_id)
+    if datapacks_mod.runtime_is_running(detail):
+        raise HTTPException(status_code=409,
+                            detail="Instanz läuft — Datapacks können nur bei "
+                                   "gestoppter Instanz hochgeladen werden")
+    filename = Path(file.filename or "").name or "datapack.zip"
+    try:
+        datapacks_mod.validate_name(filename)
+    except HTTPException:
+        await file.close()
+        raise
+    buf = bytearray()
+    try:
+        while chunk := await file.read(1024 * 1024):
+            buf.extend(chunk)
+            if len(buf) > datapacks_mod.UPLOAD_MAX_BYTES:
+                raise HTTPException(status_code=413,
+                                    detail="Datei zu groß (max 50 MiB)")
+    finally:
+        await file.close()
+    return await asyncio.to_thread(datapacks_mod.upload_datapack,
+                                   instance_id, filename, bytes(buf))
+
+
+@api.post("/instances/{instance_id}/datapacks/enable")
+async def instance_datapacks_enable(instance_id: str, req: DatapackNameRequest):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(datapacks_mod.enable_datapack,
+                                   instance_id, req.name)
+
+
+@api.post("/instances/{instance_id}/datapacks/disable")
+async def instance_datapacks_disable(instance_id: str, req: DatapackNameRequest):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(datapacks_mod.disable_datapack,
+                                   instance_id, req.name)
+
+
+@api.delete("/instances/{instance_id}/datapacks/{name}")
+async def instance_datapacks_delete(instance_id: str, name: str,
+                                    enabled: bool = Query(True)):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(datapacks_mod.delete_datapack,
+                                   instance_id, name, enabled)
+
+
+# ---------------------------------------------------------------------------
+# Gamerule-Quick-Editor (kuratierte Vanilla-1.21.x-Liste, nur laufend)
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/gamerules")
+async def instance_gamerules_get(instance_id: str):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(gamerules_mod.read_gamerules, instance_id)
+
+
+@api.post("/instances/{instance_id}/gamerules")
+async def instance_gamerules_set(instance_id: str, req: GameruleSetRequest):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(gamerules_mod.set_gamerule,
+                                   instance_id, req.name, req.value)
 
 
 # ---------------------------------------------------------------------------
