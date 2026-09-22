@@ -139,5 +139,16 @@ services:
   (bzw. bestehende Instanzen starten).
 - Startet das Dashboard nicht: `docker logs mc-dashboard --tail 50`
   (per SSH, ggf. mit `sudo`).
+- **RCON-Fehler „[Errno -2] Name or service not known":** Das Dashboard
+  hängt nur am Default-Bridge (ZimaOS-Import ohne Compose-Netzwerk) — dort
+  löst Docker keine Container-Namen auf. Ab Image-Stand mit Auto-Heilung
+  legt das Dashboard selbst `mc-dashboard-net` an und startet Instanzen
+  darin (einmal Instanz stoppen/starten genügt). Manuell per SSH:
+  ```bash
+  sudo docker network create mc-dashboard-net
+  sudo docker network connect mc-dashboard-net mc-dashboard
+  ```
+  und die Instanz im Dashboard neu starten (nicht per `docker start` —
+  sonst bleibt der Container auf der falschen Bridge).
 - Restore-Befehle: `SERVER-SETUP.md` §5 (hier `1.tgz`/`latest.tgz` aus
   `/DATA/AppData/mc-dashboard/backups` verwenden).

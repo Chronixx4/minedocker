@@ -78,9 +78,34 @@ class FakeContainers:
         return container
 
 
+class FakeNetwork:
+    def __init__(self, name):
+        self.name = name
+        self.connected = []
+
+    def connect(self, container):
+        self.connected.append(container)
+
+
+class FakeNetworks:
+    def __init__(self):
+        self._items = {}
+
+    def get(self, name):
+        if name not in self._items:
+            raise NotFoundError(f"Network {name} not found")
+        return self._items[name]
+
+    def create(self, name, driver=None):
+        net = FakeNetwork(name)
+        self._items[name] = net
+        return net
+
+
 class FakeDockerClient:
     def __init__(self):
         self.containers = FakeContainers()
+        self.networks = FakeNetworks()
 
 
 @pytest.fixture()

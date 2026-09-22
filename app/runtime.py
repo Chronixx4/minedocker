@@ -220,14 +220,44 @@ def _get_container(client, instance: dict):
 
 
 def _network_of_dashboard(client):
-    """Docker-Netzwerk des Dashboard-Containers (für SLP-Pings an Instanzen)."""
+    """Docker-Netzwerk des Dashboard-Containers (für RCON-Namensauflösung und
+    SLP-Pings an Instanzen).
+
+    Hängt das Dashboard NUR am Default-Bridge (z. B. nach einem ZimaOS-App-
+    Import, der das Compose-Netzwerk unterschlägt), löst Docker dort KEINE
+    Container-Namen auf — RCON (Errno -2) und SLP wären kaputt. In dem Fall
+    wird einmalig ein benanntes Netzwerk 'mc-dashboard-net' erstellt und das
+    Dashboard verbunden; neue Instanzen landen automatisch dort.
+    """
     try:
         me = client.containers.get(socket.gethostname())
         networks = (me.attrs.get("NetworkSettings") or {}).get("Networks") or {}
         names = [n for n in networks if n not in ("bridge", "host", "none")]
-        return names[0] if names else None
+        if names:
+            return names[0]
+        # Bridge-only: benanntes Netzwerk sicherstellen und verbinden
+        net = _ensure_network(client)
+        if net is None:
+            return None
+        try:
+            net.connect(me)
+        except Exception:
+            pass  # bereits verbunden
+        return net.name
     except Exception:
         return None  # außerhalb eines Containers (lokale Entwicklung)
+
+
+def _ensure_network(client):
+    """Legt 'mc-dashboard-net' an (idempotent) oder liefert None bei Fehler."""
+    try:
+        return client.networks.get(_NET_NAME)
+    except Exception:
+        pass  # existiert noch nicht → unten anlegen
+    try:
+        return client.networks.create(_NET_NAME, driver="bridge")
+    except Exception:
+        return None  # z. B. eingeschränkte Socket-Rechte → alter Fallback
 
 
 def _mem_limit(instance: dict) -> int:
@@ -249,6 +279,10 @@ _LOG_CONFIG = {
     "Type": "json-file",
     "Config": {"max-size": "10m", "max-file": "3"},
 }
+
+# Eigenes Netzwerk für Dashboard + Instanzen (benutzerdefinierte Netzwerke
+# sind Voraussetzung für Docker-DNS/Namensauflösung → RCON, SLP)
+_NET_NAME = "mc-dashboard-net"
 
 
 def start_instance(instance: dict) -> None:

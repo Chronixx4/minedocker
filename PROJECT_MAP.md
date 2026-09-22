@@ -362,6 +362,11 @@ Checkliste, Dashboard-Schnellstart).
 - Runtime: Host-Pfad für Instanz-Binds wird autoritativ vom Docker-Daemon
   erfragt (Eigene-Container-Mount-Source); mountinfo nur als Fallback —
   Docker-Desktop-Volume-Roots sind als Bind-Quelle unbrauchbar
+- Runtime: Instanz-Netzwerk = Dashboard-Netzwerk (_network_of_dashboard);
+  hängt das Dashboard nur am Default-Bridge (ZimaOS-Import ohne Compose-
+  Netzwerk, dort löst Docker keine Namen auf → RCON Errno -2), wird
+  automatisch 'mc-dashboard-net' angelegt/verbunden und Instanzen landen
+  darin (RCON via Container-Name: mc-inst-<id>, SLP ebenso)
 - GET .../modpacks/search?q=&source=modrinth|curseforge,
   POST .../modpacks/install {project_id, version_id?, force?, source?, file_id?}
   (source=curseforge: project_id = CF-Mod-ID oder Slug, file_id = numerische Pack-Datei),

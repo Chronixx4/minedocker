@@ -1,5 +1,6 @@
 """Tests für app.runtime (Container-Start/Stop) mit Fake-Docker-Client."""
 import shutil
+import socket
 
 import pytest
 
@@ -198,3 +199,41 @@ class TestSonstiges:
         env = runtime._env({"loader": "fabric", "game_version": "1.21.4",
                             "name": "X", "memory": "4G", "loader_version": None})
         assert env[0] == "EULA=TRUE"
+
+
+class _SelfContainer:
+    """Minimaler eigener Dashboard-Container (nur attrs wird gelesen)."""
+
+    def __init__(self, networks):
+        self.attrs = {"State": {"Running": True},
+                      "NetworkSettings": {"Networks": networks}}
+
+
+class TestNetzwerkAutoHeilung:
+    """Bridge-only Dashboard (ZimaOS-App-Import ohne Compose-Netzwerk):
+    Docker-DNS löst dort keine Container-Namen auf (RCON: Errno -2) — das
+    Dashboard legt deshalb 'mc-dashboard-net' an und startet Instanzen darin."""
+
+    @staticmethod
+    def _registriere_self(fake_docker, networks):
+        fake_docker.containers._items[socket.gethostname()] = _SelfContainer(networks)
+
+    def test_bridge_only_erstellt_netzwerk(self, fake_docker):
+        self._registriere_self(fake_docker, {"bridge": {}})
+        assert runtime._network_of_dashboard(fake_docker) == "mc-dashboard-net"
+        net = fake_docker.networks._items["mc-dashboard-net"]
+        assert net.connected  # Dashboard wurde mit dem Netzwerk verbunden
+
+    def test_benanntes_netzwerk_wird_genutzt(self, fake_docker):
+        self._registriere_self(
+            fake_docker, {"minedocker_default": {}, "bridge": {}})
+        assert runtime._network_of_dashboard(fake_docker) == "minedocker_default"
+        assert not fake_docker.networks._items  # nichts neu angelegt
+
+    def test_ohne_eigenen_container_none(self, fake_docker):
+        assert runtime._network_of_dashboard(fake_docker) is None
+
+    def test_start_landet_im_auto_netzwerk(self, fake_docker, instanz):
+        self._registriere_self(fake_docker, {"bridge": {}})
+        runtime.start_instance(instanz)
+        assert fake_docker.containers.run_kwargs["network"] == "mc-dashboard-net"
