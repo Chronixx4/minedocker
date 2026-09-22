@@ -143,16 +143,24 @@ services:
 
 Ein reines Neustarten (auch ZimaOS „App neustarten") **zieht kein neues
 Image** — Container sind an die Image-ID ihrer Erstellung gebunden, und
-`docker compose up -d` nutzt lokal vorhandene Images ohne Pull. Zwei Wege:
+`docker compose up -d` nutzt lokal vorhandene Images ohne Pull. Der Weg, der
+immer funktioniert (der App-Ordner unter `/DATA/AppData/...` enthält nur die
+Daten-Binds; die Compose-Definition verwaltet ZimaOS intern):
 
 ```bash
-# Zuverlässig (per SSH, im App-Ordner der importierten App):
-sudo docker compose pull dashboard && sudo docker compose up -d dashboard
-
-# Oder einmalig neu importieren: App entfernen (Daten behalten) →
-# INSTALL-YAML neu einfügen (pull_policy: always zieht dann bei jedem
-# `compose up -d` frisch).
+sudo docker pull ghcr.io/chronixx4/minedocker:latest
+sudo docker stop mc-dashboard
+sudo docker rm mc-dashboard
 ```
+
+Danach in ZimaOS die App **starten** — ZimaOS legt den Container aus seiner
+gespeicherten App-Definition neu an und nimmt dabei das frisch gezogene
+Image (das Tag `latest` zeigt nach dem Pull auf das neue Image).
+
+Kontrolle: `sudo docker ps --filter name=mc-dashboard` (frischer „Up vor …") —
+im Dashboard erscheint die neue Funktionalität (z. B. die Box „JVM & RAM").
+Wer einen eigenen Compose-Speicherort nutzt, kann stattdessen im jeweiligen
+Ordner `sudo docker compose pull && sudo docker compose up -d` fahren.
 
 Die Release-Notes nennen immer das passende Image-Tag
 (`ghcr.io/chronixx4/minedocker:<version>`); `latest` folgt `main`.
