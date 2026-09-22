@@ -335,17 +335,22 @@ dem Datenordner — keine manuelle `chown`-Aktion nötig.
 
 **Weg 2 — App-Import in der ZimaOS-UI (mit fertigen Images):** Der
 Import-Dialog baut **keine** Images (`build:` wird dort nicht ausgeführt,
-nur Image-Pull) und mag keine Swarm-spezifischen Optionen. GitHub Actions
-baut das Dashboard-Image bei jedem Push auf `main` und pusht es nach
-`ghcr.io/chronixx4/minedocker:latest` (Workflow `docker-publish.yml`). Für
-den UI-Import in der Compose-Datei `build: .` durch
-`image: ghcr.io/chronixx4/minedocker:latest` ersetzen; Compose-Interpolation
-(`.env`) greift beim Import nicht — Pfade und `DOCKER_GID` direkt in der
-YAML einsetzen (siehe INSTALL-ZIMAOS.md). Wichtig: Nach dem ersten Push ist
-das GHCR-Package privat — einmalig auf GitHub unter „Packages" die
-Sichtbarkeit auf **Public** stellen, sonst kann ZimaOS ohne Login nicht
-ziehen. Die „Compose Toolbox"-App (App Store) hilft beim Validieren/Loggen
-eigener Stacks.
+nur Image-Pull). GitHub Actions baut das Dashboard-Image bei jedem Push auf
+`main` und pusht es nach `ghcr.io/chronixx4/minedocker:latest` (Workflow
+`docker-publish.yml`). Nach dem ersten Push das GHCR-Package einmalig auf
+GitHub unter „Packages" auf **Public** stellen, sonst kann ZimaOS ohne
+Login nicht ziehen. Zwei empirische Import-Fallen (deshalb die
+Spezial-YAML in `INSTALL-ZIMAOS.md` nutzen):
+1. Der Import erstellt Services mit `depends_on:
+   service_completed_successfully` nicht sauber — ein init-Ownership-Service
+   bleibt unangelegt und das Dashboard hängt ewig auf Status „Created".
+   Der Import-Weg setzt die Ownership daher einmalig per SSH
+   (`sudo chown -R 1000:1000 /DATA/AppData/mc-dashboard/data ...`).
+2. Der Import verschluckt `$$`-Escapes in Commands (Backup-Archive hießen
+   `mcdata-.tgz`) — die Import-YAML kommt deshalb ohne `$`-Zeichen aus
+   (Backup-Rotation per Umbenennungskette, 14 Generationen à 24 h).
+Die „Compose Toolbox"-App (App Store) hilft beim Validieren/Loggen eigener
+Stacks.
 
 **ZimaOS-Besonderheiten:**
 

@@ -10,13 +10,42 @@ jedem Push auf `main` baut (Workflow `docker-publish.yml`).
 auf GitHub unter „Packages" → `minedocker` → Package settings →
 Visibility **Public** stellen, sonst kann ZimaOS ohne Login nicht ziehen.
 
+## Warum diese YAML anders ist als docker-compose.yml
+
+Der ZimaOS-App-Import hat zwei Eigenheiten (empirisch bestätigt):
+1. Er legt Services mit `depends_on: service_completed_successfully` nicht
+   sauber an — der init-Ownership-Service fehlt dann, und der Dashboard-
+   Container bleibt ewig auf Status „Created" stehen. Deshalb enthält diese
+   YAML **keinen** init-Service; die Ownership wird einmalig per SSH gesetzt
+   (siehe unten).
+2. Er verschluckt `$$`-Escapes in Compose-Commands (Backups hießen dann
+   `mcdata-.tgz` mit leerem Zeitstempel). Deshalb kommt diese YAML komplett
+   **ohne `$`-Zeichen** aus: Das Backup rotiert per Umbenennungskette
+   (14 Generationen à 24 h = 14 Tage Retention, `latest.tgz` = neuester
+   Snapshot) statt per `$(date ...)`.
+
+## Einmalig per SSH vorbereiten
+
+```bash
+ssh admin@<zima-ip>
+sudo mkdir -p /DATA/AppData/mc-dashboard/data /DATA/AppData/mc-dashboard/backups
+sudo chown -R 1000:1000 /DATA/AppData/mc-dashboard/data /DATA/AppData/mc-dashboard/backups
+sudo stat -c '%g' /var/run/docker.sock   # Ausgabe notieren
+```
+
+- Die Ausgabe des `stat`-Befehls ist die Docker-Socket-GID. Ist sie **nicht
+  999**, trage sie unten in `group_add` ein (Falscher Wert = Dashboard meldet
+  „Permission denied", Start/Stop und Ressourcen-Karte bleiben leer).
+- Der `chown` ist idempotent und richtet auch bestehende Instanzdaten ein;
+  bestehende `mc-inst-*`-Container und die Daten unter
+  `/DATA/AppData/mc-dashboard/data` bleiben erhalten und werden vom
+  Dashboard wiederverwendet.
+
 ## Vor dem Import anpassen
 
-- **DOCKER_GID (`group_add`):** Default 999. Auf dem ZimaOS-Gerät ermitteln
-  mit `stat -c '%g' /var/run/docker.sock` (Docker Desktop/WSL2: 0). Falscher
-  Wert = Dashboard meldet „Permission denied" beim Socket-Zugriff.
 - **DASHBOARD_API_KEY:** setzen (z. B. `openssl rand -hex 32`) — schützt
   alle API-Routen außer `/api/health`. Leer = alle Routen offen (nur LAN ok).
+- **CF_API_KEY:** CurseForge-API-Key (console.curseforge.com), optional.
 - **TZ:** für Scheduler-Zeiten (täglicher Neustart, geplante Backups)
   entkommentieren, sonst gilt UTC.
 - **Port 8080 belegt?** Host-Seite des `ports`-Eintrags ändern.
@@ -26,30 +55,10 @@ Visibility **Public** stellen, sonst kann ZimaOS ohne Login nicht ziehen.
 
 ```yaml
 services:
-  init:
-    image: alpine:3.20
-    user: "0:0"
-    restart: on-failure
-    volumes:
-      - /DATA/AppData/mc-dashboard/data:/data
-    command: |
-      uid=$$(stat -c %u /data) || true
-      [ "$$uid" = "1000" ] && exit 0
-      if [ -n "$$(ls -A /data 2>/dev/null)" ] && [ ! -d /data/instances ]; then
-        echo "FATAL: /data enthaelt Daten ohne instances/ - Pfad zeigt vermutlich auf ein fremdes Verzeichnis. Kein chown, Abbruch." >&2
-        exit 1
-      fi
-      chown -R 1000:1000 /data
-    mem_limit: 64m
-    cpus: 0.25
-
   dashboard:
     image: ghcr.io/chronixx4/minedocker:latest
     container_name: mc-dashboard
     restart: unless-stopped
-    depends_on:
-      init:
-        condition: service_completed_successfully
     environment:
       DASHBOARD_API_KEY: ""     # setzen! z. B. `openssl rand -hex 32`
       CORS_ORIGINS: "*"
@@ -70,7 +79,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     user: "1000:1000"
     group_add:
-      - "999"                   # DOCKER_GID (stat -c '%g' /var/run/docker.sock)
+      - "999"                   # Docker-Socket-GID (siehe stat-Befehl oben)
     mem_limit: 1g
     cpus: 1.0
     logging:
@@ -88,12 +97,23 @@ services:
       - /DATA/AppData/mc-dashboard/backups:/backups
     command: >
       sh -c "while true; do
-               ts=$$(date +%F-%H%M);
-               tar -czf /backups/mcdata-$$ts.tgz -C /data . &&
-               ln -sf mcdata-$$ts.tgz /backups/latest.tgz &&
-               echo backup mcdata-$$ts.tgz ok;
-               find /backups -name 'mcdata-*.tgz' -mtime +14 -delete;
-               sleep 6h;
+               mv /backups/13.tgz /backups/14.tgz 2>/dev/null;
+               mv /backups/12.tgz /backups/13.tgz 2>/dev/null;
+               mv /backups/11.tgz /backups/12.tgz 2>/dev/null;
+               mv /backups/10.tgz /backups/11.tgz 2>/dev/null;
+               mv /backups/9.tgz /backups/10.tgz 2>/dev/null;
+               mv /backups/8.tgz /backups/9.tgz 2>/dev/null;
+               mv /backups/7.tgz /backups/8.tgz 2>/dev/null;
+               mv /backups/6.tgz /backups/7.tgz 2>/dev/null;
+               mv /backups/5.tgz /backups/6.tgz 2>/dev/null;
+               mv /backups/4.tgz /backups/5.tgz 2>/dev/null;
+               mv /backups/3.tgz /backups/4.tgz 2>/dev/null;
+               mv /backups/2.tgz /backups/3.tgz 2>/dev/null;
+               mv /backups/1.tgz /backups/2.tgz 2>/dev/null;
+               tar -czf /backups/1.tgz -C /data .;
+               ln -sf 1.tgz /backups/latest.tgz;
+               echo backup 1.tgz ok;
+               sleep 24h;
              done"
     mem_limit: 128m
     cpus: 0.25
@@ -104,12 +124,20 @@ services:
         max-file: "3"
 ```
 
+## App ersetzen und starten
+
+1. Alte App in ZimaOS entfernen — dabei **Daten behalten** (die gemappten
+   Ordner unter `/DATA/AppData/mc-dashboard` überleben das laut
+   ZimaOS-Doku; falls der Löschdialog fragt: Daten nicht löschen).
+2. Neue App mit der YAML oben importieren und starten.
+3. Falls der Import das Port-Mapping (8080→8080) nicht übernimmt: in den
+   App-Einstellungen ergänzen.
+
 ## Nach der Installation
 
-- App öffnen → `http://<zima-ip>:8080` → Tab „Server" → Instanz erstellen.
-- Der `init`-Service setzt bei leerem/neuem `/data` die Ownership
-  (1000:1000); ein FATAL-Abbruch bedeutet, dass der Datenpfad auf ein
-  fremdes Verzeichnis zeigt (Diagnose: `docker compose logs init`).
-- Backups landen alle 6 h in `/DATA/AppData/mc-dashboard/backups`
-  (14 Tage Retention, `latest.tgz` = neuester Snapshot); Restore-Befehle:
-  `SERVER-SETUP.md` §5.
+- App öffnen → `http://<zima-ip>:8080` → Tab „Server" → Instanz erstellen
+  (bzw. bestehende Instanzen starten).
+- Startet das Dashboard nicht: `docker logs mc-dashboard --tail 50`
+  (per SSH, ggf. mit `sudo`).
+- Restore-Befehle: `SERVER-SETUP.md` §5 (hier `1.tgz`/`latest.tgz` aus
+  `/DATA/AppData/mc-dashboard/backups` verwenden).
