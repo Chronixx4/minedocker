@@ -276,16 +276,19 @@ Checkliste, Dashboard-Schnellstart).
   Overrides-Pfadschutz, SLP, Modrinth, CurseForge-API inkl. Key-Guard/
   Suche/Pack-Installation, Server-aus-Modpack-Abläufe, Klonen, Import, Welt-
   Download/Upload, JVM-Flags, Disk-Usage, Scheduler)
-- Dockerfile – Python 3.12-slim, UID 1000, docker-Paket, Healthcheck
+- Dockerfile – Python 3.12-slim, UID 1000, docker-Paket, tzdata (für TZ im
+  Scheduler), Healthcheck (Startphase 30 s); /app nur lesend (root-eigentümlich)
 - docker-compose.yml – init (Ownership-Fix 1000:1000 auf /data, idempotent,
   Fremdordner-Guard: kein chown bei Daten ohne instances/, restart
   on-failure; Dashboard startet erst nach Erfolg) + Dashboard (Docker-Socket-
   Mount!, gehärtet: user 1000:1000 + group_add ${DOCKER_GID:-999} für die
-  Socket-Gruppe des Hosts) + Backup-Daemon; Compose-Interpolation per .env
-  (Vorlage .env.example): DOCKER_GID (ZimaOS typisch 999, Docker Desktop 0),
+  Socket-Gruppe des Hosts) + Backup-Daemon (Fehler landen sichtbar im Log);
+  Compose-Interpolation per .env (Vorlage .env.example): DOCKER_GID,
   MCDATA_DIR (leer = Named Volume mcdata, sonst Bind-Mount — ZimaOS:
   /DATA/AppData/mc-dashboard/data), BACKUPS_DIR (Default ./backups),
-  DASHBOARD_HTTP_PORT (Default 8080); Instanz-Ports 25570+ direkt auf dem
+  DASHBOARD_HTTP_PORT (Default 8080) sowie Passthrough mit Defaults für
+  DASHBOARD_API_KEY/CF_API_KEY/CORS_ORIGINS/TZ/ALERT_*/INSTANCES_*;
+  Instanz-Ports 25570+ direkt auf dem
   Host; kein minecraft-Service mehr; ZimaOS-Weg: SERVER-SETUP.md §11
 
 ## Wichtige Endpunkte

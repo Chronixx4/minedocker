@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+# Keine parallelen Builds desselben Branches (Cache-Gefechte vermeiden)
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -38,6 +44,9 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # Fallback für workflow_dispatch auf einem Branch (sonst 0 Tags
+            # → Push-Schritt bricht ab); bei Tag-Pushes greift semver
+            type=ref,event=branch
 
       - name: Build and push image
         uses: docker/build-push-action@v6

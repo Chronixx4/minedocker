@@ -8,18 +8,27 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Schnell aufeinanderfolgende Pushes: letzter Stand gewinnt, keine
+# parallelen Builds auf denselben Cache/Tag
+concurrency:
+  group: docker-publish-main
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
-
-env:
-  IMAGE: ghcr.io/chronixx4/minedocker
 
 jobs:
   build-push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # GHCR verlangt Kleinschreibung; github.repository trägt hier die
+      # Großschreibung des Owners (Chronixx4) — daher explizit lowercasing.
+      - name: Image-Name (lowercase)
+        id: repo
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -36,7 +45,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ steps.repo.outputs.name }}:latest
+            ${{ steps.repo.outputs.name }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

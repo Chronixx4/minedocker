@@ -1,12 +1,29 @@
+# VCS/CI/Tooling: nie in den Build-Kontext (verkleinert ihn, verhindert
+# versehentliches Mitkopieren sensibler Dateien)
 .git
+.github
+.gitignore
+.kilo
+
+# Python-Artefakte
 **/__pycache__
 *.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+
+# Virtuelle Umgebungen
 .venv
 venv
+
+# Laufzeitdaten/Build-Nebensachen (dürfen groß sein — nie in den Kontext)
 tests
 data
+backups
 .env
-PROJECT_MAP.md
+
+# Dokumentation & Docker-Dateien selbst (gehören nicht ins Image)
 *.md
 Dockerfile
 docker-compose.yml

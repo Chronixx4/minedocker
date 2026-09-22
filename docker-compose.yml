@@ -27,6 +27,10 @@
 # - MCDATA_DIR            Datenablage: leer/„mcdata" = Named Volume; sonst
 #                         Bind-Mount (ZimaOS: /DATA/AppData/mc-dashboard/data)
 # - BACKUPS_DIR           Backup-Ablage (Default ./backups; ZimaOS: unter /DATA)
+# - DASHBOARD_API_KEY, CF_API_KEY, CORS_ORIGINS, TZ, ALERT_*, INSTANCES_*
+#   werden als ${VAR:-Default} aus .env durchgereicht (siehe dashboard:
+#   environment) — so müssen Geheimnisse/spezielle Werte nicht in die
+#   docker-compose.yml, sondern landen nur in der (gitignored) .env.
 #
 # ZimaOS-Hinweise:
 # - Deployment bevorzugt per SSH: Projekt nach /DATA/AppData/mc-dashboard
@@ -61,6 +65,8 @@ services:
     image: alpine:3.20
     user: "0:0"
     restart: on-failure
+    # Hardening: der Ownership-Fix braucht kein Netzwerk
+    network_mode: none
     volumes:
       - ${MCDATA_DIR:-mcdata}:/data
     command: |
@@ -87,23 +93,25 @@ services:
       init:
         condition: service_completed_successfully
     environment:
-      DASHBOARD_API_KEY: ""     # BEST PRACTICE: setzen (z. B. `openssl rand -hex 32`),
-                                # schützt alle API-Routen außer /api/health
-      CORS_ORIGINS: "*"         # lokal okay; bei Reverse-Proxy auf echte Origin setzen
-      CF_API_KEY: ""            # CurseForge-API-Key (kostenlos: console.curseforge.com)
+      # Best Practices: Werte kommen als ${VAR:-Default} aus der .env
+      # (gitignored) — Defaults identisch zu vorher (leer = Funktion aus).
+      # Überschreiben in .env: DASHBOARD_API_KEY=<openssl rand -hex 32>
+      DASHBOARD_API_KEY: "${DASHBOARD_API_KEY:-}"  # schützt alle API-Routen außer /api/health
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"          # lokal okay; bei Reverse-Proxy auf echte Origin setzen
+      CF_API_KEY: "${CF_API_KEY:-}"               # CurseForge-API-Key (kostenlos: console.curseforge.com)
+      TZ: "${TZ:-UTC}"                            # Scheduler-/Backup-Zeiten; z. B. Europe/Berlin
       # --- Multi-Server ---
       INSTANCES_DIR: "/data/instances"
-      INSTANCES_PORT_BASE: "25570"
-      INSTANCES_MEMORY: "2G"    # Default-Heap pro Instanz (siehe SERVER-SETUP.md §1)
-      INSTANCES_HOST_DIR: ""    # leer = automatische Erkennung (empfohlen)
+      INSTANCES_PORT_BASE: "${INSTANCES_PORT_BASE:-25570}"
+      INSTANCES_MEMORY: "${INSTANCES_MEMORY:-2G}" # Default-Heap pro Instanz (siehe SERVER-SETUP.md §1)
+      INSTANCES_HOST_DIR: "${INSTANCES_HOST_DIR:-}" # leer = automatische Erkennung (empfohlen)
       # --- Crash-Watchdog/Alerts (optional, siehe SERVER-SETUP.md §8) ---
-      ALERT_WEBHOOK_URL: ""     # Discord-kompatibler Webhook; leer = aus
-      TELEGRAM_BOT_TOKEN: ""    # alternativ Telegram (Token + Chat-ID)
-      TELEGRAM_CHAT_ID: ""
-      ALERT_EVENTS: "crash,start,stop"  # oder z. B. "crash", +update für Update-Alerts
+      ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}" # Discord-kompatibler Webhook; leer = aus
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}" # alternativ Telegram (Token + Chat-ID)
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      ALERT_EVENTS: "${ALERT_EVENTS:-crash,start,stop}" # oder z. B. "crash", +update für Update-Alerts
       # --- Scheduler (Zeitplan je Instanz, siehe Dashboard → Zeitplan-Box) ---
-      # Geplante Neustarts laufen in Container-Lokalzeit; für lokale Zeit TZ setzen:
-      # TZ: "Europe/Berlin"
+      # Geplante Neustarts laufen in Container-Lokalzeit → TZ oben setzen.
     ports:
       - "${DASHBOARD_HTTP_PORT:-8080}:8080"  # LAN/VPN only — nie direkt ins Internet!
     volumes:
@@ -147,7 +155,8 @@ services:
                ts=$$(date +%F-%H%M);
                tar --exclude='./backups' -czf /backups/mcdata-$$ts.tgz -C /data . &&
                ln -sf mcdata-$$ts.tgz /backups/latest.tgz &&
-               echo backup mcdata-$$ts.tgz ok;
+               echo backup mcdata-$$ts.tgz ok ||
+               echo backup mcdata-$$ts.tgz FEHLGESCHLAGEN >&2;
                find /backups -name 'mcdata-*.tgz' -mtime +14 -delete;
                sleep 6h;
              done"

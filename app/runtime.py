@@ -16,6 +16,7 @@ import re
 import secrets
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .config import settings
@@ -504,26 +505,37 @@ def docker_resources() -> dict:
         out["reason"] = "Kein laufender Minecraft-Server-Container"
         return out
 
+    def _one_shot(container) -> dict | None:
+        """Ein Stats-Schnappschuss; None bei Fehler (best effort je Container)."""
+        try:
+            return container.stats(stream=False)
+        except Exception:
+            return None
+
+    # Der Ein-Schnappschuss-Abruf blockiert im Daemon ~1 s pro Container —
+    # parallel anfragen, damit /api/status und der History-Sampler bei vielen
+    # Instanzen nicht N Sekunden brauchen. pool.map behält die Reihenfolge,
+    # die Summen/Ergebnisse sind identisch zur sequenziellen Variante.
     cpu_total = 0.0
     ram_total = 0.0
     limit_total = 0.0
-    for container in mc:
-        try:
-            stats = container.stats(stream=False)
-        except Exception:
-            continue
-        pct = round(_cpu_percent(stats), 1)
-        used_mb, limit_mb = _ram_mb(stats)
-        cpu_total += pct
-        ram_total += used_mb
-        if limit_mb > 0:
-            limit_total += limit_mb
-        out["containers"].append({
-            "name": getattr(container, "name", "?"),
-            "cpu_percent": pct,
-            "ram_mb": round(used_mb, 1),
-            "ram_limit_mb": round(limit_mb, 1),
-        })
+    workers = max(1, min(len(mc), 8))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for container, stats in zip(mc, pool.map(_one_shot, mc), strict=False):
+            if stats is None:
+                continue
+            pct = round(_cpu_percent(stats), 1)
+            used_mb, limit_mb = _ram_mb(stats)
+            cpu_total += pct
+            ram_total += used_mb
+            if limit_mb > 0:
+                limit_total += limit_mb
+            out["containers"].append({
+                "name": getattr(container, "name", "?"),
+                "cpu_percent": pct,
+                "ram_mb": round(used_mb, 1),
+                "ram_limit_mb": round(limit_mb, 1),
+            })
     out.update({
         "found": bool(out["containers"]),
         # Summe über alle Container: Anteil an der Gesamtkapazität,
