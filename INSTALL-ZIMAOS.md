@@ -59,6 +59,12 @@ services:
     image: ghcr.io/chronixx4/minedocker:latest
     container_name: mc-dashboard
     restart: unless-stopped
+    # Updates: Ein reines Neustarten zieht KEIN neues Image (Container sind an
+    # ihre Image-ID gebunden). pull_policy: always sorgt dafür, dass
+    # `docker compose up -d` vorher das neue latest-Image zieht und den
+    # Container neu anlegt. Zuverlässig per SSH:
+    #   sudo docker compose pull dashboard && sudo docker compose up -d dashboard
+    pull_policy: always
     environment:
       DASHBOARD_API_KEY: ""     # setzen! z. B. `openssl rand -hex 32`
       CORS_ORIGINS: "*"
@@ -132,6 +138,24 @@ services:
 2. Neue App mit der YAML oben importieren und starten.
 3. Falls der Import das Port-Mapping (8080→8080) nicht übernimmt: in den
    App-Einstellungen ergänzen.
+
+## Updates einspielen
+
+Ein reines Neustarten (auch ZimaOS „App neustarten") **zieht kein neues
+Image** — Container sind an die Image-ID ihrer Erstellung gebunden, und
+`docker compose up -d` nutzt lokal vorhandene Images ohne Pull. Zwei Wege:
+
+```bash
+# Zuverlässig (per SSH, im App-Ordner der importierten App):
+sudo docker compose pull dashboard && sudo docker compose up -d dashboard
+
+# Oder einmalig neu importieren: App entfernen (Daten behalten) →
+# INSTALL-YAML neu einfügen (pull_policy: always zieht dann bei jedem
+# `compose up -d` frisch).
+```
+
+Die Release-Notes nennen immer das passende Image-Tag
+(`ghcr.io/chronixx4/minedocker:<version>`); `latest` folgt `main`.
 
 ## Nach der Installation
 
