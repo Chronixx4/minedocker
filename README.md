@@ -102,7 +102,7 @@ ZimaOS-UI gibt es eine angepasste Import-YAML ohne Build-Schritt und ohne
 | `DASHBOARD_API_KEY` | *(leer)* | Admin-Bypass für alle API-Routen außer `/api/health` (Skripte/curl) — **setzen, wenn fremde Nutzer im Netz!** (z. B. `openssl rand -hex 32`) |
 | `FILEBROWSER_MAX_UPLOAD_MB` | `300` | Upload-Limit je Datei im Datei-Browser |
 | `CORS_ORIGINS` | `*` | Bei Reverse-Proxy auf die echte Origin einschränken |
-| `CF_API_KEY` | *(leer)* | CurseForge-API-Key für Mod-/Modpack-Suche ([console.curseforge.com](https://console.curseforge.com)) |
+| `CF_API_KEY` | *(leer)* | CurseForge-API-Key für Mod-/Modpack-Suche ([console.curseforge.com](https://console.curseforge.com)). **Optional:** Ohne Key sind CF-Suche und -Direktinstallation deaktiviert (503) — Modrinth-Suche/-Installation und der Modpack-Upload (CF-.zip) funktionieren weiterhin ohne Key (→ SERVER-SETUP.md §2). |
 | `INSTANCES_DIR` | `/data/instances` | Instanz-Ordner im Dashboard-Container |
 | `INSTANCES_PORT_BASE` | `25570` | Erster Spielport für neue Instanzen |
 | `INSTANCES_MEMORY` | `2G` | Default-Heap pro Instanz |

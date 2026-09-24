@@ -38,6 +38,13 @@ _CONCURRENCY = 4  # gleichzeitige Mod-Downloads
 _SPACE_BUFFER = 512 * 1024 * 1024  # Sicherheitspuffer 512 MiB
 _MAX_PACK_BYTES = 4 * 1024 * 1024 * 1024  # harte Grenze: 4 GiB
 
+# Transiente CurseForge-Fehler (Website-Redirect hinter Cloudflare) werden
+# mit steigender Pause wiederholt — ein einziger 403/429 soll die ganze
+# Pack-Installation nicht abbrechen.
+_CF_RETRY_STATUS = frozenset({403, 408, 425, 429, 500, 502, 503, 504})
+_CF_RETRIES = 2        # zusätzliche Versuche nach dem ersten
+_CF_RETRY_DELAY = 1.0  # Basis-Pause in Sekunden (skaliert mit Versuchsnr.)
+
 # Loader-Präferenz bei mrpack-Versionen mit mehreren Loadern
 _LOADER_PREFERENCE = ("fabric", "forge", "neoforge", "quilt")
 _MODRINTH_GAME_VERSION_RE = re.compile(r"^\d+\.\d+(\.\d+)?(-rc\d+|-pre\d+)?$")
@@ -456,35 +463,63 @@ async def _download_one(client: httpx.AsyncClient, url: str, dest: Path,
             pass
 
 
+class _CfTransientError(Exception):
+    """Transienter Fehler beim CurseForge-Download (403/429/5xx, Netzwerk)."""
+
+
 async def _download_cf_one(client: httpx.AsyncClient, url: str, mods_root: Path,
                            sha1=None, verify_url: bool = False):
     """Lädt eine CurseForge-Datei; der Dateiname ergibt sich aus der finalen
     CDN-URL nach Redirect. Rückgabe: Dateiname oder None (kein .jar).
     Mit sha1 wird die Integrität geprüft; verify_url begrenzt den Ziel-Host
-    auf die CurseForge-CDN-Allowlist (Anti-SSRF)."""
+    auf die CurseForge-CDN-Allowlist (Anti-SSRF). Transiente Fehler werden
+    bis zu _CF_RETRIES-mal mit steigender Pause wiederholt."""
+    attempt = 0
+    while True:
+        try:
+            return await _download_cf_once(client, url, mods_root,
+                                           sha1=sha1, verify_url=verify_url)
+        except _CfTransientError as exc:
+            if attempt >= _CF_RETRIES:
+                raise RuntimeError(f"{exc} (nach {attempt + 1} Versuchen)") from exc
+            attempt += 1
+            await asyncio.sleep(_CF_RETRY_DELAY * attempt)
+
+
+async def _download_cf_once(client: httpx.AsyncClient, url: str, mods_root: Path,
+                            sha1=None, verify_url: bool = False):
+    """Ein Download-Versuch einer CurseForge-Datei (siehe _download_cf_one)."""
     from urllib.parse import unquote
 
     from .security import validate_filename
     part = None
     try:
-        async with client.stream("GET", url, headers=_headers()) as resp:
-            if resp.status_code != 200:
-                raise RuntimeError(f"HTTP {resp.status_code} bei CurseForge-Download")
-            if verify_url:
-                validate_curseforge_download_url(str(resp.url))
-            name = unquote(str(resp.url.path).rstrip("/").split("/")[-1] or "")
-            if not name.lower().endswith(".jar"):
-                return None  # Ressourcenpakete etc. gehören nicht nach mods/
-            validate_filename(name)
-            dest = mods_root / name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            part = dest.with_suffix(dest.suffix + ".part")
-            digest = hashlib.sha1() if sha1 else None
-            with open(part, "wb") as fh:
-                async for chunk in resp.aiter_bytes(65536):
-                    fh.write(chunk)
-                    if digest:
-                        digest.update(chunk)
+        try:
+            async with client.stream("GET", url, headers=_headers()) as resp:
+                if resp.status_code != 200:
+                    msg = f"HTTP {resp.status_code} bei CurseForge-Download"
+                    if resp.status_code in _CF_RETRY_STATUS:
+                        raise _CfTransientError(msg)
+                    raise RuntimeError(msg)
+                if verify_url:
+                    validate_curseforge_download_url(str(resp.url))
+                name = unquote(str(resp.url.path).rstrip("/").split("/")[-1] or "")
+                if not name.lower().endswith(".jar"):
+                    return None  # Ressourcenpakete etc. gehören nicht nach mods/
+                validate_filename(name)
+                dest = mods_root / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                part = dest.with_suffix(dest.suffix + ".part")
+                digest = hashlib.sha1() if sha1 else None
+                with open(part, "wb") as fh:
+                    async for chunk in resp.aiter_bytes(65536):
+                        fh.write(chunk)
+                        if digest:
+                            digest.update(chunk)
+        except httpx.TransportError as exc:
+            raise _CfTransientError(
+                f"Netzwerkfehler bei CurseForge-Download: "
+                f"{exc or exc.__class__.__name__}") from exc
         if (digest and part.stat().st_size < 64 * 1024 * 1024
                 and digest.hexdigest() != sha1):
             raise RuntimeError("SHA1-Prüfung fehlgeschlagen")
@@ -706,8 +741,11 @@ async def _run_install(job: dict, instance: dict, url: str, dest: Path, version:
         async with _new_client() as dl_client:
             await asyncio.gather(*(worker(item) for item in plan))
         if failures:
+            shown = "; ".join(failures[:5])
+            more = (f" … +{len(failures) - 5} weitere"
+                    if len(failures) > 5 else "")
             raise RuntimeError(f"{len(failures)} Mod-Datei(en) fehlgeschlagen: "
-                               + "; ".join(failures[:3]))
+                               f"{shown}{more}")
 
         # 5) Instanz-Metadaten aktualisieren
         instance = get_instance(instance["id"])
@@ -796,6 +834,7 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
     """
     root = instance_dir(instance["id"])
     mods_root = root / "mods"
+    failures: list[str] = []
     try:
         job["phase"] = "Prüfung (Kompatibilität)"
         fmt, raw_index = _extract_index(dest)
@@ -831,7 +870,6 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
         job["phase"] = f"Mods installieren (0/{jobs_total})"
 
         sem = asyncio.Semaphore(_CONCURRENCY)
-        failures: list[str] = []
         completed = {"count": 0}
         installed = {"n": 0}
 
@@ -866,7 +904,9 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
                         except OSError:
                             pass
                 except Exception as exc:
-                    failures.append(f"CurseForge-Download fehlgeschlagen: {exc}")
+                    label = url.rsplit("/", 1)[-1] or url or "?"
+                    failures.append(
+                        f"CurseForge-Download fehlgeschlagen ({label}): {exc}")
                 finally:
                     _progress()
 
@@ -876,8 +916,11 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
             else:
                 await asyncio.gather(*(cf_worker(f) for f in pack["files"]))
         if failures:
+            shown = "; ".join(failures[:5])
+            more = (f" … +{len(failures) - 5} weitere"
+                    if len(failures) > 5 else "")
             raise RuntimeError(f"{len(failures)} Mod-Datei(en) fehlgeschlagen: "
-                               + "; ".join(failures[:3]))
+                               f"{shown}{more}")
 
         # Instanz-Metadaten aktualisieren
         instance = get_instance(instance["id"])
@@ -910,6 +953,8 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
     except Exception as exc:
         job["status"] = "error"
         job["error"] = str(exc) or exc.__class__.__name__
+        if failures:
+            job["failed"] = failures  # vollständige Liste für die UI
         job["phase"] = "Fehlgeschlagen"
     finally:
         if job["status"] != "done":

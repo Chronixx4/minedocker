@@ -45,6 +45,52 @@
     return data;
   }
 
+  // Upload mit Fortschrittsanzeige (fetch kennt keinen Upload-Progress → XHR).
+  // Fehlverhalten wie api(): Error-Objekt mit .status und .message (Detail).
+  function apiUpload(path, form, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", path);
+      if (state.apiKey) xhr.setRequestHeader("X-API-Key", state.apiKey);
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && onProgress) {
+          onProgress(Math.round((ev.loaded / ev.total) * 100));
+        }
+      };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) { /* leer/HTML */ }
+        if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+        if (xhr.status === 401) showAuthOverlay();
+        reject(Object.assign(
+          new Error(data.detail || `HTTP-Fehler ${xhr.status}`),
+          { status: xhr.status }));
+      };
+      xhr.onerror = () => reject(
+        Object.assign(new Error("Server nicht erreichbar"), { status: 0 }));
+      xhr.send(form);
+    });
+  }
+
+  // Vorprüfung eines Modpack-Archivs vor dem Upload: fängt abgebrochene
+  // Downloads (leer/kein ZIP) ab, bevor riesige Dateien hochgeschickt werden.
+  async function packFileProblem(file) {
+    if (!/\.(zip|mrpack)$/i.test(file.name)) {
+      return "Nur .zip (CurseForge-Pack) oder .mrpack (Modrinth) werden unterstützt.";
+    }
+    if (file.size <= 0) {
+      return "Die Datei ist leer — bitte das Pack erneut herunterladen.";
+    }
+    try {
+      const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+      if (head[0] !== 0x50 || head[1] !== 0x4b) { // „PK" = ZIP-Magic
+        return "Die Datei ist kein gültiges ZIP-Archiv — vermutlich ein " +
+          "abgebrochener Download. Bitte das Pack erneut herunterladen.";
+      }
+    } catch (e) { /* nicht prüfbar → Upload trotzdem versuchen */ }
+    return null;
+  }
+
   /* ---------- UI-Helfer ---------- */
   function toast(message, type = "info") {
     const el = document.createElement("div");
@@ -514,6 +560,7 @@
         loadMpFilters(); // Filter-Optionen (MC-Versionen) einmalig laden
         if (!$("#mp-results").childElementCount) mpSearch(0); // direkt laden
       }
+      if (state.tab === "upload") loadUploadTargets();
       if (state.tab === "stats") {
         loadHistory();
         loadPlaytime();
@@ -1378,6 +1425,16 @@
   $("#search-prev").addEventListener("click", () => doSearch(Math.max(0, state.offset - 20)));
   $("#search-next").addEventListener("click", () => doSearch(state.offset + 20));
 
+  // CurseForge ohne API-Key: Backend antwortet mit 503 („CF_API_KEY" im Detail).
+  // Statt der generischen Meldung einen Alternativ-Hinweis zeigen (keylos möglich:
+  // Modrinth-Quelle oder CF-Pack als .zip hochladen).
+  function cfNoKeyHint(e) {
+    if (e.status !== 503 && !(e.message || "").includes("CF_API_KEY")) return null;
+    return "CurseForge-Suche benötigt einen API-Key (wird nicht mehr vergeben). " +
+      "Alternativen ohne Key: Quelle „Modrinth“ wählen oder ein CF-Pack als .zip " +
+      "hochladen (Upload-Box im Modpacks-Tab) — beides funktioniert ohne Key.";
+  }
+
   async function doSearch(offset) {
     state.offset = offset;
     const q = $("#search-input").value.trim();
@@ -1416,7 +1473,8 @@
       state.total = data.total;
       renderResults(data);
     } catch (e) {
-      setText($("#search-error"), `Suche fehlgeschlagen: ${e.message}`);
+      const hint = state.searchSource === "curseforge" ? cfNoKeyHint(e) : null;
+      setText($("#search-error"), hint || `Suche fehlgeschlagen: ${e.message}`);
       show($("#search-error"), true);
       $("#search-results").textContent = "";
     } finally {
@@ -2702,16 +2760,20 @@
     const { btn, errorBox, fileInput, poll, onSuccess } = els;
     const fileName = file.name;
     show(errorBox, false);
+    const problem = await packFileProblem(file);
+    if (problem) {
+      setText(errorBox, problem);
+      show(errorBox, true);
+      return;
+    }
     btn.disabled = true;
     btn.textContent = "Lade hoch…";
     const send = (force) => {
       const form = new FormData();
       form.append("file", file);
       if (force) form.append("force", "true");
-      return api(`/api/instances/${instanceId}/modpacks/upload`, {
-        method: "POST",
-        body: form,
-      });
+      return apiUpload(`/api/instances/${instanceId}/modpacks/upload`, form,
+        (pct) => { btn.textContent = `Lade hoch… ${pct} %`; });
     };
     try {
       let job;
@@ -2761,6 +2823,211 @@
         poll: pollPackJob,
         onSuccess: loadDetail,
       });
+    }
+  });
+
+  /* ---------- Eigener Modpack-Upload-Tab ---------- */
+  const upEls = {
+    file: $("#up-file"),
+    btn: $("#up-install-btn"),
+    info: $("#up-file-info"),
+    target: $("#up-target-select"),
+    existingOpts: $("#up-existing-opts"),
+    newOpts: $("#up-new-opts"),
+    autoVersion: $("#up-auto-version"),
+    force: $("#up-force"),
+    name: $("#up-name"),
+    memory: $("#up-memory"),
+    eula: $("#up-eula"),
+    progress: { box: $("#up-progress"), bar: $("#up-bar"),
+                phase: $("#up-phase"), pct: $("#up-pct") },
+    error: $("#up-error"),
+    summary: $("#up-summary"),
+    summaryText: $("#up-summary-text"),
+    skippedList: $("#up-skipped-list"),
+    failedBox: $("#up-failed-box"),
+    failedText: $("#up-failed-text"),
+    failedList: $("#up-failed-list"),
+  };
+
+  async function loadUploadTargets() {
+    try {
+      const data = await api("/api/instances");
+      const options = data.instances.map((i) => ({
+        value: i.id, label: `${i.name} (${i.loader} ${i.game_version})`,
+      }));
+      const current = upEls.target.value;
+      fillSelect(upEls.target, options, "Neuen Server aus dem Pack erstellen");
+      if (current && options.some((o) => o.value === current)) {
+        upEls.target.value = current;
+      }
+    } catch (e) {
+      fillSelect(upEls.target, [], "Instanzen nicht abrufbar — neuer Server");
+    }
+    syncUploadMode();
+  }
+
+  function syncUploadMode() {
+    const existing = !!upEls.target.value;
+    show(upEls.existingOpts, existing);
+    show(upEls.newOpts, !existing);
+  }
+  upEls.target.addEventListener("change", syncUploadMode);
+
+  upEls.file.addEventListener("change", async () => {
+    const file = upEls.file.files[0];
+    show(upEls.error, false);
+    show(upEls.summary, false);
+    show(upEls.info, false);
+    upEls.btn.disabled = !file;
+    if (!file) return;
+    const problem = await packFileProblem(file);
+    if (problem) {
+      setText(upEls.error, problem);
+      show(upEls.error, true);
+      upEls.btn.disabled = true;
+      return;
+    }
+    setText(upEls.info, `Datei: ${file.name} · ${fmtBytes(file.size)} · Format wird beim Installieren aus dem Archiv gelesen`);
+    show(upEls.info, true);
+  });
+
+  // Job-Polling mit Ergebnis-/Fehlerdetails (failed-Liste, Summary)
+  function pollUploadJob(job, els) {
+    const { box, bar, phase, pct } = els;
+    show(box, true);
+    return new Promise((resolve, reject) => {
+      const timer = setInterval(async () => {
+        try {
+          const data = await api(`/api/jobs/${job.job_id}`);
+          const progress = data.total > 0
+            ? Math.min(100, Math.round((data.downloaded / data.total) * 100)) : 0;
+          bar.style.width = progress + "%";
+          setText(phase, data.phase || data.status);
+          setText(pct, data.total > 0 ? `${progress} %` : "");
+          if (data.status === "done") {
+            clearInterval(timer);
+            show(box, false);
+            resolve(data);
+          } else if (data.status === "error") {
+            clearInterval(timer);
+            show(box, false);
+            reject(Object.assign(
+              new Error(data.error || "Installation fehlgeschlagen"),
+              { failed: data.failed || [], summary: data.summary }));
+          }
+        } catch (e) {
+          clearInterval(timer);
+          show(box, false);
+          reject(e);
+        }
+      }, 900);
+    });
+  }
+
+  function showUploadSummary(text, skipped, failed) {
+    setText(upEls.summaryText, text);
+    const skippedLines = (skipped || []).slice(0, 10);
+    if (skippedLines.length) {
+      setText(upEls.skippedList,
+        `Übersprungen (${skipped.length}): ${skippedLines.join(" · ")}` +
+        (skipped.length > skippedLines.length
+          ? ` … +${skipped.length - skippedLines.length} weitere` : ""));
+      show(upEls.skippedList, true);
+    } else {
+      show(upEls.skippedList, false);
+    }
+    if (failed && failed.length) {
+      upEls.failedList.textContent = "";
+      for (const line of failed.slice(0, 10)) {
+        const li = document.createElement("li");
+        li.textContent = line; // textContent schützt vor XSS
+        upEls.failedList.appendChild(li);
+      }
+      if (failed.length > 10) {
+        const li = document.createElement("li");
+        li.textContent = `… +${failed.length - 10} weitere`;
+        upEls.failedList.appendChild(li);
+      }
+      setText(upEls.failedText, "Nicht installiert:");
+      show(upEls.failedBox, true);
+    } else {
+      show(upEls.failedBox, false);
+    }
+    show(upEls.summary, true);
+  }
+
+  upEls.btn.addEventListener("click", async () => {
+    const file = upEls.file.files[0];
+    if (!file) return;
+    show(upEls.error, false);
+    show(upEls.summary, false);
+    const instanceId = upEls.target.value;
+    if (!instanceId && !upEls.eula.checked) {
+      setText(upEls.error, "Bitte die Minecraft-EULA akzeptieren.");
+      show(upEls.error, true);
+      return;
+    }
+    upEls.btn.disabled = true;
+    upEls.btn.textContent = "Lade hoch…";
+    const sendExisting = (force) => {
+      const form = new FormData();
+      form.append("file", file);
+      if (force) form.append("force", "true");
+      if (!upEls.autoVersion.checked) form.append("auto_version", "false");
+      return apiUpload(`/api/instances/${instanceId}/modpacks/upload`, form,
+        (pct) => { upEls.btn.textContent = `Lade hoch… ${pct} %`; });
+    };
+    try {
+      let job;
+      if (instanceId) {
+        try {
+          job = await sendExisting(upEls.force.checked);
+        } catch (e) {
+          if (e.status !== 409) throw e;
+          if (/läuft bereits/i.test(e.message || "")) throw e;
+          if (!window.confirm(`${e.message}\n\nModpack ersetzen und neu installieren?`)) {
+            upEls.btn.textContent = "Installieren";
+            return;
+          }
+          job = await sendExisting(true);
+        }
+      } else {
+        const form = new FormData();
+        form.append("file", file);
+        const name = upEls.name.value.trim();
+        if (name) form.append("name", name);
+        const memory = upEls.memory.value;
+        if (memory) form.append("memory", memory);
+        form.append("accept_eula", "true");
+        job = await apiUpload("/api/instances/from-pack-upload", form,
+          (pct) => { upEls.btn.textContent = `Lade hoch… ${pct} %`; });
+      }
+      const created = job.instance || null;
+      if (created) job = { job_id: job.job.id }; // from-pack-upload: {instance, job}
+      const result = await pollUploadJob(job, upEls.progress);
+      const summary = result?.summary || {};
+      const targetLabel = created
+        ? `Neuer Server "${created.name}" (Port ${created.port})`
+        : `Instanz aktualisiert`;
+      showUploadSummary(
+        `${targetLabel} · Modpack "${result?.filename || file.name}" installiert — ${summary.files ?? "?"} Dateien.`,
+        summary.skipped || [], []);
+      toast(`Modpack "${file.name}" installiert.`, "success");
+      upEls.file.value = "";
+      show(upEls.info, false);
+    } catch (e) {
+      setText(upEls.error, `Upload/Installation fehlgeschlagen: ${e.message}`);
+      show(upEls.error, true);
+      // Teilfortschritt + fehlgeschlagene Dateien zeigen
+      const skipped = e.summary?.skipped || [];
+      showUploadSummary(
+        `Fehlgeschlagen — installiert: ${e.summary?.files ?? 0} Dateien` +
+        (skipped.length ? ` · übersprungen: ${skipped.length}` : "") + ".",
+        skipped, e.failed || []);
+    } finally {
+      upEls.btn.disabled = !upEls.file.files.length;
+      upEls.btn.textContent = "Installieren";
     }
   });
 
@@ -2837,7 +3104,8 @@
       state.mpTotal = data.total;
       renderPacks(data, "#mp-results", mpInstall);
     } catch (e) {
-      setText($("#mp-error"), `Modpack-Suche fehlgeschlagen: ${e.message}`);
+      const hint = state.mpSource === "curseforge" ? cfNoKeyHint(e) : null;
+      setText($("#mp-error"), hint || `Modpack-Suche fehlgeschlagen: ${e.message}`);
       show($("#mp-error"), true);
       $("#mp-results").textContent = "";
     } finally {
@@ -2959,6 +3227,14 @@
       show(msgBox, true);
       return;
     }
+    if (cfg.mode === "upload") {
+      const problem = await packFileProblem(cfg.file);
+      if (problem) {
+        setText(msgBox, problem);
+        show(msgBox, true);
+        return;
+      }
+    }
     const name = $("#mp-create-name").value.trim() || null;
     const memory = $("#mp-create-memory").value || null;
     btn.disabled = true;
@@ -2972,9 +3248,8 @@
         if (name) form.append("name", name);
         if (memory) form.append("memory", memory);
         form.append("accept_eula", "true");
-        const result = await api("/api/instances/from-pack-upload", {
-          method: "POST", body: form,
-        });
+        const result = await apiUpload("/api/instances/from-pack-upload", form,
+          (pct) => { btn.textContent = `Lade hoch… ${pct} %`; });
         created = result.instance;
         jobId = result.job.id;
         $("#mp-upload-file").value = "";

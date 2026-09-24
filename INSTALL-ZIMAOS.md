@@ -45,7 +45,9 @@ sudo stat -c '%g' /var/run/docker.sock   # Ausgabe notieren
 
 - **DASHBOARD_API_KEY:** setzen (z. B. `openssl rand -hex 32`) — schützt
   alle API-Routen außer `/api/health`. Leer = alle Routen offen (nur LAN ok).
-- **CF_API_KEY:** CurseForge-API-Key (console.curseforge.com), optional.
+- **CF_API_KEY:** CurseForge-API-Key (console.curseforge.com), optional —
+  ohne Key funktionieren Modrinth-Suche/-Installation und der
+  Modpack-Upload (CF-.zip) weiterhin (Details: SERVER-SETUP.md §2).
 - **TZ:** für Scheduler-Zeiten (täglicher Neustart, geplante Backups)
   entkommentieren, sonst gilt UTC.
 - **Port 8080 belegt?** Host-Seite des `ports`-Eintrags ändern.
@@ -68,7 +70,7 @@ services:
     environment:
       DASHBOARD_API_KEY: ""     # setzen! z. B. `openssl rand -hex 32`
       CORS_ORIGINS: "*"
-      CF_API_KEY: ""            # CurseForge-API-Key (console.curseforge.com)
+      CF_API_KEY: ""            # optional — ohne Key: Modrinth + Modpack-Upload ok
       INSTANCES_DIR: "/data/instances"
       INSTANCES_PORT_BASE: "25570"
       INSTANCES_MEMORY: "2G"

@@ -59,6 +59,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
     Modpacks
   </button>
+  <button class="tab" data-tab="upload">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+    Upload
+  </button>
   <button class="tab" data-tab="stats">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
     Statistik
@@ -821,6 +825,81 @@
         </div>
           <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Mit Ziel-Instanz: MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt · Ohne Ziel: neuer Server direkt aus dem Pack</p>
           <div id="mp-upload-error" class="err hidden"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Modpack-Upload (eigener Tab: Upload + Optionen + Ergebnis) -->
+  <section id="tab-upload" class="panel">
+    <div class="card">
+      <h2>Modpack hochladen</h2>
+      <p class="muted small">
+        Unterstützt: <strong>.mrpack</strong> (Modrinth-Export) und
+        <strong>.zip</strong> (CurseForge-Export mit <code>manifest.json</code> —
+        auch Server-Pack-Zips). CurseForge-Mods werden ohne API-Key über den
+        öffentlichen Website-Redirect nachgeladen; Details: SERVER-SETUP.md §2.
+      </p>
+      <div class="upload-row">
+        <input id="up-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
+        <button id="up-install-btn" class="btn primary admin-only" disabled>Installieren</button>
+      </div>
+      <p id="up-file-info" class="muted small hidden"></p>
+      <div class="form-grid">
+        <label>Installationsziel
+          <select id="up-target-select">
+            <option value="">Neuen Server aus dem Pack erstellen</option>
+          </select>
+          <span class="muted small">Instanz wählen = Modpack in dieser Instanz ersetzen/aktualisieren · leer = neuer Server direkt aus dem Pack</span>
+        </label>
+        <div id="up-existing-opts">
+          <label class="check">
+            <input type="checkbox" id="up-auto-version" checked>
+            MC-Version/Loader automatisch anpassen (sonst Abbruch bei Abweichung)
+          </label>
+          <label class="check">
+            <input type="checkbox" id="up-force">
+            Bestehendes Modpack ohne Nachfrage überschreiben
+          </label>
+        </div>
+        <div id="up-new-opts" class="hidden">
+          <label>Servername
+            <input id="up-name" type="text" maxlength="64" autocomplete="off"
+                   placeholder="wird aus dem Dateinamen abgeleitet">
+          </label>
+          <label>RAM
+            <select id="up-memory">
+              <option value="">Standard (2G)</option>
+              <option value="1G">1G</option>
+              <option value="2G">2G</option>
+              <option value="4G">4G</option>
+              <option value="6G">6G</option>
+              <option value="8G">8G</option>
+              <option value="12G">12G</option>
+              <option value="16G">16G</option>
+            </select>
+            <span class="muted small">Richtwerte: leichte Modpacks 4–6G · mittlere 6–10G ·
+              schwere (ATM, GT:NH) 10–16G+
+            </span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="up-eula">
+            Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
+          </label>
+        </div>
+      </div>
+      <div id="up-progress" class="hidden">
+        <div class="metric-head"><span id="up-phase" class="muted small"></span><span id="up-pct" class="muted small"></span></div>
+        <div class="bar"><div id="up-bar" class="bar-fill" style="width:0%"></div></div>
+      </div>
+      <div id="up-error" class="err hidden"></div>
+      <div id="up-summary" class="hidden">
+        <h3>Ergebnis</h3>
+        <p id="up-summary-text" class="small"></p>
+        <p id="up-skipped-list" class="muted small hidden"></p>
+        <div id="up-failed-box" class="err hidden">
+          <p id="up-failed-text" class="small"></p>
+          <ul id="up-failed-list" class="small"></ul>
+        </div>
       </div>
     </div>
   </section>

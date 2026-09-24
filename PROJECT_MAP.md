@@ -208,7 +208,10 @@ Checkliste, Dashboard-Schnellstart).
     (.part→rename, SHA1-Prüfung, CF-CDN-Host-Check), alte Datei entfernt,
     deaktiviert-Zustand (.disabled) bleibt erhalten; Fehler je Mod sammeln
     sich in job.summary, brechen den Job nicht ab
-  - security.py – Dateinamen-/Pfad-Validierung (Anti-Path-Traversal),
+  - security.py – Dateinamen-/Pfad-Validierung (Anti-Path-Traversal;
+    _SAFE_NAME_RE erlaubt reale CurseForge-Dateinamen mit Klammern/Leer-
+    zeichen/Interpunktion, lehnt Pfadtrenner/Steuerzeichen/versteckte
+    Dateien ab),
     auth_guard: kombinierter Guard aller /api-Routen (außer /api/health und
     /api/auth/*) — DASHBOARD_API_KEY (X-API-Key) = Admin, Session-Cookie =
     Rolle aus Token, gar nichts konfiguriert = anonym Admin (Bestandsver-
@@ -341,6 +344,11 @@ Checkliste, Dashboard-Schnellstart).
   erstellbar über den „Neuer Server“-Button bzw. den Erstellen-Dialog mit
   Name/Versionswahl/RAM/EULA; Filter nach MC-Version und Loader;
    Suchergebnisse laden automatisch beim Tab-Öffnen),
+   Upload-Tab (Modpack-Archiv .mrpack/.zip hochladen mit ZIP-Vorprüfung,
+   Upload-Fortschritt in Prozent; Ziel wählbar: bestehende Instanz
+   (Optionen: Auto-Version an/aus, Modpack überschreiben) oder neuer Server
+   (Name/RAM/EULA); Ergebnis-Kasten mit installierten/übersprungenen und
+   bei Fehlern der vollständigen failed-Datei-Liste aus job.failed),
    Statistik-Tab (persistenter Verlauf: CPU/RAM-Gesamt-Charts + Spieler-
    Linien je Instanz mit Legende, Zeitraum 6 h/24 h/7 Tage/30 Tage,
    serverseitig gebuckett über /api/history; SVG-Charts ohne Framework;

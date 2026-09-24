@@ -5,9 +5,11 @@ from urllib.parse import urlsplit
 
 from fastapi import Header, HTTPException, Request
 
-# Erlaubte Mod-Dateinamen: einfache Zeichen, muss auf .jar enden;
-# ".disabled" markiert deaktivierte Mods (werden vom Server ignoriert)
-_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-()+\[\]]*\.jar(\.disabled)?$")
+# Erlaubte Mod-Dateinamen: enden auf .jar (".disabled" markiert deaktivierte
+# Mods, die der Server ignoriert). Reale CurseForge-Dateinamen enthalten oft
+# Klammern/Ausrufezeichen/Kommas/Leerzeichen — deshalb bewusst großzügig;
+# Pfadtrenner, Steuerzeichen und ".." werden separat abgelehnt (Traversal).
+_SAFE_NAME_RE = re.compile(r"^[^\x00-\x1f/\\]+\.(?:jar|jar\.disabled)$", re.IGNORECASE)
 # IDs/Versionen für Modrinth- und Versionsangaben
 _ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # Anti-SSRF: CurseForge-Downloads dürfen nur von diesen Hosts kommen
@@ -32,8 +34,13 @@ def validate_filename(name: str) -> str:
         raise HTTPException(status_code=400, detail="Ungültiger Dateiname")
     if "/" in name or "\\" in name or ".." in name or "\x00" in name:
         raise HTTPException(status_code=400, detail="Ungültiger Dateiname")
+    if name.startswith("."):
+        # Versteckte Dateien nicht als Mod akzeptieren (".hidden.jar")
+        raise HTTPException(status_code=400, detail="Ungültiger Dateiname")
     if not _SAFE_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Nur .jar-Dateien mit einfachen Namen erlaubt")
+        raise HTTPException(status_code=400,
+                            detail="Nur .jar-Dateien ohne Pfad- oder "
+                                   "Steuerzeichen erlaubt")
     return name
 
 

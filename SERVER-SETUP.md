@@ -88,6 +88,32 @@ Installationsskript. **Kein Vanilla-Server vorher aufsetzen.**
   (Beta-Label), damit „auto" nicht scheitert.
 - **EULA:** beim Instanz-Start automatisch gesetzt.
 
+### Weg B ohne CurseForge-API-Key (Modrinth oder Pack-Upload)
+
+CurseForge vergibt **keine neuen API-Keys mehr** — ohne `CF_API_KEY` sind die
+CF-Suche und die CF-Direktinstallation im Dashboard deaktiviert (Antwort 503,
+im UI gibt es dazu einen Hinweis). Zwei Wege funktionieren trotzdem ohne Key:
+
+- **Variante 1 — Modrinth:** Tab „Suche" bzw. „Modpacks" → Quelle
+  **Modrinth** wählen. Suche und Installation laufen vollständig ohne
+  Einrichtung; viele CurseForge-Projekte existieren auch dort.
+- **Variante 2 — CF-Pack hochladen:** Pack-Zip manuell besorgen:
+  - [curseforge.com](https://www.curseforge.com) → Pack-Seite → *Files* →
+    passende Datei → **Download** (Client-Zip mit `manifest.json`), oder
+  - auf derselben Datei-Seite unter *Additional Files* → **Server Pack**
+    (.zip) — meist mit weniger Client-only-Mods.
+  Beide Varianten laufen durch denselben Installer: Der Upload-Pfad akzeptiert
+  beides und lädt die im `manifest.json` gelisteten Mods selbst nach
+  (öffentlicher Website-Redirect, **kein API-Key nötig**). Alternativ: Export
+  aus dem CurseForge-Launcher.
+  Hochladen im Tab „Modpacks" (bestehende Instanz) oder über
+  **„Neuer Server aus Upload"** (neue Instanz).
+- **Einzel-Mods von CurseForge:** Datei auf der Website herunterladen →
+  Datei-Browser der Instanz → `mods/` hochladen.
+
+**Hinweis:** Fehlende Abhängigkeiten ggf. manuell ergänzen — CF-Relations
+(Abhängigkeitsliste) sind ohne API-Key nicht auflösbar.
+
 ---
 
 ## 3. Java-Version ↔ Minecraft-Version
