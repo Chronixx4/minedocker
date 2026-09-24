@@ -4,10 +4,12 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -299,6 +301,68 @@ class GameruleSetRequest(BaseModel):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Version + Update-Check (GitHub Releases, gecacht) für den Header-Chip
+# ---------------------------------------------------------------------------
+
+_GITHUB_RELEASES_URL = "https://api.github.com/repos/Chronixx4/minedocker/releases/latest"
+_RELEASE_CHECK_TTL = 1800.0  # 30 min: GitHub-Rate-Limit schonen (60/h pro IP)
+_release_cache: dict = {"checked": 0.0, "data": None}
+
+
+def _version_tuple(text: str):
+    """'v1.7.4' → (1, 7, 4); nicht numerische Versionen (dev, Commit-SHA)
+    ergeben None — dann lieber keinen Update-Hinweis als eine Falschwarnung."""
+    text = str(text).strip().lstrip("vV")
+    if not text or not text[0].isdigit():
+        return None
+    parts = []
+    for chunk in text.split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        if not digits:
+            return None
+        parts.append(int(digits))
+    return tuple(parts) or None
+
+
+def _release_is_newer(tag: str, current: str) -> bool:
+    tag_v, cur_v = _version_tuple(tag), _version_tuple(current)
+    if not tag_v or not cur_v:
+        return False
+    return tag_v > cur_v
+
+
+async def _update_check() -> dict | None:
+    """Letzte GitHub-Release-Version abrufen; mit Cache, wirft nie."""
+    now = time.monotonic()
+    if now - _release_cache["checked"] < _RELEASE_CHECK_TTL:
+        return _release_cache["data"]  # auch None-Fehlversuche werden gecacht
+    data = None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                _GITHUB_RELEASES_URL,
+                headers={"Accept": "application/vnd.github+json"})
+        if resp.status_code == 200:
+            body = resp.json()
+            tag = str(body.get("tag_name") or "")
+            data = {
+                "latest": tag,
+                "url": body.get("html_url"),
+                "available": _release_is_newer(tag, settings.app_version),
+            }
+    except Exception:
+        data = None  # GitHub nicht erreichbar → kein Update-Hinweis
+    _release_cache.update(checked=now, data=data)
+    return data
+
+
+@api.get("/meta")
+async def app_meta():
+    """Versionsinfo + Update-Check für das Header-Chip."""
+    return {"version": settings.app_version, "update": await _update_check()}
 
 
 # ---------------------------------------------------------------------------

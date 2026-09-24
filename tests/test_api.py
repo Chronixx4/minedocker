@@ -15,6 +15,34 @@ def _wait_job_done(job_id: str, timeout: float = 5.0):
     return modrinth.get_job(job_id)
 
 
+class TestAppMeta:
+    def test_meta_liefert_version_und_gecachten_update_check(self, client, monkeypatch):
+        from app import main
+        monkeypatch.setattr(main, "_release_cache", {
+            "checked": time.monotonic(),  # frisch gecacht → kein GitHub-Aufruf
+            "data": {"latest": "v99.0.0",
+                     "url": "https://example.com/releases",
+                     "available": True},
+        })
+        resp = client.get("/api/meta")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["version"] == settings.app_version
+        assert data["update"]["latest"] == "v99.0.0"
+        assert data["update"]["available"] is True
+
+    def test_version_vergleich(self):
+        from app.main import _release_is_newer, _version_tuple
+        assert _version_tuple("v1.7.4") == (1, 7, 4)
+        assert _version_tuple("1.10") == (1, 10)
+        assert _version_tuple("dev") is None
+        assert _version_tuple("main-abc1234") is None
+        assert _release_is_newer("v1.8.0", "1.7.4") is True
+        assert _release_is_newer("v1.7.4", "v1.7.4") is False
+        assert _release_is_newer("v1.6.0", "v1.7.4") is False
+        assert _release_is_newer("main-abc1234", "1.7.4") is False
+
+
 class TestGrundrouten:
     def test_health_ohne_auth(self, client):
         resp = client.get("/api/health")

@@ -26,8 +26,17 @@
     if (state.apiKey) headers["X-API-Key"] = state.apiKey;
     let res;
     try {
-      res = await fetch(path, Object.assign({}, opts, { headers }));
+      // Abfragen ohne Body: 60-s-Deckel, sonst läuft der Ladespinner ewig,
+      // wenn eine Verbindung lautlos stirbt (Uploads bleiben ausgenommen).
+      const signal = opts.signal
+        || (opts.body ? undefined : AbortSignal.timeout(60000));
+      res = await fetch(path, Object.assign({}, opts, { headers, signal }));
     } catch (e) {
+      if (e?.name === "TimeoutError") {
+        throw Object.assign(
+          new Error("Zeitüberschreitung — der Anbieter antwortet nicht (erneut versuchen)"),
+          { status: 0 });
+      }
       throw Object.assign(new Error("Server nicht erreichbar"), { status: 0 });
     }
     if (res.status === 401) {
@@ -242,6 +251,21 @@
 
   function reloadAfterAuth() {
     location.reload();
+  }
+
+  /* ---------- Version + Update-Hinweis (Header-Chip) ---------- */
+  async function loadAppMeta() {
+    try {
+      const data = await api("/api/meta");
+      setText($("#app-version"), data.version || "–");
+      const upd = data.update;
+      if (upd?.available) {
+        const el = $("#update-badge");
+        if (upd.url) el.href = upd.url;
+        setText(el, `Update verfügbar: ${upd.latest}`);
+        show(el, true);
+      }
+    } catch (e) { /* nicht erreichbar/abgemeldet: Chip unverändert lassen */ }
   }
 
   async function initAuth() {
@@ -1167,6 +1191,7 @@
   initAuth().then((authorized) => {
     state.pollingAllowed = authorized;
     if (authorized) startPolling();
+    loadAppMeta();
   });
 
   document.querySelectorAll("#ov-filter .seg-btn").forEach((btn) => {

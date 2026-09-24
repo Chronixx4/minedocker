@@ -11,6 +11,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Angezeigte Version im Dashboard (Release-Workflow setzt das Build-Arg,
+# z. B. APP_VERSION=v1.7.5); Default für lokale Builds: dev
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 WORKDIR /app
 
 # tzdata: ohne das Paket hätte TZ (z. B. Europe/Berlin für Scheduler-Zeiten)

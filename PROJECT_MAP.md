@@ -401,6 +401,9 @@ Checkliste, Dashboard-Schnellstart).
 
 ## Wichtige Endpunkte
 - GET /api/health, GET /api/settings (Legacy-Felder für Bestands-APIs)
+- GET /api/meta – Version (env APP_VERSION, im Image per Build-Arg) +
+  Update-Check gegen GitHub-Releases (30-min-Cache, wirft nie;
+  nicht-parsebare Versionen wie dev/main-SHA erzeugen keinen Hinweis)
 - GET /api/status – Docker-Ressourcen (CPU/RAM) aller laufenden MC-Container
 - GET /api/mods, DELETE /api/mods/{filename}  (Legacy: zentraler mods-Ordner, ohne UI)
 - GET /api/modrinth/search, POST /api/modrinth/download, GET /api/modrinth/jobs/{id}

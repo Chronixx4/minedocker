@@ -38,6 +38,9 @@ class Settings:
             if token.strip()
         ]
         self.user_agent = "mc-dashboard/1.0 (self-hosted Minecraft admin panel)"
+        # Angezeigte Dashboard-Version (im Image per Build-Arg gesetzt,
+        # lokal "dev"); Basis für den Update-Check gegen GitHub-Releases.
+        self.app_version = os.getenv("APP_VERSION", "dev").strip() or "dev"
         # Multi-Server: separater Speicherort + Port-Bereich pro Instanz
         self.instances_dir = Path(os.getenv("INSTANCES_DIR", "/data/instances")).resolve()
         self.instances_port_base = int(os.getenv("INSTANCES_PORT_BASE", "25570"))
