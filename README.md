@@ -103,7 +103,7 @@ ZimaOS-UI gibt es eine angepasste Import-YAML ohne Build-Schritt und ohne
 | `FILEBROWSER_MAX_UPLOAD_MB` | `300` | Upload-Limit je Datei im Datei-Browser |
 | `CORS_ORIGINS` | `*` | Bei Reverse-Proxy auf die echte Origin einschränken |
 | `CF_API_KEY` | *(leer)* | CurseForge-API-Key für Mod-/Modpack-Suche ([console.curseforge.com](https://console.curseforge.com)). **Optional:** Ohne Key sind CF-Suche und -Direktinstallation deaktiviert (503) — Modrinth-Suche/-Installation und der Modpack-Upload (CF-.zip) funktionieren weiterhin ohne Key (→ SERVER-SETUP.md §2). |
-| `CF_CLIENT_ONLY_MODS` | *(leer)* | Zusätzliche Muster (Komma-Liste) für Client-only-Mods, die beim CF-Pack-Upload übersprungen werden — ergänzt die eingebaute Liste (Sodium, Iris, Embeddium, Rubidium, Oculus, Magnesium, Nvidium; diese crashen Server beim Start) |
+| `CF_CLIENT_ONLY_MODS` | *(leer)* | Zusätzliche Muster (Komma-Liste) für Client-only-Mods, die beim CF-Pack-Upload übersprungen werden — ergänzt die eingebaute Liste (u. a. Sodium, Iris, Embeddium, Rubidium, Oculus, Magnesium, Nvidium, Dark Mode Everywhere, Toast Control, Mouse Tweaks, Controlling; diese sind auf Servern nutzlos bzw. crashen beim Start) |
 | `INSTANCES_DIR` | `/data/instances` | Instanz-Ordner im Dashboard-Container |
 | `INSTANCES_PORT_BASE` | `25570` | Erster Spielport für neue Instanzen |
 | `INSTANCES_MEMORY` | `2G` | Default-Heap pro Instanz |

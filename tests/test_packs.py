@@ -904,7 +904,9 @@ class TestCurseForgeDownload:
     def test_client_only_mod_wird_uebersprungen(self, tmp_path):
         for jar_name in ("sodium-0.8.13+mc1.21.1.jar",
                          "embeddium-plus-1.0.0.jar",
-                         "Iris-1.8.0+mc1.21.1.jar"):
+                         "Iris-1.8.0+mc1.21.1.jar",
+                         "DarkModeEverywhere-1.21.1-1.1.2.jar",
+                         "ToastControl-1.21.1-9.0.1.jar"):
             def handle(request: httpx.Request, _name=jar_name):
                 if request.url.path.endswith("/download"):
                     return httpx.Response(302, headers={

@@ -113,10 +113,18 @@ im UI gibt es dazu einen Hinweis). Zwei Wege funktionieren trotzdem ohne Key:
 
 **Hinweis:** Fehlende Abhängigkeiten ggf. manuell ergänzen — CF-Relations
 (Abhängigkeitsliste) sind ohne API-Key nicht auflösbar. Bekannte
-Client-only-Rendermods (Sodium/Iris/Embeddium/Rubidium/Oculus/Magnesium/
-Nvidium — diese crashen den Server beim Start) werden beim CF-Pack-Upload
-automatisch übersprungen; weitere Muster lassen sich per Env-Variable
-`CF_CLIENT_ONLY_MODS` ergänzen (Komma-Liste, Details README).
+Client-only-Mods (Sodium/Iris/Embeddium/Rubidium/Oculus/Magnesium/Nvidium
+sowie strikt client-seitige UI-Mods wie Dark Mode Everywhere, Toast
+Control, Mouse Tweaks, Controlling … — viele davon crashen den Server beim
+Start) werden beim CF-Pack-Upload automatisch übersprungen; weitere Muster
+lassen sich per Env-Variable `CF_CLIENT_ONLY_MODS` ergänzen
+(Komma-Liste, Details README).
+
+**Falls der Server trotzdem mit „… has failed to load correctly“
+crasht:** Die Fehlerzeile nennt die betroffene Mod — sie lässt sich im
+Server-Tab (Mods-Liste → Deaktivieren) entfernen, oder das Dateinamen-
+Muster kommt in `CF_CLIENT_ONLY_MODS`. Die Logs aktualisieren sich im
+Dashboard auch bei Crash-Loops automatisch weiter.
 
 ---
 

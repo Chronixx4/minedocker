@@ -47,9 +47,13 @@ _CF_RETRY_DELAY = 1.0  # Basis-Pause in Sekunden (skaliert mit Versuchsnr.)
 
 # Bekannte Client-only-Rendermods, die einen Server beim Start abschießen
 # (Sodium & Co. greifen beim Pre-Launch nach LWJGL — existiert serverseitig
-# nicht). CurseForge-Manifeste enthalten keine Server/Client-Info, daher
-# kann das nur über eine Muster-Liste gelöst werden.
+# nicht). CurseForge-Manifeste enthalten keine Server/Client-Info und
+# neoforge.mods.toml keinen Seiten-Marker für die Mod selbst, daher kann
+# das nur über eine Muster-Liste gelöst werden. Liste = häufige Crasher
+# plus strikt client-seitige UI-/Render-Mods (Skip ist für Server immer
+# ungefährlich); zusätzliche Muster via CF_CLIENT_ONLY_MODS.
 _CLIENT_ONLY_PATTERNS = (
+    # Render-/Performance-Mods mit Server-Crash
     "sodium",      # auch sodium-extra, reeses-sodium-options, sodiumoptionsapi
     "embeddium",   # auch embeddium-plus/-extras
     "rubidium",    # auch rubidium-extra
@@ -57,6 +61,19 @@ _CLIENT_ONLY_PATTERNS = (
     "oculus",
     "iris",
     "nvidium",
+    # Strikt client-seitige UI-/QoL-Mods (nutzlos auf Servern, teils Crasher)
+    "darkmodeeverywhere", "dark-mode-everywhere",
+    "rebindnarrator", "rebind-narrator", "rebind_narrator",
+    "toastcontrol", "toast-control",
+    "mousetweaks", "mouse-tweaks",
+    "inventoryprofilesnext", "inventory-profiles-next",
+    "inventoryessentials", "inventory-essentials",
+    "3dskinlayers", "3d-skin-layers",
+    "notenoughanimations", "not-enough-animations",
+    "dynamicfps", "dynamic-fps",
+    "controlling",
+    "cullleaves", "cull-leaves", "culllessleaves", "cull-less-leaves",
+    "physics-mod", "physicsmod",
 )
 
 # Loader-Präferenz bei mrpack-Versionen mit mehreren Loadern
