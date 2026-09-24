@@ -10,11 +10,14 @@ Funktioniert komplett ohne neue Laufzeit-Abhängigkeiten (stdlib):
   darf den ersten Admin anlegen. Atomar geschrieben (tmp + replace).
 - Passwort: hashlib.scrypt (n=2^14, r=8, p=1, 32-Byte-Salt, 32-Byte-Hash),
   mindestens 8 Zeichen. Username: ^[A-Za-z0-9_.-]{1,32}$.
-- Session: base64url(JSON {u, r, exp}) + "." + HMAC-SHA256-Signatur mit dem
+- Session: base64url(JSON {u, r, exp, v}) + "." + HMAC-SHA256-Signatur mit dem
   Secret aus {INSTANCES_DIR.parent}/.auth_secret (64 hex, 0600, einmalig
-  generiert — gleiche Idee wie .rcon_salt). Cookie 'mcd_session' (HttpOnly,
-  SameSite=Strict, Pfad /, 30 Tage). Ohne CSRF-Token: SameSite=Strict plus
-  same-origin Frontend blockt Cross-Site-POSTs.
+  generiert — gleiche Idee wie .rcon_salt). v = session_version des
+  Benutzers: Passwort-/Rollen-Änderung erhöhen die Version und machen
+  ausstehende Token sofort ungültig (kein 30-Tage-Nachleuchten); gelöschte
+  Benutzer verlieren ihre Sessions damit ebenfalls. Cookie 'mcd_session'
+  (HttpOnly, SameSite=Strict, Pfad /, 30 Tage). Ohne CSRF-Token:
+  SameSite=Strict plus same-origin Frontend blockt Cross-Site-POSTs.
 - Lockout in-memory: 10 Fehlversuche je Username → 5 Minuten Sperre; ein
   Dashboard-Neustart setzt die Sperrliste zurück (Homelab: bewusst
   akzeptiert, nicht persistiert). Login-Fehler mit konstantem Delay, damit
@@ -181,6 +184,19 @@ def verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
     return hmac.compare_digest(digest, expected)
 
 
+def user_session_version(user: dict | None) -> int:
+    """session_version eines Benutzer-Eintrags (fehlend/defekt = 0)."""
+    try:
+        return int((user or {}).get("session_version") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _bump_session_version(user: dict) -> None:
+    """session_version erhöhen — alle ausgestellten Token werden ungültig."""
+    user["session_version"] = user_session_version(user) + 1
+
+
 def find_user(username: str) -> dict | None:
     username = (username or "").strip().lower()
     for user in list_users():
@@ -240,6 +256,8 @@ def update_user(username: str, role: str | None = None,
     if not changed:
         raise HTTPException(status_code=400,
                             detail="Keine Änderungen übergeben (role/password)")
+    # Rollen-/Passwort-Änderung: ausstehende Sessions sofort invalidieren
+    _bump_session_version(user)
     save_users(users)
     return {"username": user["username"], "role": user["role"],
             "created": user.get("created"), "changed": changed}
@@ -284,6 +302,9 @@ def change_own_password(username: str, current: str, new_password: str) -> dict:
         if str(entry.get("username") or "").lower() == username.lower():
             entry["salt"] = salt_hex
             entry["scrypt_hash"] = hash_hex
+            # Eigene andere Sessions invalidieren; die Route reicht dafür
+            # einen frischen Token zurück (erfunden nach dem Bump).
+            _bump_session_version(entry)
             break
     save_users(users)
     return {"username": username, "changed": ["password"]}
@@ -345,14 +366,27 @@ def _b64url_decode(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + padding)
 
 
+def _token_version(data: dict) -> int:
+    try:
+        return int(data.get("v") or 0)
+    except (TypeError, ValueError):
+        return -1  # defekte Version → nie gültig
+
+
 def create_token(username: str, role: str, ttl: int = SESSION_TTL,
-                 now: float | None = None) -> str:
-    """base64url(json{u, r, exp}).hmac — zustandslose Session."""
+                 now: float | None = None, version: int | None = None) -> str:
+    """base64url(json{u, r, exp, v}).hmac — Session mit Benutzer-Version.
+    Die Version wird aus users.json gelesen (Benutzer unbekannt = 0), damit
+    nach Rollen-/Passwort-Änderung ausgestellte Token nicht mehr gelten."""
     username = validate_username(username)
     validate_role(role)
     secret = ensure_secret()
+    if version is None:
+        user = find_user(username)
+        version = user_session_version(user) if user else 0
     payload = json.dumps(
-        {"u": username, "r": role, "exp": int((now or time.time()) + ttl)},
+        {"u": username, "r": role, "exp": int((now or time.time()) + ttl),
+         "v": int(version)},
         separators=(",", ":")).encode("utf-8")
     body = _b64url(payload)
     signature = hmac.new(secret, payload, hashlib.sha256).hexdigest()
@@ -360,7 +394,9 @@ def create_token(username: str, role: str, ttl: int = SESSION_TTL,
 
 
 def verify_token(token: str, now: float | None = None) -> dict | None:
-    """Token prüfen (Signatur + Ablauf). Rückgabe {u, r, exp} oder None."""
+    """Token prüfen (Signatur + Ablauf + Benutzer-Version/-Existenz).
+    Rückgabe {u, r, exp, v} oder None. Ohne Benutzerdatei (kein Login
+    aktiv) entfällt der Benutzer-Abgleich (Bestandsverhalten)."""
     if not token or token.count(".") != 1:
         return None
     body, signature = token.split(".", 1)
@@ -388,6 +424,13 @@ def verify_token(token: str, now: float | None = None) -> dict | None:
             return None
     except (TypeError, ValueError):
         return None
+    if login_active():
+        user = find_user(data["u"])
+        # Benutzer gelöscht, Version geändert (Passwort/Rolle) oder Rolle im
+        # Token nicht mehr aktuell → Session sofort ungültig
+        if user is None or user_session_version(user) != _token_version(data) \
+                or user.get("role") != data.get("r"):
+            return None
     return data
 
 
@@ -524,6 +567,7 @@ __all__ = [
     "role_from_request",
     "setup_available",
     "update_user",
+    "user_session_version",
     "users_path",
     "validate_password",
     "validate_role",

@@ -25,6 +25,7 @@ from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
 from . import history as history_mod
+from . import icon as icon_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
 from . import updates as updates_mod
@@ -212,6 +213,13 @@ class RestartScheduleModel(BaseModel):
     warn_minutes: int | None = Field(default=None, ge=0, le=30)
 
 
+class StopScheduleModel(BaseModel):
+    """Täglicher Stopp zur Uhrzeit (Container-Lokalzeit) mit RCON-Vorwarnung."""
+    enabled: bool | None = None
+    time: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    warn_minutes: int | None = Field(default=None, ge=0, le=30)
+
+
 class BackupScheduleModel(BaseModel):
     """Zeitgesteuertes Backup je Instanz mit eigener Rotation."""
     enabled: bool | None = None
@@ -227,9 +235,11 @@ class UpdateCheckScheduleModel(BaseModel):
 
 class ScheduleModel(BaseModel):
     """Zeitplan einer Instanz (Scheduler): Auto-Start beim Dashboard-Start,
-    täglicher Neustart, zeitgesteuerte Backups, geplanter Update-Check."""
+    täglicher Neustart, täglicher Stopp, zeitgesteuerte Backups, geplanter
+    Update-Check."""
     auto_start: bool | None = None
     restart: RestartScheduleModel | None = None
+    stop: StopScheduleModel | None = None
     backup: BackupScheduleModel | None = None
     update_check: UpdateCheckScheduleModel | None = None
 
@@ -512,11 +522,17 @@ async def auth_users_delete(request: Request, username: str):
 
 @app.post("/api/auth/change-password")
 async def auth_change_password(request: Request, req: AuthChangePasswordRequest):
-    """Eigenes Passwort ändern (Admin und Viewer) — aktuelles Passwort Pflicht."""
+    """Eigenes Passwort ändern (Admin und Viewer) — aktuelles Passwort Pflicht.
+    Die Änderung invalidiert alle ausgestellten Sessions; der Aufrufer bekommt
+    direkt einen frischen Token (bleibt eingeloggt)."""
     session = auth_mod.require_session(request)
     result = auth_mod.change_own_password(session["u"], req.current, req.password)
     logger.info("Passwort geändert: %s", result["username"])
-    return result
+    user = auth_mod.find_user(result["username"])
+    resp = JSONResponse(content=result)
+    if user:
+        _issue_session(resp, str(user["username"]), str(user.get("role") or "viewer"))
+    return resp
 
 
 @api.get("/settings")
@@ -885,6 +901,22 @@ async def _stream_upload(file: UploadFile, dest: Path, max_bytes: int,
     finally:
         await file.close()
     return written
+
+
+async def _read_capped(file: UploadFile, max_bytes: int,
+                       label: str) -> bytes:
+    """Datei in den Speicher lesen (Deckel gegen Speicher-Füllung);
+    schließt den Upload und wirft 413 bei Überschreitung."""
+    buf = bytearray()
+    try:
+        while chunk := await file.read(1024 * 1024):
+            buf.extend(chunk)
+            if len(buf) > max_bytes:
+                raise HTTPException(status_code=413,
+                                    detail=f"Datei zu groß (max {label})")
+    finally:
+        await file.close()
+    return bytes(buf)
 
 
 @api.get("/instances")
@@ -1699,17 +1731,9 @@ async def instance_datapacks_upload(instance_id: str, file: UploadFile = File(..
     except HTTPException:
         await file.close()
         raise
-    buf = bytearray()
-    try:
-        while chunk := await file.read(1024 * 1024):
-            buf.extend(chunk)
-            if len(buf) > datapacks_mod.UPLOAD_MAX_BYTES:
-                raise HTTPException(status_code=413,
-                                    detail="Datei zu groß (max 50 MiB)")
-    finally:
-        await file.close()
+    content = await _read_capped(file, datapacks_mod.UPLOAD_MAX_BYTES, "50 MiB")
     return await asyncio.to_thread(datapacks_mod.upload_datapack,
-                                   instance_id, filename, bytes(buf))
+                                   instance_id, filename, content)
 
 
 @api.post("/instances/{instance_id}/datapacks/enable")
@@ -1732,6 +1756,32 @@ async def instance_datapacks_delete(instance_id: str, name: str,
     instances.get_instance(instance_id)
     return await asyncio.to_thread(datapacks_mod.delete_datapack,
                                    instance_id, name, enabled)
+
+
+# ---------------------------------------------------------------------------
+# Server-Icon (server-icon.png, 64x64-PNG, Austausch auch bei laufender Instanz)
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/icon")
+async def instance_icon_get(instance_id: str):
+    instances.get_instance(instance_id)
+    if not await asyncio.to_thread(icon_mod.icon_exists, instance_id):
+        raise HTTPException(status_code=404, detail="Kein Server-Icon vorhanden")
+    return FileResponse(icon_mod.icon_path(instance_id), media_type="image/png")
+
+
+@api.put("/instances/{instance_id}/icon")
+async def instance_icon_put(instance_id: str, file: UploadFile = File(...)):
+    """Server-Icon setzen: nur 64x64-PNG (Minecraft skaliert nicht)."""
+    instances.get_instance(instance_id)
+    content = await _read_capped(file, icon_mod.ICON_MAX_BYTES, "1 MiB")
+    return await asyncio.to_thread(icon_mod.write_icon, instance_id, content)
+
+
+@api.delete("/instances/{instance_id}/icon")
+async def instance_icon_delete(instance_id: str):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(icon_mod.delete_icon, instance_id)
 
 
 # ---------------------------------------------------------------------------

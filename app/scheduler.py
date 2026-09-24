@@ -10,6 +10,9 @@ Features (je Instanz konfigurierbar über instance.json → 'schedule'):
   (0 = keine Vorwarnung). Verpasste Termine (Dashboard war z. B. unten)
   werden nur innerhalb eines 30-Minuten-Fensters nachgeholt, sonst
   übersprungen und für den nächsten Tag markiert.
+- Geplanter Stopp: täglich zur Uhrzeit schedule.stop.time die laufende
+  Instanz stoppen (gleiche Vorwarn-/Nachhol-Logik wie der Neustart) —
+  z. B. nachts automatisch herunterfahren.
 - Zeitgesteuerte Backups: alle schedule.backup.interval_hours ein
   'scheduled-*'-Snapshot (eigene Rotation, max. keep).
 - Geplanter Mod-Update-Check: alle schedule.update_check.interval_hours
@@ -36,7 +39,7 @@ logger = logging.getLogger("dashboard.scheduler")
 
 TICK_SECONDS = 30.0          # Dauer zwischen zwei Durchläufen
 _AUTO_START_RETRIES = 5      # Boot-Versuche, falls Docker noch nicht bereit ist
-_RESTART_GRACE_MINUTES = 30  # Nachlauf-Fenster für verpasste Neustart-Termine
+_GRACE_MINUTES = 30          # Nachlauf-Fenster für verpasste Termin-Aktionen
 
 STOP = threading.Event()
 _LOCK = threading.Lock()     # schützt Zustandsdatei + Tick gegen Überlappung
@@ -151,16 +154,20 @@ def _scheduled_restart(instance: dict) -> None:
     instances.set_status(instance_id, "running", None)
 
 
-def handle_restart(instance: dict, entry: dict, now: dt.datetime) -> list:
-    """Fällige Aktionen des geplanten Neustarts für eine Instanz.
-
-    entry ist der Zustands-Eintrag (wird mutiert): 'restart_last' = Datum des
-    letzten Feuertags, 'restart_warns' = gesendete Vorwarnstufen (Minuten).
-    Rückgabe: Liste erfolgter Aktionen ('warn' und/oder 'restart')."""
-    cfg = (instance.get("schedule") or {}).get("restart") or {}
+def _handle_daily(instance: dict, entry: dict, now: dt.datetime, section: str,
+                  label: str, fire, warn_fmt) -> list:
+    """Gemeinsame Termin-Logik für geplanten Neustart/Stopp (Abschnitt
+    'restart'/'stop'): HH:MM in Container-Lokalzeit, RCON-Vorwarnungen
+    ('say', Stufen warn_minutes und 1 Min vorher, nur bei laufendem Server),
+    Feuertag markieren bevor die Aktion läuft (Fehler wiederholen nicht im
+    30-s-Takt), verpasste Termine nur im Nachhol-Fenster (_GRACE_MINUTES)
+    nachgeholt. entry wird mutiert (Keys '{section}_last'/'{section}_warns').
+    Rückgabe: Liste erfolgter Aktionen ('warn' und/oder section).
+    fire(instance) führt die Aktion aus; wirft nicht nach außen."""
+    cfg = (instance.get("schedule") or {}).get(section) or {}
     if not cfg.get("enabled"):
         return []
-    raw = str(cfg.get("time") or instances.schedule_defaults("restart").get("time"))
+    raw = str(cfg.get("time") or instances.schedule_defaults(section).get("time"))
     try:
         hh, mm = (int(part) for part in raw.split(":", 1))
     except ValueError:
@@ -175,46 +182,94 @@ def handle_restart(instance: dict, entry: dict, now: dt.datetime) -> list:
 
     target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
     today = now.strftime("%Y-%m-%d")
-    fired_today = entry.get("restart_last") == today
+    fired_today = entry.get(f"{section}_last") == today
     actions: list = []
 
-    # Vorwarnungen: vor dem Termin, wenn heute noch nicht neu gestartet wurde
+    # Vorwarnungen: vor dem Termin, wenn heute noch nicht gefeuert wurde
     if not fired_today and now < target:
         stages = sorted({m for m in (warn_min, 1) if m > 0}) if warn_min > 0 else []
-        sent = set(entry.get("restart_warns") or [])
+        sent = set(entry.get(f"{section}_warns") or [])
         for stage in stages:
             if stage in sent:
                 continue
             if now >= target - dt.timedelta(minutes=stage):
                 if not runtime.is_running(instance):
                     continue  # keine Warnung ohne laufenden Server
-                if _rcon_say(instance, f"Server-Neustart in {stage} Minute(n) "
-                                       f"(geplant {raw} Uhr)"):
-                    entry.setdefault("restart_warns", []).append(stage)
+                if _rcon_say(instance, warn_fmt(stage, raw)):
+                    entry.setdefault(f"{section}_warns", []).append(stage)
                     actions.append("warn")
 
-    # Neustart am Termin (inkl. Nachlauf-Fenster); vor der Ausführung
+    # Aktion am Termin (inkl. Nachhol-Fenster); vor der Ausführung
     # markieren, damit ein Fehler nicht im 30-s-Takt wiederholt wird
     if now >= target and not fired_today:
-        entry["restart_last"] = today
-        entry["restart_warns"] = []
-        actions.append("restart")
-        if now - target <= dt.timedelta(minutes=_RESTART_GRACE_MINUTES):
+        entry[f"{section}_last"] = today
+        entry[f"{section}_warns"] = []
+        actions.append(section)
+        if now - target <= dt.timedelta(minutes=_GRACE_MINUTES):
             try:
                 if runtime.is_running(instance):
-                    logger.info("Geplanter Neustart: %s (%s Uhr)",
+                    logger.info("Geplanter %s: %s (%s Uhr)", label,
                                 instance.get("name"), raw)
-                    _scheduled_restart(instance)
+                    fire(instance)
                 else:
-                    logger.info("Geplanter Neustart übersprungen "
-                                "(Instanz läuft nicht): %s", instance.get("name"))
+                    logger.info("Geplanter %s übersprungen (Instanz läuft "
+                                "nicht): %s", label, instance.get("name"))
             except Exception:
-                logger.exception("Geplanter Neustart fehlgeschlagen: %s",
+                logger.exception("Geplanter %s fehlgeschlagen: %s", label,
                                  instance.get("name"))
         else:
-            logger.info("Geplanter Neustart verpasst (> %d Min nach Termin): %s",
-                        _RESTART_GRACE_MINUTES, instance.get("name"))
+            logger.info("Geplanter %s verpasst (> %d Min nach Termin): %s",
+                        label, _GRACE_MINUTES, instance.get("name"))
     return actions
+
+
+def handle_restart(instance: dict, entry: dict, now: dt.datetime) -> list:
+    """Fällige Aktionen des geplanten Neustarts für eine Instanz.
+
+    entry ist der Zustands-Eintrag (wird mutiert): 'restart_last' = Datum des
+    letzten Feuertags, 'restart_warns' = gesendete Vorwarnstufen (Minuten).
+    Rückgabe: Liste erfolgter Aktionen ('warn' und/oder 'restart')."""
+    return _handle_daily(
+        instance, entry, now, "restart", "Neustart", _scheduled_restart,
+        lambda stage, raw: f"Server-Neustart in {stage} Minute(n) "
+                           f"(geplant {raw} Uhr)")
+
+
+# ---------------------------------------------------------------------------
+# Geplanter Stopp (täglich, mit RCON-Vorwarnung)
+# ---------------------------------------------------------------------------
+
+def _scheduled_stop(instance: dict) -> None:
+    """Stoppt die Instanz (erwarteter Stop — der Watchdog meldet keinen
+    Crash). Fehler: Status 'error' + Crash-Alert, wie beim Neustart."""
+    instance_id = instance["id"]
+    try:
+        runtime.stop_instance(instance)
+    except RuntimeError as exc:
+        detail = f"Geplanter Stopp fehlgeschlagen: {exc}"
+        instances.set_status(instance_id, "error", detail)
+        watchdog.notify("crash",
+                        f"[mc-dashboard] Geplanter Stopp fehlgeschlagen: "
+                        f"{instance.get('name')} — {exc}")
+        raise RuntimeError(detail) from exc
+    instances.set_status(instance_id, "stopped", None)
+
+
+def _fire_scheduled_stop(instance: dict) -> None:
+    """Stopp-Aktion für _handle_daily: Watchdog-Stop vorher melden."""
+    watchdog.expect_stop(instance["id"])
+    _scheduled_stop(instance)
+
+
+def handle_stop(instance: dict, entry: dict, now: dt.datetime) -> list:
+    """Fällige Aktionen des geplanten Stopps für eine Instanz (gleiche
+    Termin-/Nachhol-Logik wie handle_restart). entry-Keys: 'stop_last' =
+    Datum des letzten Feuertags, 'stop_warns' = gesendete Vorwarnstufen.
+    Rückgabe: Liste erfolgter Aktionen ('warn' und/oder 'stop')."""
+    return _handle_daily(
+        instance, entry, now, "stop", "Stopp", _fire_scheduled_stop,
+        lambda stage, raw: f"Server stoppt in {stage} Minute(n) "
+                           f"(geplant {raw} Uhr)")
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +359,7 @@ def tick() -> dict:
     """Ein Scheduler-Durchlauf: alle Instanzen prüfen, fällige Aktionen
     ausführen, Zustand wegschreiben, verwaiste Einträge entfernen.
     Wirft nicht pro Instanz; Rückgabe: Zähler je Aktionstyp."""
-    counts = {"warn": 0, "restart": 0, "backup": 0, "update_check": 0}
+    counts = {"warn": 0, "restart": 0, "stop": 0, "backup": 0, "update_check": 0}
     now = _now()
     with _LOCK:
         state = load_state()
@@ -322,6 +377,9 @@ def tick() -> dict:
                 entries[instance_id] = entry = {}
             try:
                 for action in handle_restart(instance, entry, now):
+                    if action in counts:
+                        counts[action] += 1
+                for action in handle_stop(instance, entry, now):
                     if action in counts:
                         counts[action] += 1
                 if handle_backup(instance, entry, now):

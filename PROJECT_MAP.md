@@ -39,19 +39,20 @@ Checkliste, Dashboard-Schnellstart).
     Restore via worlds._patch_properties) auf den Dateistand gezwungen bzw.
     nicht neu angelegt; _PROPS_SCHEMA/properties_schema() liefert das Schema
     für den Formular-Editor),
-     update_settings() (PATCH: Name/RAM/jvm_opts/use_aikar/tags/port; RAM
-     jederzeit änderbar — auch bei laufender Instanz, wirksam beim nächsten
-     (Neu-)Start; RAM-Regex [1-9]\d{0,3}[GM] lehnt 0G/08G ab; JVM-Flags
-     einzeilig, max 2000 Zeichen, keine Steuerzeichen; Tags: 1-32 Zeichen
-     ^[A-Za-z0-9][A-Za-z0-9 _-]*$, max 8, Dedupe case-insensitive; Port-Wechsel:
-     nur bei gestoppter Instanz, fail-closed über runtime.running_state
-     (None = Docker nicht prüfbar → 503), Kollisionsprüfung ohne die eigene
-     Instanz UND Persistenz atomar unter _LOCK (TOCTOU-sicher), RCON-Port
-     wird mitverschoben; Route läuft via asyncio.to_thread (kein Event-Loop-
-     Blocking)), update_schedule() (PATCH: Zeitplan
-      mit Validierung — auto_start, restart {enabled, time HH:MM, warn_minutes
-      0-30}, backup {enabled, interval_hours 1-168, keep 1-20}, update_check
-      {enabled, interval_hours}; Merge: nur übergebene Felder), clone_instance()
+      update_settings() (PATCH: Name/RAM/jvm_opts/use_aikar/tags/port; RAM
+      jederzeit änderbar — auch bei laufender Instanz, wirksam beim nächsten
+      (Neu-)Start; RAM-Regex [1-9]\d{0,3}[GM] lehnt 0G/08G ab; JVM-Flags
+      einzeilig, max 2000 Zeichen, keine Steuerzeichen; Tags: 1-32 Zeichen
+      ^[A-Za-z0-9][A-Za-z0-9 _-]*$, max 8, Dedupe case-insensitive; Port-Wechsel:
+      nur bei gestoppter Instanz, fail-closed über runtime.running_state
+      (None = Docker nicht prüfbar → 503), Kollisionsprüfung ohne die eigene
+      Instanz UND Persistenz atomar unter _LOCK (TOCTOU-sicher), RCON-Port
+      wird mitverschoben; Route läuft via asyncio.to_thread (kein Event-Loop-
+      Blocking)), update_schedule() (PATCH: Zeitplan
+       mit Validierung — auto_start, restart {enabled, time HH:MM, warn_minutes
+       0-30}, stop {enabled, time HH:MM, warn_minutes 0-30}, backup {enabled,
+       interval_hours 1-168, keep 1-20}, update_check {enabled, interval_hours};
+       Merge: nur übergebene Felder), clone_instance()
       (Klon als Vorlage: kompletter Ordner ohne packs/instance.json, neuer
       ID/Port, 409 bei laufender Quelle, Zeitplan UND Tags werden übernommen),
      find_world_dir()/world_dir() (Welt-Erkennung über level-name aus
@@ -160,9 +161,13 @@ Checkliste, Dashboard-Schnellstart).
     Cache 2 s bzw. mtime-basiert), Passwort-Hashing scrypt (n=2^14, r=8,
     p=1, 32-Byte-Salt, min. 8 Zeichen), Username ^[A-Za-z0-9_.-]{1,32}$
     (keine ./-Duplikate), Rollen admin/viewer (max 50 Benutzer);
-    Session = base64url(JSON {u, r, exp}) + HMAC-SHA256 mit Secret aus
+    Session = base64url(JSON {u, r, exp, v}) + HMAC-SHA256 mit Secret aus
     /data/.auth_secret (64 hex, 0600, einmalig generiert, fail-closed bei
-    Schreib-/Lesefehlern), Cookie 'mcd_session' (HttpOnly, SameSite=Strict,
+    Schreib-/Lesefehlern); v = session_version des Benutzers —
+    Rollen-/Passwort-Änderung (update_user/change_own_password) erhöht
+    sie und macht ausgestellte Tokens sofort ungültig (verify_token prüft
+    bei aktivem Login zusätzlich Existenz, Version und Rolle des
+    Benutzers); Cookie 'mcd_session' (HttpOnly, SameSite=Strict,
     Pfad /, 30 Tage, kein CSRF-Token nötig — same-origin + CORS ohne
     credentials), Logout löscht nur den Cookie (zustandslose Tokens);
     In-Memory-Lockout: 10 Fehlversuche je Username → 5 min Sperre
@@ -173,6 +178,12 @@ Checkliste, Dashboard-Schnellstart).
     setup_available + api_key_required für Overlay/Setup-Fluss; Admin-
     Routen (users-Verwaltung) prüfen Rolle selbst (API-Key = Admin,
     anonym-Admin wenn nichts konfiguriert)
+  - icon.py – Server-Icon je Instanz (server-icon.png im Instanz-Ordner):
+    strikte stdlib-Validierung (PNG-Magic + IHDR exakt 64x64 Pixel —
+    Minecraft skaliert nicht; 400 mit Groesse-Hinweis, max 1 MiB), atomar
+    schreiben (tmp + os.replace), Austausch auch bei laufender Instanz
+    (Icon wird beim Ping gelesen), delete 404 wenn fehlt; get_instance-
+    Pflicht (404 für unbekannte Instanzen, kein Orphan-Ordner)
   - filebrowser.py – Datei-Browser je Instanz: Pfade relativ zum
     Instanz-Ordner (resolve()-Doppelprüfung gegen Traversal + Symlink-
     Escapes), Backslashes→Slashes, .. und Absolute abgelehnt, max 512
@@ -270,6 +281,10 @@ Checkliste, Dashboard-Schnellstart).
     Vorwarnungen warn_minutes davor + 1 Min vorher; verpasste Termine nur
     innerhalb 30 Min nachgeholt, sonst übersprungen; gleicher Ablauf wie die
     Restart-Route inkl. expect_stop, bei Fehlern Status 'error' + Crash-Alert),
+    geplanter Stopp (schedule.stop — gleiche Termin-/Vorwarn-/Nachhol-Logik
+    wie der Neustart, laufende Instanz wird am Termin gestoppt
+    (expect_stop + stop_instance), nicht laufende nur markiert; Keys
+    stop_last/stop_warns im Zustand),
     zeitgesteuerte Backups (alle interval_hours ein 'scheduled-*'-Snapshot
     via backups.scheduled_backup mit eigener Rotation auf keep; erstes Tick
     setzt nur die Fälligkeit), geplanter Mod-Update-Check (alle
@@ -308,11 +323,14 @@ Checkliste, Dashboard-Schnellstart).
   startet den Update-Job; Check läuft automatisch beim Öffnen des
   Detail-Dialogs),
     Welt-Box (Info, Download als .zip, Upload .zip/.tar.gz nur bei
-    gestoppter Instanz), JVM- & RAM-Box (RAM-Limit nachträglich änderbar —
+    gestoppter Instanz), Server-Icon-Box (Vorschau via authentifiziertem
+    Blob-Fetch, Upload .png exakt 64x64, Entfernen — admin-only), JVM- &
+    RAM-Box (RAM-Limit nachträglich änderbar —
     auch bei laufender Instanz, wirksam beim nächsten (Neu-)Start;
     Aikar-Checkbox + JVM_OPTS-Textarea, PATCH),
-   Zeitplan-Box (Auto-Start-Checkbox, täglicher Neustart mit Zeit + Vorwarn-
-    Minuten, Backup-Intervall + Behalte-Anzahl, Update-Check-Intervall,
+   Zeitplan-Box (Auto-Start-Checkbox, täglicher Neustart und täglicher
+    Stopp mit Zeit + Vorwarn-Minuten, Backup-Intervall + Behalte-Anzahl,
+    Update-Check-Intervall,
     PATCH schedule; Hinweise zu Container-Lokalzeit und 30-min-Nachhol-Fenster),
     kompakter Mod-Liste (Zusammenfassung aktiv/deaktiviert/Größe, Namensfilter,
     ein-/ausklappbar, eigene Scrollfläche, kurze An/Aus-Buttons,
@@ -429,12 +447,13 @@ Checkliste, Dashboard-Schnellstart).
   port?, accept_eula) – neuen Server aus hochgeladenem .mrpack/.zip erstellen
 - GET /api/catalog/mc-versions, GET /api/catalog/loaders?game_version=
 - GET/POST /api/instances, GET/PATCH-Update/DELETE /api/instances/{id}
-  (PATCH: name/memory/jvm_opts/use_aikar/tags/port/schedule — tags ist die
-  Tag-Liste (max 8, validiert), port der Spiel-Port (nur bei gestoppter
-  Instanz, RCON-Port = port+1000 wird mitreserviert); schedule ist der
-  Zeitplan {auto_start, restart{enabled,time,warn_minutes}, backup{enabled,
-  interval_hours,keep}, update_check{enabled,interval_hours}}, merge nur
-  übergebener Felder; Container-Status enthält
+   (PATCH: name/memory/jvm_opts/use_aikar/tags/port/schedule — tags ist die
+   Tag-Liste (max 8, validiert), port der Spiel-Port (nur bei gestoppter
+   Instanz, RCON-Port = port+1000 wird mitreserviert); schedule ist der
+   Zeitplan {auto_start, restart{enabled,time,warn_minutes}, stop{enabled,
+   time,warn_minutes}, backup{enabled, interval_hours,keep},
+   update_check{enabled,interval_hours}}, merge nur übergebener Felder;
+   Container-Status enthält
   started_at = letzter Container-Start, für die Uptime-Anzeige in der
   Übersicht; Detail liefert disk = Speicher-Aufschlüsselung),
   POST /api/instances/import (multipart: file=.zip/.tar.gz, name, loader,
@@ -479,6 +498,10 @@ Checkliste, Dashboard-Schnellstart).
 - POST .../mods/update {filenames?} – 'Alles aktualisieren' als Job
   (kind='update'; ohne Liste = alle mit update_available; 409 wenn nichts
   offen ist), Fortschritt über /api/jobs/{id}
+- GET/POST/DELETE /api/instances/{id}/icon – Server-Icon (server-icon.png):
+  GET FileResponse image/png (404 ohne Icon), PUT multipart file (nur
+  64x64-PNG, 400 sonst, 413 > 1 MiB), DELETE (404 ohne Icon); schreibend
+  admin-only via Rollen-Matrix, Austausch auch bei laufender Instanz
 - GET/POST .../backups, GET/DELETE .../backups/{name}, POST .../backups/{name}/restore,
   GET .../backups/{name}/download  (tar.gz-Snapshots in /data/backups/{id})
 - Runtime: Host-Pfad für Instanz-Binds wird autoritativ vom Docker-Daemon
@@ -578,11 +601,13 @@ Fehler-Toleranz), Sicherheits-Snapshots (pre-install/pre-restore inkl.
 Ausschlüsse/Rotation/Restore und Install-/Restore-Hooks), Job-Persistenz
 (Spiegeln/Restore/Abbruch-Markierung/Eviction/Verwaiste-Prune), Watchdog (Event-Handling inkl. erwarteter Stops, Alerts Discord/Telegram
 inkl. Ereignisfilter/Fehler-Toleranz, Event-Schleife mit Fake-Docker),
-Scheduler (Zeitplan-Validierung/Merge/Klon-Übernahme, PATCH schedule,
-Auto-Start mit Fake-Docker, geplanter Neustart mit Vorwarnungen/Nachhol-
-Fenster/gestoppter Instanz/fehlerhafter RCON, zeitgesteuerte Backups mit
-Rotation, Update-Check-Alerts inkl. Fehler-Toleranz, Zustandsdatei
-inkl. Defekt-Toleranz/Verwaisten-Prune, Loop-Stop),
+ Scheduler (Zeitplan-Validierung/Merge/Klon-Übernahme, PATCH schedule,
+ Auto-Start mit Fake-Docker, geplanter Neustart mit Vorwarnungen/Nachhol-
+ Fenster/gestoppter Instanz/fehlerhafter RCON, geplanter Stopp analog
+ (Vorwarnung/Termin/Nachhol-Fenster/Fehler→error+Alert/Klon/API-Patch),
+ zeitgesteuerte Backups mit
+ Rotation, Update-Check-Alerts inkl. Fehler-Toleranz, Zustandsdatei
+ inkl. Defekt-Toleranz/Verwaisten-Prune, Loop-Stop),
 Formular-Editor (Schema-Antwort, bool/enum/int-Validierung inkl.
 Normalisierung/Bereiche, verwaltete Keys auf Dateistand gezwungen/interne
 Aufrufer via managed_ok, unbekannte Keys frei), Tags (Erstellen/PATCH inkl.
@@ -596,10 +621,13 @@ Versions-ID → einmal pinnen), Pack-Update (400 ohne Pack, force-Rufe
 Modrinth/CF inkl. version_id/file_id, CF pinnt gewählte Datei-ID via
 resolve_pack 6-Tuple, End-to-End-Job mit Meta-Aktualisierung) in
 tests/test_new_features.py,
-Auth (users.json/Hash/Token, Setup nur einmal + API-Key-Pflicht, Login/
-Logout/me, Lockout nach 10 Fehlversuchen, Rollen-Matrix API-Key/Viewer/
-Admin inkl. 403-Matrix, abgelaufene Session, users-CRUD inkl. Selbst-/
-Letzter-Admin-Schutz, change-password, Cookie-Flags, health bleibt offen)
+ Auth (users.json/Hash/Token, Setup nur einmal + API-Key-Pflicht, Login/
+ Logout/me, Lockout nach 10 Fehlversuchen, Rollen-Matrix API-Key/Viewer/
+ Admin inkl. 403-Matrix, abgelaufene Session, users-CRUD inkl. Selbst-/
+ Letzter-Admin-Schutz, change-password, Cookie-Flags, health bleibt offen,
+ Session-Invalidierung: Versions-Bump bei Rollen-/Passwort-Änderung,
+ gelöschter Benutzer, defektes v im Token, Route-Ebene alter Cookie 401,
+ change-password liefert frischen Cookie)
 in tests/test_auth.py,
 Datei-Browser (Pfad-Normalisierung/Traversal/Symlink-Escape, geschützte
 Ziele server.properties/instance.json/packs, Liste/Text-Roundtrip/Binär-
@@ -612,9 +640,12 @@ SLP-Namen + RCON-Fallback, /api/players/playtime) in tests/test_playtime.py,
 Datapacks (Namens-Validierung, Liste aktiv/deaktiviert, Upload/Kollision,
 enable gestoppt/laufend mit RCON-Reihenfolge, disable/delete RCON-zuerst
 fail-closed bei RCON-Fehler, Routen, Viewer-403) in tests/test_datapacks.py,
-Gamerules (kuratierte Liste ohne Bedrock-only-Regeln, bool/int-Validierung
-inkl. Bereiche, Parser Listen-/Abfrage-Format, GET nur laufend 409,
-GET/POST mit Fake-RCON, Viewer-403) in tests/test_gamerules.py.
+ Gamerules (kuratierte Liste ohne Bedrock-only-Regeln, bool/int-Validierung
+ inkl. Bereiche, Parser Listen-/Abfrage-Format, GET nur laufend 409,
+ GET/POST mit Fake-RCON, Viewer-403) in tests/test_gamerules.py,
+ Server-Icon (PNG/IHDR-Validierung exakt 64x64 inkl. falscher Größe/kein
+ PNG/IHDR defekt, Write/Delete/Replace inkl. 404 unbekannte Instanz, Routen
+ GET/PUT/DELETE inkl. Viewer-403) in tests/test_icon.py.
 
 ## Bekannte Eigenheiten
 - mrpack-Format: aktuelle Packs tragen die MC-Version in dependencies.minecraft

@@ -1357,6 +1357,15 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
   border-top: 1px solid var(--border);
 }
 .upload-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.icon-preview {
+  width: 64px;
+  height: 64px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  image-rendering: pixelated;
+  flex: none;
+}
 .file-input { font: inherit; color: var(--muted); max-width: 100%; min-width: 0; }
 .file-input::file-selector-button {
   font: inherit;

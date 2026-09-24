@@ -387,17 +387,20 @@ def update_settings(instance_id: str, *, name=None, memory=None,
 
 _SCHEDULE_SECTIONS = {
     "restart": ("enabled", "time", "warn_minutes"),
+    "stop": ("enabled", "time", "warn_minutes"),
     "backup": ("enabled", "interval_hours", "keep"),
     "update_check": ("enabled", "interval_hours"),
 }
 _SCHEDULE_RANGES = {
     ("restart", "warn_minutes"): (0, 30, 5),
+    ("stop", "warn_minutes"): (0, 30, 5),
     ("backup", "interval_hours"): (1, 168, 6),
     ("backup", "keep"): (1, 20, 5),
     ("update_check", "interval_hours"): (1, 168, 24),
 }
 _SCHEDULE_DEFAULTS = {
     "restart": {"time": "04:00"},
+    "stop": {"time": "23:00"},
 }
 
 
@@ -416,8 +419,10 @@ def _validate_schedule_section(section: str, data: object) -> dict:
         elif key == "time":
             text = str(value or "").strip()
             if not _TIME_RE.match(text):
-                raise HTTPException(status_code=400,
-                                    detail="Neustart-Zeit muss 'HH:MM' sein (z. B. '04:00')")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Zeitplan '{section}': Zeit muss 'HH:MM' sein "
+                           f"(z. B. '04:00')")
             out[key] = text
         else:
             lo, hi, _default = _SCHEDULE_RANGES[(section, key)]

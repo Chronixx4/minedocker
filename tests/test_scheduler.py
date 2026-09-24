@@ -261,6 +261,129 @@ class TestRestart:
 
 
 # ---------------------------------------------------------------------------
+# Geplanter Stopp (Spiegel des Neustarts: Vorwarnung, Termin, Nachhol-Fenster)
+# ---------------------------------------------------------------------------
+
+class TestStop:
+    def _enabled(self, time="23:00", warn=5):
+        return {"stop": {"enabled": True, "time": time, "warn_minutes": warn}}
+
+    def test_vorwarnung_und_stopp(self, fake_docker, monkeypatch):
+        inst = _inst(schedule=self._enabled())
+        runtime.start_instance(inst)  # laufender Container (Fake)
+        sent = []
+        monkeypatch.setattr(scheduler, "_rcon_say",
+                            lambda i, msg: sent.append(msg) or True)
+
+        # 22:55 → nur die 5-Minuten-Warnung
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 22, 55, 0))
+        counts = scheduler.tick()
+        assert counts["warn"] == 1 and counts["stop"] == 0
+        assert len(sent) == 1 and "stoppt in 5 Minute" in sent[0]
+        # Gleicher Tick erneut → keine Doppelwarnung
+        assert scheduler.tick()["warn"] == 0
+        # 22:59 → 1-Minuten-Warnung
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 22, 59, 0))
+        assert scheduler.tick()["warn"] == 1
+        assert any("1 Minute" in m for m in sent)
+        # 23:00 → Stopp, Container ist aus
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 23, 0, 0))
+        counts = scheduler.tick()
+        assert counts["stop"] == 1
+        assert not runtime.is_running(inst)
+        assert instances.get_instance(inst["id"])["status"] == "stopped"
+        assert _state_entry(inst["id"])["stop_last"] == "2026-09-21"
+        # Gleicher Tag → kein erneuter Stopp
+        assert scheduler.tick()["stop"] == 0
+        # Nächster Tag zur Zeit → wieder Stopp (Instanz läuft nicht → nur Markierung)
+        _set_now(monkeypatch, dt.datetime(2026, 9, 22, 23, 0, 0))
+        assert scheduler.tick()["stop"] == 1
+
+    def test_kein_stopp_wenn_gestoppt(self, fake_docker, monkeypatch):
+        inst = _inst(schedule=self._enabled())
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 23, 0, 0))
+        counts = scheduler.tick()
+        assert counts["stop"] == 1  # markiert, aber ohne Container-Aktion
+        assert fake_docker.containers.run_kwargs is None
+        assert instances.get_instance(inst["id"])["status"] == "stopped"
+        assert _state_entry(inst["id"])["stop_last"] == "2026-09-21"
+
+    def test_verpasster_termin_wird_uebersprungen(self, monkeypatch):
+        inst = _inst(schedule=self._enabled(time="04:00"))
+        # Termin > 30 min vorbei → übersprungen, für heute markiert
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 10, 0, 0))
+        assert scheduler.tick()["stop"] == 1
+        assert _state_entry(inst["id"])["stop_last"] == "2026-09-21"
+
+    def test_stopp_binnen_nachhol_fenster(self, fake_docker, monkeypatch):
+        inst = _inst(schedule=self._enabled())
+        runtime.start_instance(inst)
+        # 20 min nach Termin → nachgeholt
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 23, 20, 0))
+        assert scheduler.tick()["stop"] == 1
+        assert not runtime.is_running(inst)
+        assert instances.get_instance(inst["id"])["status"] == "stopped"
+
+    def test_ohne_vorwarnung(self, fake_docker, monkeypatch):
+        inst = _inst(schedule=self._enabled(warn=0))
+        runtime.start_instance(inst)
+        sent = []
+        monkeypatch.setattr(scheduler, "_rcon_say",
+                            lambda i, msg: sent.append(msg) or True)
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 22, 55, 0))
+        counts = scheduler.tick()
+        assert counts["warn"] == 0 and sent == []
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 23, 0, 0))
+        assert scheduler.tick()["stop"] == 1
+        assert not runtime.is_running(inst)
+
+    def test_ungueltige_zeit_ignoriert(self, monkeypatch):
+        inst = instances.create_instance("Sched-Stopp-Kaputt", "fabric",
+                                         "1.21.4", accept_eula=True)
+        inst["schedule"] = {"stop": {"enabled": True, "time": "keine-uhrzeit"}}
+        instances.update_instance(inst)
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 23, 0, 0))
+        counts = scheduler.tick()
+        assert counts["stop"] == 0 and counts["warn"] == 0
+
+    def test_stopp_fehler_setzt_error_und_alert(self, fake_docker, monkeypatch):
+        inst = _inst(schedule=self._enabled())
+        runtime.start_instance(inst)
+        alerts = []
+        monkeypatch.setattr(watchdog, "notify",
+                            lambda event, msg: alerts.append(event))
+
+        def kaputt(i):
+            raise RuntimeError("Docker weg")
+
+        monkeypatch.setattr(runtime, "stop_instance", kaputt)
+        _set_now(monkeypatch, dt.datetime(2026, 9, 21, 23, 0, 0))
+        scheduler.tick()
+        assert instances.get_instance(inst["id"])["status"] == "error"
+        assert "crash" in alerts
+
+    def test_klon_uebernimmt_stopp(self):
+        inst = _inst(schedule=self._enabled())
+        klon = instances.clone_instance(inst["id"])
+        assert klon["schedule"]["stop"] == {"enabled": True, "time": "23:00",
+                                            "warn_minutes": 5}
+
+    def test_api_patch_stop(self, client):
+        inst = _inst()
+        r = client.patch(f"/api/instances/{inst['id']}", json={
+            "schedule": {"stop": {"enabled": True, "time": "22:30",
+                                  "warn_minutes": 3}}})
+        assert r.status_code == 200
+        sched = r.json()["schedule"]
+        assert sched["stop"] == {"enabled": True, "time": "22:30",
+                                 "warn_minutes": 3}
+        # Bereichsfehler (Pydantic-Deckel im API-Modell)
+        r = client.patch(f"/api/instances/{inst['id']}", json={
+            "schedule": {"stop": {"warn_minutes": 31}}})
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Zeitgesteuerte Backups
 # ---------------------------------------------------------------------------
 

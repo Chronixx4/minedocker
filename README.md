@@ -28,6 +28,8 @@ gestartet und verwaltet über das Dashboard.
   ein Wiederherstellungs-Snapshot angelegt (fail-closed)
 - **Welt-Verwaltung** — Welt als `.zip` herunterladen/hochladen, bestehende
   Server-Ordner importieren (`.zip`/`.tar.gz`), Instanzen klonen als Vorlage
+- **Server-Icon** — `server-icon.png` hochladen/entfernen (64×64-PNG), Austausch
+  auch bei laufender Instanz
 - **RCON-Konsole & Spielerverwaltung** — freie Befehle (Whitelist- oder Free-Modus),
   Whitelist-Editor mit UUID-Auflösung, op/kick/ban direkt aus der Übersicht
 - **Gamerule-Quick-Editor** — kuratierte Vanilla-1.21.x-Gamerules mit Toggles und
@@ -41,9 +43,12 @@ gestartet und verwaltet über das Dashboard.
   Tracking des Verlauf-Samplers (SLP-Spielerliste, RCON-Fallback)
 - **Login & Rollen** — Benutzer mit Admin/Viewer-Rolle (`users.json`, scrypt-Hash),
   Session-Cookie (HttpOnly, SameSite=Strict), Setup-Dialog für den ersten Admin,
-  Lockout nach 10 Fehlversuchen; `DASHBOARD_API_KEY` bleibt als Admin-Bypass
-- **Zeitplan je Instanz** — Auto-Start, täglicher Neustart mit Vorwarnung,
-  geplante Backups mit Rotation, geplanter Mod-Update-Check (Container-Lokalzeit)
+  Lockout nach 10 Fehlversuchen; Passwort-Änderung und Rollen-Downgrade
+  invalidieren ausgestellte Sessions sofort (Session-Version im Token);
+  `DASHBOARD_API_KEY` bleibt als Admin-Bypass
+- **Zeitplan je Instanz** — Auto-Start, täglicher Neustart und täglicher Stopp
+  (jeweils mit Vorwarnung), geplante Backups mit Rotation, geplanter Mod-
+  Update-Check (Container-Lokalzeit)
 - **Crash-Watchdog & Alerts** — erkennt abgestürzte Instanzen und meldet per
   Discord-Webhook oder Telegram (`crash`, `start`, `stop`, optional `update`)
 - **Statistik-Verlauf** — persistente CPU/RAM-/Spieler-Charts über 6 h bis 30 Tage
@@ -87,8 +92,9 @@ z. B. `/DATA/AppData/mc-dashboard/data`), `BACKUPS_DIR`, `DASHBOARD_HTTP_PORT`.
 
 ## ZimaOS / NAS-App-Import
 
-Das GitHub-Action `docker-publish.yml` baut bei jedem Push auf `main` das Image und
-pusht es nach `ghcr.io/chronixx4/minedocker:latest`. Für die Installation über die
+Das GitHub-Action `docker-publish.yml` baut bei jedem Push auf `main` das Image
+(amd64 **und** arm64) und pusht es nach `ghcr.io/chronixx4/minedocker:latest`.
+Für die Installation über die
 ZimaOS-UI gibt es eine angepasste Import-YAML ohne Build-Schritt und ohne
 `$`-Escapes (beides Eigenheiten des ZimaOS-Import-Dialogs):
 

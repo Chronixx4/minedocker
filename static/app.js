@@ -56,10 +56,11 @@
 
   // Upload mit Fortschrittsanzeige (fetch kennt keinen Upload-Progress → XHR).
   // Fehlverhalten wie api(): Error-Objekt mit .status und .message (Detail).
-  function apiUpload(path, form, onProgress) {
+  // method="PUT" z. B. für den Server-Icon-Upload.
+  function apiUpload(path, form, onProgress, method = "POST") {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", path);
+      xhr.open(method, path);
       if (state.apiKey) xhr.setRequestHeader("X-API-Key", state.apiKey);
       xhr.upload.onprogress = (ev) => {
         if (ev.lengthComputable && onProgress) {
@@ -2159,6 +2160,10 @@
     show($("#world-error"), false);
     $("#world-upload-file").value = "";
     $("#world-upload-btn").disabled = true;
+    // Server-Icon zurücksetzen
+    iconSetError("");
+    $("#icon-upload-file").value = "";
+    $("#icon-upload-btn").disabled = true;
     // Datei-Browser zurücksetzen (Wurzel der neuen Instanz laden)
     state.fb = { path: "", entries: [] };
     fbReload();
@@ -2191,6 +2196,7 @@
     if (state.cfgOpen) loadCfg();
     loadBackups();
     loadWorldInfo();
+    loadIconPreview();
   }
   function closeDetail() {
     state.detailId = null;
@@ -3561,6 +3567,91 @@
     }
   });
 
+  /* ---------- Server-Icon je Instanz (server-icon.png) ---------- */
+  function iconSetError(msg) {
+    setText($("#icon-error"), msg);
+    show($("#icon-error"), !!msg);
+  }
+
+  async function loadIconPreview() {
+    if (!state.detailId) return;
+    const img = $("#icon-preview");
+    const del = $("#icon-delete-btn");
+    URL.revokeObjectURL(img.src || "");
+    img.removeAttribute("src");
+    img.classList.add("hidden");
+    del.classList.add("hidden");
+    setText($("#icon-info"), "–");
+    iconSetError("");
+    try {
+      const headers = {};
+      if (state.apiKey) headers["X-API-Key"] = state.apiKey;
+      const res = await fetch(`/api/instances/${state.detailId}/icon`, { headers });
+      if (res.status === 401) showAuthOverlay();
+      if (res.status === 404) {
+        setText($("#icon-info"), "Kein Icon vorhanden (64×64-PNG hochladen).");
+        return;
+      }
+      if (!res.ok) throw Object.assign(new Error(`HTTP-Fehler ${res.status}`),
+                                       { status: res.status });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      img.src = url;
+      img.classList.remove("hidden");
+      del.classList.remove("hidden");
+      setText($("#icon-info"), `64×64 PNG · ${fmtBytes(blob.size)}`);
+    } catch (e) {
+      setText($("#icon-info"), "–");
+      iconSetError(`Icon nicht abrufbar: ${e.message}`);
+    }
+  }
+
+  $("#icon-reload").addEventListener("click", loadIconPreview);
+
+  $("#icon-upload-file").addEventListener("change", () => {
+    $("#icon-upload-btn").disabled = !$("#icon-upload-file").files.length;
+    iconSetError("");
+  });
+
+  $("#icon-upload-btn").addEventListener("click", async () => {
+    const file = $("#icon-upload-file").files[0];
+    if (!file || !state.detailId) return;
+    if (file.size > 1024 * 1024) {
+      iconSetError("Icon zu groß (max 1 MiB).");
+      return;
+    }
+    const form = new FormData();
+    form.append("file", file);
+    const btn = $("#icon-upload-btn");
+    btn.disabled = true;
+    btn.textContent = "Lade hoch…";
+    iconSetError("");
+    try {
+      await apiUpload(`/api/instances/${state.detailId}/icon`, form, null, "PUT");
+      toast("Server-Icon gesetzt.", "success");
+      $("#icon-upload-file").value = "";
+      $("#icon-upload-btn").disabled = true;
+      loadIconPreview();
+    } catch (e) {
+      iconSetError(`Icon-Upload fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Icon hochladen";
+    }
+  });
+
+  $("#icon-delete-btn").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    if (!window.confirm("Server-Icon entfernen?")) return;
+    try {
+      await api(`/api/instances/${state.detailId}/icon`, { method: "DELETE" });
+      toast("Server-Icon entfernt.", "success");
+      loadIconPreview();
+    } catch (e) {
+      iconSetError(`Löschen fehlgeschlagen: ${e.message}`);
+    }
+  });
+
   /* ---------- Datei-Browser je Instanz ---------- */
   state.fb = { path: "", entries: [] };
 
@@ -4027,6 +4118,10 @@
     $("#sched-restart-enabled").checked = !!rs.enabled;
     $("#sched-restart-time").value = rs.time || "04:00";
     $("#sched-restart-warn").value = rs.warn_minutes ?? 5;
+    const st = sched.stop || {};
+    $("#sched-stop-enabled").checked = !!st.enabled;
+    $("#sched-stop-time").value = st.time || "23:00";
+    $("#sched-stop-warn").value = st.warn_minutes ?? 5;
     const bs = sched.backup || {};
     $("#sched-backup-enabled").checked = !!bs.enabled;
     $("#sched-backup-hours").value = bs.interval_hours ?? 6;
@@ -4047,6 +4142,11 @@
         enabled: $("#sched-restart-enabled").checked,
         time: $("#sched-restart-time").value || "04:00",
         warn_minutes: schedInt($("#sched-restart-warn").value, 0, 30, 5),
+      },
+      stop: {
+        enabled: $("#sched-stop-enabled").checked,
+        time: $("#sched-stop-time").value || "23:00",
+        warn_minutes: schedInt($("#sched-stop-warn").value, 0, 30, 5),
       },
       backup: {
         enabled: $("#sched-backup-enabled").checked,

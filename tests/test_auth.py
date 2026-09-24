@@ -116,6 +116,147 @@ class TestToken:
         assert auth_mod.verify_token(token) is None
 
 
+class TestSessionInvalidierung:
+    """session_version im Token: Passwort-/Rollen-Änderung und Löschung
+    machen ausgestellte Sessions sofort ungültig (kein 30-Tage-Nachleuchten)."""
+
+    def test_token_enthaelt_version_und_roundtrip(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        token = auth_mod.create_token("boss", "admin")
+        payload = auth_mod.verify_token(token)
+        assert payload is not None and payload["v"] == 0
+        # Bestands-Token ohne v + Benutzer ohne session_version bleibt gültig
+        alt = auth_mod.create_token("boss", "admin", version=0)
+        assert auth_mod.verify_token(alt) is not None
+
+    def test_geloeschter_benutzer_token_ungueltig(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        auth_mod.create_user("zwei", "passwort123", "admin")
+        token = auth_mod.create_token("boss", "admin")
+        assert auth_mod.verify_token(token) is not None
+        auth_mod.delete_user("boss", "zwei")
+        assert auth_mod.verify_token(token) is None
+
+    def test_rolle_aendern_invalidiert_token(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        auth_mod.create_user("waechter", "passwort123", "viewer")
+        token = auth_mod.create_token("waechter", "viewer")
+        assert auth_mod.verify_token(token) is not None
+        auth_mod.update_user("waechter", role="admin")
+        # Alte Rolle im Token ≠ gespeicherte Rolle → ungültig (Downgrade-Schutz)
+        assert auth_mod.verify_token(token) is None
+        neuer = auth_mod.create_token("waechter", "admin")
+        assert auth_mod.verify_token(neuer) is not None
+
+    def test_passwort_reset_invalidiert_token(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        token = auth_mod.create_token("boss", "admin")
+        assert auth_mod.verify_token(token) is not None
+        auth_mod.update_user("boss", password="neues-pass-1")
+        assert auth_mod.verify_token(token) is None
+        assert auth_mod.verify_token(auth_mod.create_token(
+            "boss", "admin")) is not None
+
+    def test_change_own_password_invalidiert_token(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        token = auth_mod.create_token("boss", "admin")
+        auth_mod.change_own_password("boss", "passwort123", "neues-passwort-1")
+        assert auth_mod.verify_token(token) is None
+
+    def test_versionen_zaehlen_hoch(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        user = auth_mod.find_user("boss")
+        assert user is not None
+        auth_mod.update_user("boss", role="admin")
+        user = auth_mod.find_user("boss")
+        assert user is not None
+        assert auth_mod.user_session_version(user) == 1
+        auth_mod.update_user("boss", password="neues-pass-1")
+        user = auth_mod.find_user("boss")
+        assert user is not None
+        assert auth_mod.user_session_version(user) == 2
+
+    def test_defekte_version_im_token_nie_gueltig(self):
+        auth_mod.create_user("boss", "passwort123", "admin")
+        # Token von Hand mit kaputtem v bauen (Signatur korrekt)
+        import hashlib as hl
+        import hmac as hm
+        import json as js
+        secret = auth_mod.ensure_secret()
+        payload = js.dumps({"u": "boss", "r": "admin",
+                            "exp": int(time.time()) + 600, "v": "kaputt"},
+                           separators=(",", ":")).encode("utf-8")
+        body = auth_mod._b64url(payload)
+        sig = hm.new(secret, payload, hl.sha256).hexdigest()
+        assert auth_mod.verify_token(f"{body}.{sig}") is None
+
+    # --- Route-Ebene ---
+
+    def test_routen_rolle_downgrade_invalidiert_session(self, client):
+        client.post("/api/auth/setup", json={"username": "boss",
+                                             "password": "passwort123"})
+        client.post("/api/auth/users", json={"username": "chef",
+                                             "password": "passwort123",
+                                             "role": "admin"})
+        # Chef-Session aufnehmen (Cookie des Setups überschreiben)
+        client.cookies.clear()
+        client.post("/api/auth/login", json={"username": "chef",
+                                             "password": "passwort123"})
+        chef_cookie = client.cookies.get(auth_mod.SESSION_COOKIE)
+        assert chef_cookie
+        # Chef in eigener Session: users-Verwaltung lesbar (Admin)
+        assert client.get("/api/auth/users").status_code == 200
+        # Boss stuft Chef herab
+        client.cookies.clear()
+        client.post("/api/auth/login", json={"username": "boss",
+                                             "password": "passwort123"})
+        r = client.patch("/api/auth/users/chef", json={"role": "viewer"})
+        assert r.status_code == 200
+        # Chef-Session (alter Cookie) ist serverseitig tot → 401
+        client.cookies.clear()
+        client.cookies.set(auth_mod.SESSION_COOKIE, chef_cookie)
+        assert client.get("/api/auth/users").status_code == 401
+
+    def test_routen_passwort_reset_alte_session_401(self, client):
+        client.post("/api/auth/setup", json={"username": "boss",
+                                             "password": "passwort123"})
+        client.post("/api/auth/users", json={"username": "waechter",
+                                             "password": "passwort123",
+                                             "role": "viewer"})
+        client.cookies.clear()
+        client.post("/api/auth/login", json={"username": "waechter",
+                                             "password": "passwort123"})
+        viewer_cookie = client.cookies.get(auth_mod.SESSION_COOKIE)
+        assert viewer_cookie
+        assert client.get("/api/settings").status_code == 200
+        # Admin-Reset des Viewer-Passworts
+        client.cookies.clear()
+        client.post("/api/auth/login", json={"username": "boss",
+                                             "password": "passwort123"})
+        assert client.patch("/api/auth/users/waechter",
+                            json={"password": "neues-pass-1"}).status_code == 200
+        # Viewer-Session (alter Cookie) ist serverseitig tot → 401
+        client.cookies.clear()
+        client.cookies.set(auth_mod.SESSION_COOKIE, viewer_cookie)
+        assert client.get("/api/settings").status_code == 401
+        # Neue Anmeldung mit dem neuen Passwort funktioniert
+        client.cookies.clear()
+        assert client.post("/api/auth/login", json={"username": "waechter",
+                                                    "password": "neues-pass-1"}
+                           ).status_code == 200
+
+    def test_change_password_liefert_frischen_cookie(self, client):
+        client.post("/api/auth/setup", json={"username": "boss",
+                                             "password": "passwort123"})
+        r = client.post("/api/auth/change-password", json={
+            "current": "passwort123", "password": "neues-passwort-1"})
+        assert r.status_code == 200
+        assert "mcd_session=" in r.headers.get("set-cookie", "").lower()
+        # Neue Session bleibt direkt danach gültig (nicht ausgeloggt)
+        me = client.get("/api/auth/me").json()
+        assert me["authenticated"] is True and me["username"] == "boss"
+
+
 # ---------------------------------------------------------------------------
 # API-Routen: Setup/Login/Logout/me/Benutzerverwaltung
 # ---------------------------------------------------------------------------

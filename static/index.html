@@ -434,6 +434,24 @@
           </div>
 
           <div class="upload-box">
+            <h3>Server-Icon <span class="muted small">(Serverliste)</span>
+              <button id="icon-reload" class="btn small-btn" title="Icon-Status aktualisieren">Aktualisieren</button>
+            </h3>
+            <div class="upload-row">
+              <img id="icon-preview" class="icon-preview hidden" alt="Server-Icon" width="64" height="64">
+              <p class="muted small" id="icon-info" style="margin: 0;">–</p>
+            </div>
+            <div class="upload-row" style="margin-top: 0.5rem;">
+              <input id="icon-upload-file" class="file-input admin-only" type="file" accept=".png">
+              <button id="icon-upload-btn" class="btn admin-only" disabled>Icon hochladen</button>
+              <button id="icon-delete-btn" class="btn admin-only hidden">Entfernen</button>
+            </div>
+            <p class="muted small">Nur PNG, exakt 64×64 Pixel (Minecraft skaliert nicht).
+              Austausch auch bei laufender Instanz möglich.</p>
+            <div id="icon-error" class="err hidden"></div>
+          </div>
+
+          <div class="upload-box">
             <h3>Datapacks <span class="muted small">(Welt)</span>
               <button id="dp-reload" class="btn small-btn" title="Liste aktualisieren">Aktualisieren</button>
             </h3>
@@ -513,6 +531,16 @@
             </div>
             <div class="sched-row">
               <label class="check">
+                <input type="checkbox" id="sched-stop-enabled">
+                Täglicher Stopp um
+              </label>
+              <input type="time" id="sched-stop-time" value="23:00">
+              <span class="muted small">Vorwarnung</span>
+              <input type="number" id="sched-stop-warn" class="sched-num" min="0" max="30" value="5">
+              <span class="muted small">Min (0 = aus)</span>
+            </div>
+            <div class="sched-row">
+              <label class="check">
                 <input type="checkbox" id="sched-backup-enabled">
                 Backup alle
               </label>
@@ -530,7 +558,7 @@
               <span class="muted small">Stunden (Alert „update", opt-in über ALERT_EVENTS)</span>
             </div>
             <p class="muted small">Auto-Start greift beim Hochfahren des Dashboards (einmal pro Start).
-              Verpasste Neustart-Termine werden nur innerhalb von 30 Min nachgeholt.</p>
+              Verpasste Neustart-/Stopp-Termine werden nur innerhalb von 30 Min nachgeholt.</p>
             <div class="row" style="margin-top: 0.5rem;">
               <button id="sched-save" class="btn primary admin-only">Speichern</button>
             </div>
