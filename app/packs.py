@@ -45,6 +45,20 @@ _CF_RETRY_STATUS = frozenset({403, 408, 425, 429, 500, 502, 503, 504})
 _CF_RETRIES = 2        # zusätzliche Versuche nach dem ersten
 _CF_RETRY_DELAY = 1.0  # Basis-Pause in Sekunden (skaliert mit Versuchsnr.)
 
+# Bekannte Client-only-Rendermods, die einen Server beim Start abschießen
+# (Sodium & Co. greifen beim Pre-Launch nach LWJGL — existiert serverseitig
+# nicht). CurseForge-Manifeste enthalten keine Server/Client-Info, daher
+# kann das nur über eine Muster-Liste gelöst werden.
+_CLIENT_ONLY_PATTERNS = (
+    "sodium",      # auch sodium-extra, reeses-sodium-options, sodiumoptionsapi
+    "embeddium",   # auch embeddium-plus/-extras
+    "rubidium",    # auch rubidium-extra
+    "magnesium",
+    "oculus",
+    "iris",
+    "nvidium",
+)
+
 # Loader-Präferenz bei mrpack-Versionen mit mehreren Loadern
 _LOADER_PREFERENCE = ("fabric", "forge", "neoforge", "quilt")
 _MODRINTH_GAME_VERSION_RE = re.compile(r"^\d+\.\d+(\.\d+)?(-rc\d+|-pre\d+)?$")
@@ -486,6 +500,14 @@ async def _download_cf_one(client: httpx.AsyncClient, url: str, mods_root: Path,
             await asyncio.sleep(_CF_RETRY_DELAY * attempt)
 
 
+def _is_client_only_mod(filename: str) -> bool:
+    """Heuristik: bekannte Client-only-Mods ( siehe _CLIENT_ONLY_PATTERNS)
+    plus optionale Zusatzmuster aus CF_CLIENT_ONLY_MODS (env)."""
+    lower = filename.lower()
+    return (any(p in lower for p in _CLIENT_ONLY_PATTERNS)
+            or any(p in lower for p in settings.cf_client_only_mods))
+
+
 async def _download_cf_once(client: httpx.AsyncClient, url: str, mods_root: Path,
                             sha1=None, verify_url: bool = False):
     """Ein Download-Versuch einer CurseForge-Datei (siehe _download_cf_one)."""
@@ -506,6 +528,8 @@ async def _download_cf_once(client: httpx.AsyncClient, url: str, mods_root: Path
                 name = unquote(str(resp.url.path).rstrip("/").split("/")[-1] or "")
                 if not name.lower().endswith(".jar"):
                     return None  # Ressourcenpakete etc. gehören nicht nach mods/
+                if _is_client_only_mod(name):
+                    return None  # bekannter Client-only-Crasher → überspringen
                 validate_filename(name)
                 dest = mods_root / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -896,7 +920,7 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
                     name = await _download_cf_one(dl_client, url, mods_root)
                     if name is None:
                         skipped.append(f"CurseForge-Datei {url.rsplit('/', 1)[-1] if url else '?'} "
-                                       f"(kein .jar)")
+                                       f"(kein .jar oder bekannte Client-only-Mod)")
                     else:
                         installed["n"] += 1
                         try:

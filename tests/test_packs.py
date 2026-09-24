@@ -901,6 +901,26 @@ class TestCurseForgeDownload:
             asyncio.run(packs._download_cf_one(client, "https://cdn/x.jar",
                                                tmp_path))
 
+    def test_client_only_mod_wird_uebersprungen(self, tmp_path):
+        for jar_name in ("sodium-0.8.13+mc1.21.1.jar",
+                         "embeddium-plus-1.0.0.jar",
+                         "Iris-1.8.0+mc1.21.1.jar"):
+            def handle(request: httpx.Request, _name=jar_name):
+                if request.url.path.endswith("/download"):
+                    return httpx.Response(302, headers={
+                        "Location": f"https://cdn.example/{_name}"})
+                return httpx.Response(200, content=JAR)
+
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handle),
+                                       follow_redirects=True)
+            name = asyncio.run(packs._download_cf_one(
+                client,
+                "https://www.curseforge.com/api/v1/mods/1/files/2/download",
+                tmp_path))
+            assert name is None
+            # Datei darf nicht im mods-Ordner landen
+            assert not list(tmp_path.rglob("*.jar"))
+
 
 class TestExtractOverrides:
     def test_erlaubte_und_verbotene_pfade(self, tmp_path):

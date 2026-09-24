@@ -112,7 +112,11 @@ im UI gibt es dazu einen Hinweis). Zwei Wege funktionieren trotzdem ohne Key:
   Datei-Browser der Instanz → `mods/` hochladen.
 
 **Hinweis:** Fehlende Abhängigkeiten ggf. manuell ergänzen — CF-Relations
-(Abhängigkeitsliste) sind ohne API-Key nicht auflösbar.
+(Abhängigkeitsliste) sind ohne API-Key nicht auflösbar. Bekannte
+Client-only-Rendermods (Sodium/Iris/Embeddium/Rubidium/Oculus/Magnesium/
+Nvidium — diese crashen den Server beim Start) werden beim CF-Pack-Upload
+automatisch übersprungen; weitere Muster lassen sich per Env-Variable
+`CF_CLIENT_ONLY_MODS` ergänzen (Komma-Liste, Details README).
 
 ---
 

@@ -30,6 +30,13 @@ class Settings:
                                or "https://api.curseforge.com/v1")
         # Kostenloser CurseForge-API-Key: https://console.curseforge.com
         self.cf_api_key = os.getenv("CF_API_KEY", "").strip()
+        # Zusätzliche Muster (Komma-Liste) für Client-only-Mods, die beim
+        # CF-Pack-Upload übersprungen werden; ergänzt die eingebaute Liste.
+        self.cf_client_only_mods = [
+            token.strip().lower()
+            for token in os.getenv("CF_CLIENT_ONLY_MODS", "").split(",")
+            if token.strip()
+        ]
         self.user_agent = "mc-dashboard/1.0 (self-hosted Minecraft admin panel)"
         # Multi-Server: separater Speicherort + Port-Bereich pro Instanz
         self.instances_dir = Path(os.getenv("INSTANCES_DIR", "/data/instances")).resolve()

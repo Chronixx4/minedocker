@@ -72,7 +72,11 @@ Checkliste, Dashboard-Schnellstart).
     Upload-Installation (.mrpack + CurseForge-.zip mit manifest.json),
     Index-Normalisierung (mrpack/CF -> internes Schema: title, game_version,
     loader, files[]), Kompatibilitaetspruefung, parallele Mod-Downloads
-    (SHA1, .part+atomic, CF-Redirect-Dateiname), overrides/-Extraktion
+    (SHA1, .part+atomic, CF-Redirect-Dateiname, Retry bei transienten
+    CF-Fehlern 403/429/5xx, Skip bekannter Client-only-Mods —
+    _CLIENT_ONLY_PATTERNS + env CF_CLIENT_ONLY_MODS; CF-Manifeste haben
+    keine Server/Client-Info und Sodium & Co. crashen Server sonst beim
+    Start), overrides/-Extraktion
     (Pfad-Whitelist: mods, config, kubejs, openloader, ...), Speicherplatz-Check,
     install_pack_cf(): Direktinstallation CurseForge-Packs via CF-API
     (Slug/File-ID -> Pack-Zip -> gleiche Upload-Pipeline, source=curseforge),
