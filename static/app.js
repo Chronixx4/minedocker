@@ -2012,8 +2012,7 @@
     }
     if (state.detailLogTimer) {
       clearInterval(state.detailLogTimer);
-  state.detailLogTimer = null;
-  state.detailLogStream = null; // aktiver SSE-Log-Stream (AbortController)
+      state.detailLogTimer = null;
     }
   }
 
@@ -2065,7 +2064,12 @@
           }
         }
       }
-      if (state.detailId === id) appendLogLine("(Stream beendet — Container gestoppt)");
+      if (state.detailId === id) {
+        appendLogLine("(Stream beendet — Container gestoppt)");
+        // Der Container kann neu starten (z. B. Crash-Loop) → Logs nicht
+        // einschlafen lassen, sondern per Polling weiter verfolgen.
+        startDetailLogPolling();
+      }
     } catch (e) {
       if (controller.signal.aborted) return; // Dialog geschlossen
       if (state.detailId === id) startDetailLogPolling(); // Fallback: Polling
