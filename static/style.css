@@ -37,9 +37,9 @@
   --radius-full: 999px;
 
   /* --- Tiefen --- */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.25);
-  --shadow: 0 4px 8px -2px rgba(0, 0, 0, 0.35), 0 12px 28px -8px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 20px 44px -14px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.22);
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3), 0 8px 20px -4px rgba(0, 0, 0, 0.38), 0 16px 40px -12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 28px -8px rgba(0, 0, 0, 0.5), 0 32px 64px -16px rgba(0, 0, 0, 0.6);
   --glow: 0 4px 16px rgba(16, 185, 129, 0.35);
   --ring: 0 0 0 3px rgba(16, 185, 129, 0.25);
 
@@ -49,8 +49,8 @@
 
   /* --- Motion --- */
   --t-fast: 130ms cubic-bezier(0.4, 0, 0.2, 1);
-  --t: 190ms cubic-bezier(0.4, 0, 0.2, 1);
-  --t-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --t: 190ms cubic-bezier(0, 0, 0.2, 1);
+  --t-slow: 300ms cubic-bezier(0, 0, 0.2, 1);
 }
 
 /* ---------- Basis ---------- */
@@ -222,11 +222,44 @@ main {
   padding: clamp(1.1rem, 1.6vw, 2rem) clamp(0.9rem, 2.6vw, 1.75rem) 4rem;
 }
 .panel { display: none; }
-.panel.active { display: block; animation: panel-in var(--t-slow) ease; }
+.panel.active { display: block; animation: panel-in var(--t-slow) cubic-bezier(0, 0, 0.2, 1); }
 
 @keyframes panel-in {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: none; }
+}
+
+/* ---------- View Transitions (Tab-Wechsel) ---------- */
+/* Topbar und Tab-Leiste werden nur während der Transition (body.vt-naming)
+   separat gerendert — dauerhaft gesetzte view-transition-names machen die
+   Elemente zum Backdrop-Root und würden ihren backdrop-filter (Glass)
+   dauerhaft aushebeln. */
+body.vt-naming .topbar { view-transition-name: topbar; }
+body.vt-naming .tabs { view-transition-name: tabbar; }
+
+::view-transition-old(root) {
+  animation: vt-fade-out var(--t-fast) cubic-bezier(0.4, 0, 1, 1) both;
+}
+::view-transition-new(root) {
+  animation: vt-fade-in var(--t-slow) cubic-bezier(0, 0, 0.2, 1) both;
+}
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+/* Während der View Transition kein zusätzlicher panel-in-Einstieg */
+body.vt-tab .panel.active { animation: none; }
+
+/* ---------- Weiches Ein-/Ausblenden (Detail-Panel, Auth-Overlay) ---------- */
+.soft-show { animation: soft-in var(--t-slow) cubic-bezier(0, 0, 0.2, 1); }
+.soft-hide { animation: soft-out var(--t) ease both; pointer-events: none; }
+@keyframes soft-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.995); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes soft-out {
+  to { opacity: 0; transform: translateY(6px) scale(0.995); }
 }
 
 .grid {
@@ -237,7 +270,9 @@ main {
 
 /* ---------- Karten ---------- */
 .card {
-  background: var(--surface);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), rgba(255, 255, 255, 0) 130px),
+    var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 1.4rem 1.5rem;
@@ -282,7 +317,7 @@ main {
   border-bottom: 1px solid var(--border);
 }
 .kv dt { color: var(--muted); font-size: 0.85rem; align-self: center; }
-.kv dd { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
+.kv dd { margin: 0; overflow-wrap: anywhere; font-weight: 500; font-variant-numeric: tabular-nums; }
 .kv dt:nth-last-of-type(1), .kv dd:nth-last-of-type(1) { border-bottom: none; }
 
 /* ---------- Metrik-Balken ---------- */
@@ -973,8 +1008,8 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
   background: var(--ok-soft);
   border: 1px solid rgba(52, 211, 153, 0.4);
   border-radius: var(--radius-full);
-  padding: 0.05rem 0.55rem;
-  font-size: 0.72rem;
+  padding: 0.12rem 0.6rem;
+  font-size: 0.73rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -999,12 +1034,12 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 /* Spielernamen als Chips */
 .ov-players { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .player-chip {
-  font-size: 0.72rem;
+  font-size: 0.73rem;
   background: rgba(34, 211, 238, 0.1);
   color: #67e8f9;
   border: 1px solid rgba(34, 211, 238, 0.25);
   border-radius: var(--radius-full);
-  padding: 0.1rem 0.55rem;
+  padding: 0.14rem 0.6rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1230,13 +1265,13 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 /* „In Verwaltung"-Chip: nur am ausgewählten Server-Tab-Karteneintrag sichtbar */
 .inst-card .inst-sel {
   display: none;
-  font-size: 0.72rem;
+  font-size: 0.73rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--accent-2);
   border: 1px solid var(--accent);
-  border-radius: 999px;
-  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  padding: 0.14rem 0.6rem;
   white-space: nowrap;
   opacity: 0.9;
 }
@@ -1468,6 +1503,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
+  .modal[open]::backdrop { animation: none !important; }
 }
 
 /* ============================================================================
@@ -1604,11 +1640,28 @@ body.role-viewer .admin-only { display: none !important; }
   max-height: min(84vh, 720px);
   box-shadow: var(--shadow-lg);
 }
+/* Weiches Öffnen/Schließen (JS setzt 'closing' und wartet auf animationend) */
+.modal[open] { animation: modal-in var(--t-slow) cubic-bezier(0, 0, 0.2, 1); }
+.modal[open]::backdrop { animation: fade-in var(--t-slow) ease both; }
+.modal.closing {
+  animation: modal-out var(--t-fast) cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+.modal.closing::backdrop { animation: fade-out var(--t-fast) ease both; }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes modal-out {
+  to { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
 .modal::backdrop {
   background: rgba(6, 9, 14, 0.7);
   backdrop-filter: blur(4px);
 }
-.modal-body { padding: 1.2rem 1.3rem 1.3rem; overflow: auto; }
+.modal-body { padding: 1.3rem 1.4rem 1.4rem; overflow: auto; }
 .modal-head {
   display: flex;
   align-items: center;

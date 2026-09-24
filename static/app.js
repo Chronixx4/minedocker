@@ -75,6 +75,64 @@
   const show = (el, on = true) => el.classList.toggle("hidden", !on);
   const setText = (el, text) => { el.textContent = text; };
 
+  const motionOK = () =>
+    !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* Weiches Ein-/Ausblenden für große Flächen (Auth-Overlay, Detail-Panel).
+     Kleine Elemente bleiben beim klassischen show() ohne Verzögerung. */
+  const SOFT_MS = 190;
+  function showSoft(el, on = true) {
+    if (el._softTimer) { clearTimeout(el._softTimer); el._softTimer = null; }
+    el.classList.remove("soft-hide");
+    if (on) {
+      el.classList.remove("hidden");
+      if (!motionOK()) return;
+      el.classList.remove("soft-show");
+      void el.offsetWidth; // Reflow: Einstiegs-Animation von vorn starten
+      el.classList.add("soft-show");
+      el.addEventListener("animationend",
+        () => el.classList.remove("soft-show"), { once: true });
+    } else {
+      if (el.classList.contains("hidden")) return;
+      if (!motionOK()) { el.classList.add("hidden"); return; }
+      el.classList.add("soft-hide");
+      const finish = () => {
+        el._softTimer = null;
+        el.classList.add("hidden");
+        el.classList.remove("soft-hide");
+      };
+      el._softTimer = setTimeout(finish, SOFT_MS + 80); // Fallback ohne animationend
+      el.addEventListener("animationend", () => {
+        if (!el._softTimer) return;
+        clearTimeout(el._softTimer);
+        finish();
+      }, { once: true });
+    }
+  }
+
+  /* Native Dialoge animiert schließen: kurz 'closing', dann echtes close(). */
+  function closeDialog(dlg) {
+    if (!dlg || !dlg.open || dlg.classList.contains("closing")) return;
+    if (!motionOK()) { dlg.close(); return; }
+    dlg.classList.add("closing");
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      dlg.classList.remove("closing");
+      dlg.close();
+    };
+    const t = setTimeout(finish, 280); // Fallback, falls animationend fehlt
+    dlg.addEventListener("animationend", () => { clearTimeout(t); finish(); },
+      { once: true });
+  }
+
+  // ESC schließt die drei Modal-Dialoge ebenfalls animiert
+  ["users-dialog", "password-dialog", "fb-editor"].forEach((id) => {
+    const dlg = document.getElementById(id);
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(dlg); });
+  });
+
   /* ---------- Auth: Login, Setup, Rollen, Benutzerverwaltung ---------- */
   function applyRoleUi() {
     const body = document.body;
@@ -115,7 +173,7 @@
     // Setup + zugleich API-Key geschützt: Key-Feld im Setup-Formular Pflicht
     show($("#setup-key-field"), wantSetup && m.api_key_required);
     $("#setup-key").required = !!m.api_key_required;
-    show($("#auth-overlay"), true);
+    showSoft($("#auth-overlay"), true);
     if (wantLogin) $("#auth-user").focus();
     else if (wantSetup) $("#setup-user").focus();
     else $("#auth-apikey").focus();
@@ -123,7 +181,7 @@
 
   function hideAuthOverlay() {
     state.authOverlay = false;
-    show($("#auth-overlay"), false);
+    showSoft($("#auth-overlay"), false);
   }
 
   function authError(sel, message) {
@@ -380,7 +438,7 @@
       btn.disabled = false;
     }
   });
-  $("#users-close").addEventListener("click", () => $("#users-dialog").close());
+  $("#users-close").addEventListener("click", () => closeDialog($("#users-dialog")));
 
   /* ---------- Eigenes Passwort ändern ---------- */
   function pwError(msg) { authError("#pw-error", msg); }
@@ -409,7 +467,7 @@
           password: $("#pw-new").value,
         }),
       });
-      $("#password-dialog").close();
+      closeDialog($("#password-dialog"));
       toast("Passwort geändert.", "success");
     } catch (e2) {
       pwError(e2.message);
@@ -417,15 +475,31 @@
       btn.disabled = false;
     }
   });
-  $("#pw-close").addEventListener("click", () => $("#password-dialog").close());
+  $("#pw-close").addEventListener("click", () => closeDialog($("#password-dialog")));
 
   /* ---------- Tab-Umschaltung ---------- */
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.tab = btn.dataset.tab;
-      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
-      document.querySelectorAll(".panel").forEach((p) =>
-        p.classList.toggle("active", p.id === `tab-${state.tab}`));
+      const applyTabUi = () => {
+        document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".panel").forEach((p) =>
+          p.classList.toggle("active", p.id === `tab-${state.tab}`));
+      };
+      // Weicher Tab-Wechsel per View Transitions (Fallback: panel-in-Einstieg)
+      if (document.startViewTransition && motionOK()) {
+        // vt-tab bleibt dauerhaft gesetzt: panel-in würde sonst nach der
+        // Transition (oder bei übersprungenen Übergängen) neu starten.
+        document.body.classList.add("vt-tab");
+        // Topbar/Tab-Leiste nur während der Transition benennen — dauerhafte
+        // view-transition-names würden deren backdrop-filter (Glass) aushebeln.
+        document.body.classList.add("vt-naming");
+        const vt = document.startViewTransition(applyTabUi);
+        const cleanup = () => document.body.classList.remove("vt-naming");
+        vt.finished.then(cleanup, cleanup); // auch bei übersprungener Transition
+      } else {
+        applyTabUi();
+      }
       if (state.tab === "servers") loadInstances();
       if (state.tab === "search") {
         // Erst Ziele (und Filter) laden, dann direkt suchen — sonst läuft
@@ -1947,7 +2021,7 @@
     state.detailId = id;
     updateInstSelection(); // Karte im Server-Tab hervorheben
     closeDetailLogStream(); // Stream/Timer der vorherigen Instanz beenden
-    show($("#inst-detail"), true);
+    showSoft($("#inst-detail"), true);
     // Mobil/Tablet: Detail liegt unter dem Karten-Raster — dorthin scrollen
     if (window.matchMedia("(max-width: 760px)").matches) {
       $("#inst-detail").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2022,7 +2096,7 @@
     state.detailId = null;
     updateInstSelection(); // Hervorhebung aufheben
     closeDetailLogStream();
-    show($("#inst-detail"), false);
+    showSoft($("#inst-detail"), false);
   }
   $("#detail-close").addEventListener("click", closeDetail);
 
@@ -3352,7 +3426,7 @@
         `${fmtBytes(data.size)} · UTF-8 · max. 1 MiB`);
     } catch (e) {
       fbEditorError(e.message);
-      $("#fb-editor").close();
+      closeDialog($("#fb-editor"));
     } finally {
       btn.disabled = false;
     }
@@ -3374,7 +3448,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: relPath, content: $("#fb-editor-text").value }),
       });
-      dlg.close();
+      closeDialog(dlg);
       toast(`"${relPath}" gespeichert.`, "success");
       fbReload();
     } catch (e) {
@@ -3384,7 +3458,7 @@
       btn.textContent = "Speichern";
     }
   });
-  $("#fb-editor-close").addEventListener("click", () => $("#fb-editor").close());
+  $("#fb-editor-close").addEventListener("click", () => closeDialog($("#fb-editor")));
 
   async function fbRename(fromPath, toPath) {
     try {
