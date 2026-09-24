@@ -81,6 +81,55 @@ def hashes_for(path: Path) -> tuple:
     return hashlib.sha1(data).hexdigest(), murmur2_cf(data)
 
 
+# Hash-Cache je Datei: str(Pfad) → (mtime_ns, Größe, sha1, murmur2).
+# Unveränderte Dateien werden nicht neu gelesen/gehasht — wichtig bei
+# großen Packs (300+ Mods): sonst blockiert das Hashen die Suche bzw.
+# wird bei jedem TTL-Ablauf komplett wiederholt.
+_HASH_CACHE: dict = {}
+
+
+def _hash_files(files) -> tuple:
+    """Hasht alle Dateien (in einem Worker-Thread aufrufen!); Rückgabe
+    (sha1s, murms). Unveränderte Dateien kommen aus _HASH_CACHE."""
+    sha1s: list = []
+    murms: list = []
+    for path, _filename, _enabled in files:
+        sha1, murmur = _hash_one(path)
+        if sha1:
+            sha1s.append(sha1)
+        if murmur is not None:
+            murms.append(murmur)
+    return sha1s, murms
+
+
+def _hash_check_files(files) -> list:
+    """Hash-Daten für check_updates (in einem Worker-Thread aufrufen!),
+    inkl. Nutzungs-Cache für unveränderte Dateien."""
+    hashed = []
+    for path, filename, enabled in files:
+        sha1, murmur = _hash_one(path)
+        hashed.append({"filename": filename, "enabled": enabled,
+                       "size_bytes": path.stat().st_size if sha1 else None,
+                       "sha1": sha1, "murmur": murmur})
+    return hashed
+
+
+def _hash_one(path: Path) -> tuple:
+    """hashes_for mit _HASH_CACHE (mtime+Größe als Gültigkeitsprüfung)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None, None
+    key = str(path)
+    cached = _HASH_CACHE.get(key)
+    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        return cached[2], cached[3]
+    sha1, murmur = hashes_for(path)
+    if sha1:
+        _HASH_CACHE[key] = (st.st_mtime_ns, st.st_size, sha1, murmur)
+    return sha1, murmur
+
+
 # ---------------------------------------------------------------------------
 # Modrinth-Identifikation
 # ---------------------------------------------------------------------------
@@ -229,6 +278,8 @@ def _compare(installed_date: str, latest_date: str) -> str:
 # jedem Tastendruck alle jars neu hashen muss (Mod-Install/Edit invalidiert
 # innerhalb der TTL von selbst).
 _INSTALLED_CACHE: dict = {}
+# Laufende Hintergrund-Auffrischungen (stale-while-revalidate)
+_REFRESHING: set = set()
 
 
 def invalidate_installed_cache(instance_id: str | None = None) -> None:
@@ -239,15 +290,46 @@ def invalidate_installed_cache(instance_id: str | None = None) -> None:
         _INSTALLED_CACHE.pop(instance_id, None)
 
 
+def _refresh_installed_async(instance_id: str) -> None:
+    """Auffrischen im Hintergrund (stale-while-revalidate); wirft nie."""
+    if instance_id in _REFRESHING:
+        return
+    _REFRESHING.add(instance_id)
+
+    async def _run():
+        try:
+            await _installed_project_ids_uncached(instance_id)
+        except Exception:
+            pass  # Hintergrund-Auffrischung darf nichts brechen
+        finally:
+            _REFRESHING.discard(instance_id)
+
+    try:
+        task = asyncio.create_task(_run())
+        task.add_done_callback(lambda _t: _REFRESHING.discard(instance_id))
+    except RuntimeError:  # kein laufender Loop (z. B. in Tests)
+        _REFRESHING.discard(instance_id)
+
+
 async def installed_project_ids(instance_id: str) -> dict:
     """Identifiziert installierte Mods der Instanz per Datei-Hash.
     Rückgabe: {'modrinth': {projekt_id}, 'curseforge': {mod_id}, 'checked': n}.
     Wirft nicht — Anbieter-Fehler liefern leere Mengen; Ergebnis wird
-    _INSTALLED_TTL Sekunden gecacht."""
+    _INSTALLED_TTL Sekunden gecacht. Nach TTL-Ablauf kommen sofort die
+    letzten bekannten Daten zurück (stale-while-revalidate), die Auffrischung
+    läuft im Hintergrund — die Suche wartet nie auf das Hashen."""
     now = time.monotonic()
     cached = _INSTALLED_CACHE.get(instance_id)
     if cached is not None and now - cached[0] <= _INSTALLED_TTL:
         return cached[1]
+    if cached is not None:
+        _refresh_installed_async(instance_id)
+        return cached[1]
+    return await _installed_project_ids_uncached(instance_id)
+
+
+async def _installed_project_ids_uncached(instance_id: str) -> dict:
+    now = time.monotonic()
     out: dict = {"modrinth": set(), "curseforge": set(), "checked": 0}
     try:
         files = _iter_mod_files(instance_id)
@@ -255,15 +337,11 @@ async def installed_project_ids(instance_id: str) -> dict:
         _INSTALLED_CACHE[instance_id] = (now, out)
         return out
     files = files[:_MAX_CHECKED]
-    sha1s: list = []
-    murms: list = []
-    for path, _filename, _enabled in files:
-        sha1, murmur = hashes_for(path)
-        if sha1:
-            sha1s.append(sha1)
-        if murmur is not None:
-            murms.append(murmur)
     out["checked"] = len(files)
+    # Hashing in einen Worker-Thread auslagern: mehrere GB Jar-Daten im
+    # Event-Loop blockierten sonst das GESAMTE Dashboard (Suche, Katalog,
+    # Status-Polls — Symptom: „Suche dauert ewig / Katalog nicht erreichbar“).
+    sha1s, murms = await asyncio.to_thread(_hash_files, files)
     async with httpx.AsyncClient(timeout=15.0) as client:
         # Modrinth: Batch-Lookup der SHA1s → Versionen (oder null) → Projekt-IDs
         for start in range(0, len(sha1s), _MR_CHUNK):
@@ -307,12 +385,7 @@ async def check_updates(instance_id: str) -> dict:
         raise HTTPException(status_code=400,
                             detail=f"Zu viele Mods (max. {_MAX_CHECKED} prüfbar)")
 
-    hashed = []
-    for path, filename, enabled in files:
-        sha1, murmur = hashes_for(path)
-        hashed.append({"filename": filename, "enabled": enabled,
-                       "size_bytes": path.stat().st_size if sha1 else None,
-                       "sha1": sha1, "murmur": murmur})
+    hashed = await asyncio.to_thread(_hash_check_files, files)
 
     use_cf = _cf_available() and any(h["murmur"] is not None for h in hashed)
     async with httpx.AsyncClient(timeout=15.0) as client:

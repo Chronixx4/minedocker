@@ -202,7 +202,11 @@ Checkliste, Dashboard-Schnellstart).
     (Frontend zeigt Default)
   - updates.py – Mod-Update-Prüfung per Hash, ohne Registry: jede .jar/.jar.disabled
     wird einmal eingelesen → SHA1 + CurseForge-Murmur2 (Java-Referenz, seed=1,
-    signed int32); Modrinth /version_file/{sha1}?multiple=true identifiziert
+    signed int32); Hashing läuft im Worker-Thread (asyncio.to_thread) mit
+    mtime/Größen-Cache (_HASH_CACHE) — blockiert nie den Event-Loop; der
+    Installiert-Cache der Mod-Suche nutzt stale-while-revalidate (TTL-Ablauf
+    liefert letzte Daten sofort, Auffrischung im Hintergrund); Modrinth
+    /version_file/{sha1}?multiple=true identifiziert
     installierte Version (Fallback: erste), /project/{id}/version liefert
     neueste kompatible; CurseForge /mods/fingerprints batchweise (50er-Chunks,
     Paarung über exactFingerprints) + /mods/{id}/files; Status je Mod:
