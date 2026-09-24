@@ -1292,7 +1292,10 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 #inst-detail { scroll-margin-top: 4.4rem; }
 .detail-grid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  /* minmax(0, …): Grid-Spalten dürfen unter ihren Mindestinhalt schrumpfen,
+     sonst drückt der mehrspaltige linke Bereich die rechte Spalte über
+     den Kartenrand hinaus (wie bei .ov-main oben). */
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 1.6rem;
   margin-top: 1rem;
 }
@@ -1303,7 +1306,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 
 @media (min-width: 1400px) {
   main { max-width: 1720px; }
-  .detail-grid { grid-template-columns: 2.1fr 1fr; }
+  .detail-grid { grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr); }
   .detail-cols {
     columns: 2;
     column-gap: 1.6rem;
