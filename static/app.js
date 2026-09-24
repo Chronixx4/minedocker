@@ -2359,8 +2359,8 @@
   $("#detail-logs-reload").addEventListener("click", loadDetailLogs);
 
   /* ---------- Statistik-Verlauf (persistente Charts) ---------- */
-  const CHART_COLORS = ["#4f8cff", "#34c38f", "#f59e0b", "#ef4444",
-    "#a855f7", "#14b8a6", "#f97316", "#64748b"];
+  const CHART_COLORS = ["#f97316", "#60a5fa", "#2dd4bf", "#fbbf24",
+    "#a855f7", "#4ade80", "#ef4444", "#fda4af"];
 
   function renderChart(box, seriesList, w = 720, h = 150) {
     box.textContent = "";
@@ -2428,8 +2428,8 @@
     setText($("#stats-cpu-now"), `aktuell: ${last.cpu} %`);
     setText($("#stats-ram-now"), `aktuell: ${fmtMb(last.ram_mb)}`);
     setText($("#stats-players-now"), `aktuell: ${Math.round(last.players)} online`);
-    renderChart($("#chart-cpu"), [{ values: points.map((p) => p.cpu), color: "#4f8cff" }]);
-    renderChart($("#chart-ram"), [{ values: points.map((p) => p.ram_mb), color: "#34c38f" }]);
+    renderChart($("#chart-cpu"), [{ values: points.map((p) => p.cpu), color: "#f97316" }]);
+    renderChart($("#chart-ram"), [{ values: points.map((p) => p.ram_mb), color: "#60a5fa" }]);
 
     // Spieler: Gesamtlinie + eine Linie je Instanz (auf dasselbe Zeitraster
     // gemappt; Lücken = null unterbrechen die Linie)
@@ -2446,7 +2446,7 @@
           label: data.names?.[key] || key.slice(0, 8) });
       }
     }
-    const total = { values: points.map((p) => p.players), color: "#4f8cff",
+    const total = { values: points.map((p) => p.players), color: "#fbbf24",
       label: "Gesamt" };
     renderChart($("#chart-players"), [total, ...instanceSeries]);
     // Legende: Gesamt + Instanzen mit letztem Wert
