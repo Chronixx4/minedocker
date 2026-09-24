@@ -2037,6 +2037,17 @@
     const id = state.detailId;
     const controller = new AbortController();
     state.detailLogStream = controller;
+    // Watchdog: stirbt die Verbindung lautlos (kein Fehler, kein Ende),
+    // hängt der fetch sonst ewig → nach 30 s ohne Daten abbrechen und auf
+    // Polling umschalten. Der Server schickt alle 15 s SSE-Keepalives.
+    let watchdogFired = false;
+    let lastData = Date.now();
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastData > 30000) {
+        watchdogFired = true;
+        controller.abort();
+      }
+    }, 5000);
     try {
       // EventSource kann keine Header senden — SSE wird per fetch gelesen
       const res = await fetch(`/api/instances/${id}/logs/stream?tail=100`, {
@@ -2050,6 +2061,7 @@
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
+        lastData = Date.now(); // auch Keepalive-Kommentare zählen als Lebenzeichen
         buffer += decoder.decode(value, { stream: true });
         let idx;
         while ((idx = buffer.indexOf("\n\n")) >= 0) {
@@ -2071,9 +2083,10 @@
         startDetailLogPolling();
       }
     } catch (e) {
-      if (controller.signal.aborted) return; // Dialog geschlossen
+      if (controller.signal.aborted && !watchdogFired) return; // Dialog geschlossen
       if (state.detailId === id) startDetailLogPolling(); // Fallback: Polling
     } finally {
+      clearInterval(watchdog);
       if (state.detailLogStream === controller) state.detailLogStream = null;
     }
   }

@@ -1857,6 +1857,18 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
 app.include_router(api)
 
 
+@app.middleware("http")
+async def no_cache_frontend(request: Request, call_next):
+    """Frontend-Dateien (HTML/JS/CSS) immer revalidieren — ohne Cache-Control
+    cachen Browser app.js heuristisch, und nach einem Update läuft dann
+    weiter das alte JavaScript (Symptom: „Log-Fenster aktualisiert sich
+    nicht“). API-Antworten bleiben unangetastet."""
+    response = await call_next(request)
+    if not request.url.path.startswith("/api"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
