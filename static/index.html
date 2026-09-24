@@ -332,7 +332,7 @@
       <div id="detail-info" class="detail-info"></div>
       <div id="detail-error" class="err hidden"></div>
       <div class="detail-grid">
-        <div>
+        <div class="detail-cols">
           <!-- Tags (Gruppen) + Port-Wechsel -->
           <div class="upload-box">
             <h3>Tags &amp; Port</h3>
@@ -366,24 +366,26 @@
             <div id="mp-update-error" class="err hidden"></div>
           </div>
 
-          <h3>Modpack installieren</h3>
-          <div class="search-target-row">
-            <label for="pack-source">Quelle</label>
-            <select id="pack-source">
-              <option value="modrinth">Modrinth</option>
-              <option value="curseforge">CurseForge</option>
-            </select>
+          <div class="upload-box">
+            <h3>Modpack installieren</h3>
+            <div class="search-target-row">
+              <label for="pack-source">Quelle</label>
+              <select id="pack-source">
+                <option value="modrinth">Modrinth</option>
+                <option value="curseforge">CurseForge</option>
+              </select>
+            </div>
+            <input id="pack-search-input" class="search-input" type="search"
+                   placeholder="Modpacks suchen (z. B. Simply Optimized, Fabulously Optimized …)" autocomplete="off">
+            <p class="muted small" id="pack-target"></p>
+            <div id="pack-progress" class="hidden">
+              <div class="metric-head"><span id="pack-phase" class="muted small"></span><span id="pack-pct" class="muted small"></span></div>
+              <div class="bar"><div id="pack-bar" class="bar-fill" style="width:0%"></div></div>
+            </div>
+            <div id="pack-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
+            <div id="pack-error" class="err hidden"></div>
+            <div id="pack-results" class="results"></div>
           </div>
-          <input id="pack-search-input" class="search-input" type="search"
-                 placeholder="Modpacks suchen (z. B. Simply Optimized, Fabulously Optimized …)" autocomplete="off">
-          <p class="muted small" id="pack-target"></p>
-          <div id="pack-progress" class="hidden">
-            <div class="metric-head"><span id="pack-phase" class="muted small"></span><span id="pack-pct" class="muted small"></span></div>
-            <div class="bar"><div id="pack-bar" class="bar-fill" style="width:0%"></div></div>
-          </div>
-          <div id="pack-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
-          <div id="pack-error" class="err hidden"></div>
-          <div id="pack-results" class="results"></div>
           <div class="upload-box">
             <h3>Fertiges Modpack hochladen</h3>
             <div class="upload-row">

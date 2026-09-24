@@ -1297,6 +1297,20 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
   margin-top: 1rem;
 }
 
+/* Server-Verwaltung (Instanz-Detail): Unterbereiche masonry-artig auf
+   mehrere Spalten verteilen, statt alles untereinander zu stapeln. */
+.detail-cols > * { break-inside: avoid; }
+
+@media (min-width: 1400px) {
+  main { max-width: 1720px; }
+  .detail-grid { grid-template-columns: 2.1fr 1fr; }
+  .detail-cols {
+    columns: 2;
+    column-gap: 1.6rem;
+  }
+  .detail-cols .upload-box { margin-top: 0; margin-bottom: 1.4rem; }
+}
+
 .logs {
   background: #100e0b;
   border: 1px solid var(--border);
