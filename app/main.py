@@ -10,7 +10,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -1268,6 +1280,19 @@ async def instance_delete(instance_id: str, force: bool = False):
 async def instance_mods(instance_id: str):
     instances.get_instance(instance_id)  # 404 wenn unbekannt
     return {"mods": await asyncio.to_thread(instances.list_mods, instance_id)}
+
+
+@api.get("/instances/{instance_id}/mods/{filename}/icon")
+async def instance_mod_icon(instance_id: str, filename: str):
+    """Mod-Logo (aus der .jar extrahiert) für die Mod-Liste. 404, wenn die
+    Mod kein Logo mitbringt — das Frontend zeigt dann eine Platzhalterkachel."""
+    result = await asyncio.to_thread(instances.mod_icon, instance_id, filename)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Kein Mod-Icon verfügbar")
+    data, mime = result
+    # Cache-Schlüssel enthält Größe+mtime der jar → Inhalt ist unveränderlich
+    return Response(content=data, media_type=mime, headers={
+        "Cache-Control": "public, max-age=86400, immutable"})
 
 
 @api.delete("/instances/{instance_id}/mods/{filename}")

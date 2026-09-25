@@ -2352,6 +2352,29 @@
     applyModFilter();
   }
 
+  // Lesbarer Anzeigename: Version-/Loader-Suffixe aus dem Dateinamen entfernen
+  // ("jei-1.21.1-forge-19.21.1.310.jar" → "jei"), voller Name bleibt im Tooltip
+  function modDisplayName(filename) {
+    const base = filename.replace(/\.jar(\.disabled)?$/i, "");
+    const parts = base.split(/[-_+]+/).filter(Boolean);
+    if (!parts.length) return base.slice(0, 32);
+    const isNoise = (p) => /^v?\d/.test(p)
+      || /^(mc|forge|fabric|neoforge|quilt|universal|client|server|api|all|snapshot)$/i.test(p);
+    const out = [parts[0]];
+    if (parts.length > 1 && !isNoise(parts[1])
+        && parts[0].length + parts[1].length <= 30) {
+      out.push(parts[1]);
+    }
+    const name = out.join("-");
+    return name.length >= 2 ? name : base.slice(0, 32);
+  }
+
+  function modLetterColor(name) {
+    let h = 0;
+    for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return `hsl(${h % 360} 30% 32%)`;
+  }
+
   // Kompakte, filterbare Mod-Liste: Zusammenfassung + Zeilen
   function applyModFilter() {
     const list = $("#detail-mods");
@@ -2374,9 +2397,26 @@
 
     for (const mod of mods) {
       const node = $("#tpl-mod-row").content.cloneNode(true);
+      const display = modDisplayName(mod.filename);
       const nameEl = node.querySelector(".mod-name");
-      nameEl.textContent = mod.filename;
+      nameEl.textContent = display;
       nameEl.title = mod.filename; // volle Nummer bei Abschneiden per Tooltip
+      // Icon: Logo aus der .jar (Backend-Endpoint); ohne Logo Platzhalter-
+      // kachel mit den Anfangsbuchstaben in stabiler Zufallsfarbe
+      const img = node.querySelector(".mod-icon");
+      const letter = node.querySelector(".mod-letter");
+      letter.textContent = display.replace(/[^A-Za-z0-9]/g, "").slice(0, 2)
+        .toUpperCase() || "?";
+      letter.style.background = modLetterColor(mod.filename);
+      img.addEventListener("load", () => {
+        show(img, true);
+        letter.classList.add("hidden");
+      });
+      img.addEventListener("error", () => {
+        show(img, false);
+        letter.classList.remove("hidden");
+      });
+      img.src = `/api/instances/${state.detailId}/mods/${encodeURIComponent(mod.filename)}/icon`;
       const updateItem = state.detailUpdates?.[mod.filename];
       const updateAvailable = updateItem?.status === "update_available";
       setText(node.querySelector(".mod-meta"),

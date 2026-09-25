@@ -15,12 +15,13 @@ import shutil
 import threading
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 from fastapi import HTTPException
 
 from .config import ALLOWED_LOADERS, settings
-from .security import validate_identifier
+from .security import safe_mods_path, validate_identifier
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,63}$")
 _MEMORY_RE = re.compile(r"^(?:[1-9]\d{0,3})[GgMm]$")
@@ -696,6 +697,123 @@ def toggle_mod(instance_id: str, filename: str, enabled: bool) -> dict:
     return toggle_mod_in(mods_dir(instance_id), filename, enabled)
 
 
+# ---------------------------------------------------------------------------
+# Mod-Icons: Logo direkt aus der .jar extrahieren (Forge/NeoForge mods.toml
+# logoFile, fabric.mod.json / quilt.mod.json icon) und auf Platte cachen —
+# funktioniert offline, ohne Modrinth/CurseForge-Rate-Limits.
+# ---------------------------------------------------------------------------
+
+_ICON_TYPES = (
+    (b"\x89PNG", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF8", "image/gif"),
+    (b"RIFF", "image/webp"),  # RIFF....WEBP (magic[8:12] wird geprüft)
+)
+_LOGO_RE = re.compile(r'^\s*logoFile\s*=\s*"([^"\n]+)"', re.MULTILINE)
+
+
+def _sniff_image(data: bytes) -> str | None:
+    for magic, mime in _ICON_TYPES:
+        if data.startswith(magic):
+            if mime == "image/webp" and data[8:12] != b"WEBP":
+                continue
+            return mime
+    return None
+
+
+def _icon_cache_dir() -> Path:
+    directory = _root().parent / "mod-icons"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _extract_icon(path: Path) -> tuple | None:
+    """(bytes, media_type) des in der .jar deklarierten Logos — oder None."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+            logo = None
+            for meta in ("META-INF/mods.toml", "META-INF/neoforge.mods.toml",
+                         "fabric.mod.json", "quilt.mod.json",
+                         "META-INF/quilt.mod.json"):
+                if meta not in names:
+                    continue
+                try:
+                    raw = zf.read(meta).decode("utf-8", "replace")
+                except (KeyError, OSError):
+                    continue
+                if meta.endswith(".toml"):
+                    match = _LOGO_RE.search(raw)
+                    if match:
+                        logo = match.group(1).strip()
+                        break
+                else:
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if meta.startswith("fabric"):
+                        icon = obj.get("icon")
+                    else:
+                        icon = ((obj.get("metadata") or {}).get("mod")
+                                or {}).get("icon")
+                    if isinstance(icon, str) and icon.strip():
+                        logo = icon.strip()
+                        break
+            if not logo or logo.lower().startswith(("http://", "https://")):
+                return None
+            # Eintrag lesen: exakter Pfad, sonst basename-Suche in der jar
+            base = logo.split("/")[-1].lower()
+            for name in [logo] + [n for n in sorted(names)
+                                  if n.split("/")[-1].lower() == base and n != logo]:
+                try:
+                    data = zf.read(name)
+                except (KeyError, OSError):
+                    continue
+                mime = _sniff_image(data)
+                if mime:
+                    return data, mime
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return None
+    return None
+
+
+def mod_icon(instance_id: str, filename: str) -> tuple | None:
+    """Logo einer Mod für die Mod-Liste; (bytes, media_type) oder None, wenn
+    die Mod kein Logo mitbringt. Ergebnis wird gecacht (Schlüssel: Dateiname
+    + Größe + mtime — nach Mod-Update wird automatisch neu extrahiert)."""
+    path = safe_mods_path(mods_dir(instance_id), filename)
+    try:
+        st = path.stat()
+    except OSError:
+        raise HTTPException(status_code=404, detail="Mod nicht gefunden")
+    cache_dir = _icon_cache_dir()
+    stem = re.sub(r"[^A-Za-z0-9._-]", "_", filename)
+    cache_file = cache_dir / f"{stem}.{st.st_size}.{st.st_mtime_ns}.bin"
+    if cache_file.is_file():
+        try:
+            raw = cache_file.read_bytes()
+            code = raw[0]
+            if code < len(_ICON_TYPES) and len(raw) > 1:
+                return raw[1:], _ICON_TYPES[code][1]
+        except OSError:
+            pass  # kaputter Cache → neu extrahieren
+    found = _extract_icon(path)
+    if found is None:
+        return None
+    data, mime = found
+    code = next(i for i, (_magic, m) in enumerate(_ICON_TYPES) if m == mime)
+    try:
+        cache_file.write_bytes(bytes([code]) + data)
+        # Veraltete Cache-Einträge derselben Mod (altes mtime/Größe) löschen
+        for old in cache_dir.glob(f"{stem}.*.bin"):
+            if old != cache_file:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass  # Cache-Fehler: Icon trotzdem ausliefern
+    return data, mime
+
+
 def toggle_mod_in(directory, filename: str, enabled: bool) -> dict:
     """Aktiviert/deaktiviert eine Mod in einem mods-Ordner per Umbenennen
     (.jar <-> .jar.disabled); deaktivierte Dateien ignoriert der Server."""
@@ -988,9 +1106,11 @@ __all__ = [
     "find_world_dir",
     "get_instance",
     "instance_dir",
+    "invalidate_disk_cache",
     "list_instances",
     "list_mods",
     "list_mods_in",
+    "mod_icon",
     "mods_dir",
     "pack_dir",
     "properties_schema",

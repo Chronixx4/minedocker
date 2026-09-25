@@ -449,3 +449,89 @@ class TestArchiveValidation:
                      "a" * 300 + ".zip", "a.zip\x00"):
             with pytest.raises(HTTPException):
                 worlds.validate_archive_filename(name)
+
+
+# ---------------------------------------------------------------------------
+# Mod-Icons: Logo aus der .jar extrahieren
+# ---------------------------------------------------------------------------
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"IMGDATA" * 4
+_GIF = b"GIF89a" + b"x" * 8
+
+
+class TestModIcons:
+    def test_fabric_icon_extrahiert(self):
+        inst = _create()
+        jar = _zip_bytes({
+            "fabric.mod.json": json.dumps({"icon": "assets/demo/icon.png"}),
+            "assets/demo/icon.png": _PNG,
+            "META-INF/MANIFEST.MF": b"Manifest",
+        })
+        (instances.mods_dir(inst["id"]) / "demo-mod.jar").write_bytes(jar)
+        data, mime = instances.mod_icon(inst["id"], "demo-mod.jar")
+        assert data == _PNG
+        assert mime == "image/png"
+
+    def test_forge_logo_file_extrahiert(self):
+        inst = _create()
+        jar = _zip_bytes({
+            "META-INF/mods.toml": (
+                'modLoader="javafml"\n[[mods]]\nmodId="demo"\n'
+                'logoFile="logo.png"\n'),
+            "logo.png": _PNG,
+        })
+        (instances.mods_dir(inst["id"]) / "forge-mod.jar").write_bytes(jar)
+        data, mime = instances.mod_icon(inst["id"], "forge-mod.jar")
+        assert data == _PNG
+        assert mime == "image/png"
+
+    def test_ohne_logo_none(self):
+        inst = _create()
+        jar = _zip_bytes({"fabric.mod.json": json.dumps({"id": "demo"})})
+        (instances.mods_dir(inst["id"]) / "plain.jar").write_bytes(jar)
+        assert instances.mod_icon(inst["id"], "plain.jar") is None
+
+    def test_icon_typ_gif_und_basename_fallback(self):
+        inst = _create()
+        jar = _zip_bytes({
+            "fabric.mod.json": json.dumps({"icon": "fehlt/unter/icon.png"}),
+            "assets/demo/icon.png": _GIF,
+        })
+        (instances.mods_dir(inst["id"]) / "gif-mod.jar").write_bytes(jar)
+        data, mime = instances.mod_icon(inst["id"], "gif-mod.jar")
+        assert data == _GIF
+        assert mime == "image/gif"
+
+    def test_cache_wird_verwendet(self):
+        inst = _create()
+        jar = _zip_bytes({"fabric.mod.json": json.dumps(
+            {"icon": "assets/demo/icon.png"}), "assets/demo/icon.png": _PNG})
+        path = instances.mods_dir(inst["id"]) / "cached.jar"
+        path.write_bytes(jar)
+        assert instances.mod_icon(inst["id"], "cached.jar") == (_PNG, "image/png")
+        # Datei ersetzen (Cache-Prüfung läuft über mtime/Größe)
+        path.write_bytes(jar + b"trailing")
+        assert instances.mod_icon(inst["id"], "cached.jar") == (_PNG, "image/png")
+
+    def test_api_endpoint(self, client):
+        inst = _create()
+        jar = _zip_bytes({"fabric.mod.json": json.dumps(
+            {"icon": "assets/demo/icon.png"}), "assets/demo/icon.png": _PNG})
+        (instances.mods_dir(inst["id"]) / "api-mod.jar").write_bytes(jar)
+        (instances.mods_dir(inst["id"]) / "no-icon.jar").write_bytes(
+            _zip_bytes({"fabric.mod.json": "{}"}))
+        r = client.get(f"/api/instances/{inst['id']}/mods/api-mod.jar/icon")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/png")
+        assert r.headers["cache-control"].startswith("public")
+        assert client.get(
+            f"/api/instances/{inst['id']}/mods/no-icon.jar/icon"
+        ).status_code == 404
+        assert client.get(
+            f"/api/instances/{inst['id']}/mods/fehlt.jar/icon"
+        ).status_code == 404
+
+    def test_api_traversal_abgelehnt(self, client):
+        inst = _create()
+        r = client.get(f"/api/instances/{inst['id']}/mods/..%2Fevil.jar/icon")
+        assert r.status_code in (400, 404)
