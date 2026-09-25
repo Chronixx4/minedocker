@@ -1,27 +1,27 @@
 /* ============================================================================
    Minecraft Dashboard – Design-System
-   Dunkles Theme · Inter-Typografie · Emerald/Cyan-Akzent
+   Dunkles Theme · Inter-Typografie · Grüner Akzent (SpawnBox-Look)
    Weiche Tiefen, Micro-Interactions, moderne Komponenten
    ========================================================================== */
 
 :root {
-  /* --- Farbwelt: Amber/Orange auf warmem Anthrazit --- */
-  --bg: #141210;
-  --bg-soft: #1a1714;
-  --surface: #221e19;
-  --surface-2: #2b2620;
-  --surface-3: #38322a;
-  --border: #3d362c;
-  --border-strong: #5a4f3e;
+  /* --- Farbwelt: Frisches Grün auf dunklem, leicht grün getöntem Anthrazit --- */
+  --bg: #0c0f0e;
+  --bg-soft: #111514;
+  --surface: #171c1a;
+  --surface-2: #1f2624;
+  --surface-3: #28312d;
+  --border: #2a332f;
+  --border-strong: #3e4a44;
 
-  --text: #f4efe7;
-  --text-2: #b8ac9c;
-  --muted: #8a7e6f;
+  --text: #f0f4f0;
+  --text-2: #aebbb1;
+  --muted: #7d8a7f;
 
-  --accent: #f97316;
-  --accent-2: #fbbf24;
-  --accent-soft: rgba(249, 115, 22, 0.14);
-  --grad: linear-gradient(135deg, #f59e0b, #f97316);
+  --accent: #4ade80;
+  --accent-2: #34d399;
+  --accent-soft: rgba(74, 222, 128, 0.13);
+  --grad: linear-gradient(135deg, #34d399, #22c55e);
 
   --ok: #4ade80;
   --ok-soft: rgba(74, 222, 128, 0.12);
@@ -40,8 +40,8 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.22);
   --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.3), 0 8px 20px -4px rgba(0, 0, 0, 0.38), 0 16px 40px -12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 28px -8px rgba(0, 0, 0, 0.5), 0 32px 64px -16px rgba(0, 0, 0, 0.6);
-  --glow: 0 4px 16px rgba(249, 115, 22, 0.35);
-  --ring: 0 0 0 3px rgba(249, 115, 22, 0.25);
+  --glow: 0 4px 16px rgba(52, 211, 153, 0.3);
+  --ring: 0 0 0 3px rgba(74, 222, 128, 0.25);
 
   /* --- Typografie --- */
   --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -80,11 +80,11 @@ body::before {
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(640px 420px at 88% -12%, rgba(249, 115, 22, 0.12), transparent 60%),
-    radial-gradient(540px 380px at 6% -14%, rgba(245, 158, 11, 0.1), transparent 60%);
+    radial-gradient(640px 420px at 88% -12%, rgba(74, 222, 128, 0.09), transparent 60%),
+    radial-gradient(540px 380px at 6% -14%, rgba(45, 212, 191, 0.08), transparent 60%);
 }
 
-::selection { background: rgba(249, 115, 22, 0.35); }
+::selection { background: rgba(74, 222, 128, 0.3); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -118,7 +118,7 @@ a:hover { color: var(--accent); text-decoration: underline; }
   justify-content: space-between;
   gap: 1rem;
   padding: 0.85rem 1.4rem;
-  background: rgba(20, 18, 16, 0.82);
+  background: rgba(10, 13, 12, 0.82);
   backdrop-filter: blur(14px) saturate(1.3);
   -webkit-backdrop-filter: blur(14px) saturate(1.3);
   border-bottom: 1px solid var(--border);
@@ -382,7 +382,7 @@ body.vt-tab .panel.active { animation: none; }
 .btn.primary:hover:not(:disabled) {
   background: var(--grad);
   filter: brightness(1.08);
-  box-shadow: 0 6px 22px rgba(249, 115, 22, 0.5);
+  box-shadow: 0 6px 22px rgba(52, 211, 153, 0.42);
 }
 
 .btn.danger {
@@ -519,7 +519,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .dl-bar {
   height: 100%;
   border-radius: var(--radius-full);
-  background: linear-gradient(90deg, #fbbf24, #f97316);
+  background: linear-gradient(90deg, #34d399, #22c55e);
   transition: width 0.3s linear;
 }
 
@@ -866,7 +866,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .stat-icon svg { width: 21px; height: 21px; }
 .stat-icon.i-instances { background: var(--accent-soft); color: var(--accent-2); }
 .stat-icon.i-players { background: rgba(45, 212, 191, 0.13); color: #2dd4bf; }
-.stat-icon.i-cpu { background: rgba(249, 115, 22, 0.14); color: #fb923c; }
+.stat-icon.i-cpu { background: rgba(74, 222, 128, 0.14); color: #4ade80; }
 .stat-icon.i-ram { background: rgba(96, 165, 250, 0.14); color: #60a5fa; }
 .stat-body { min-width: 0; flex: 1; }
 .stat-value {
@@ -893,7 +893,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .dist-fill { height: 100%; min-width: 0; transition: width 0.45s ease; }
 .dist-fill.running { background: var(--ok); }
 .dist-fill.starting { background: var(--accent); }
-.dist-fill.stopped { background: #57534e; }
+.dist-fill.stopped { background: #4a5550; }
 .dist-fill.error { background: var(--err); }
 
 /* ---------- Sparklines (Verlaufskurven) ---------- */
@@ -901,7 +901,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .spark svg { display: block; width: 100%; height: 26px; }
 .spark.sm svg { height: 16px; }
 .spark .spark-line { fill: none; stroke: var(--accent-2); stroke-width: 1.5; }
-.spark .spark-area { fill: rgba(249, 115, 22, 0.14); stroke: none; }
+.spark .spark-area { fill: rgba(52, 211, 153, 0.14); stroke: none; }
 .spark.ram .spark-line { stroke: #60a5fa; }
 .spark.ram .spark-area { fill: rgba(96, 165, 250, 0.14); }
 
@@ -1315,14 +1315,14 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 }
 
 .logs {
-  background: #100e0b;
+  background: #0d1110;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 0.7rem 0.9rem;
   font-family: var(--mono);
   font-size: 0.78rem;
   line-height: 1.55;
-  color: #c2b5a6;
+  color: #b7c2b9;
   max-height: 320px;
   overflow: auto;
   white-space: pre-wrap;
@@ -1431,7 +1431,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
     padding: 0.35rem 0.4rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
     border-bottom: none;
     border-top: 1px solid var(--border);
-    background: rgba(20, 18, 16, 0.92);
+    background: rgba(10, 13, 12, 0.92);
     backdrop-filter: blur(14px) saturate(1.3);
     -webkit-backdrop-filter: blur(14px) saturate(1.3);
     overflow: visible;
@@ -1597,7 +1597,7 @@ body.role-viewer .admin-only { display: none !important; }
   align-items: center;
   justify-content: center;
   padding: 1.2rem;
-  background: rgba(12, 10, 8, 0.82);
+  background: rgba(8, 11, 10, 0.84);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   overflow: auto;
@@ -1625,7 +1625,7 @@ body.role-viewer .admin-only { display: none !important; }
   justify-content: center;
   border-radius: var(--radius-sm);
   background: var(--grad);
-  color: #2a1503;
+  color: #06230f;
 }
 .auth-brand .brand-mark svg { width: 21px; height: 21px; }
 .auth-brand h1 { font-size: 1.05rem; margin: 0; }
@@ -1684,7 +1684,7 @@ body.role-viewer .admin-only { display: none !important; }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes fade-out { to { opacity: 0; } }
 .modal::backdrop {
-  background: rgba(12, 10, 8, 0.7);
+  background: rgba(8, 11, 10, 0.7);
   backdrop-filter: blur(4px);
 }
 .modal-body { padding: 1.3rem 1.4rem 1.4rem; overflow: auto; }
@@ -1811,4 +1811,173 @@ body.role-viewer .admin-only { display: none !important; }
   border-radius: var(--radius-sm);
   font: inherit;
   font-size: 0.85rem;
+}
+
+/* ============================================================================
+   Server-Workspace (SpawnBox-Look)
+   Instanz-Tab-Leiste oben · Info/Steuerung/Backups als Kopf-Grid ·
+   Bereichs-Tabs für die Detail-Boxen
+   ========================================================================== */
+
+/* ---------- Instanz-Tab-Leiste ---------- */
+.inst-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.1rem;
+}
+.inst-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 0.42rem 0.95rem;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 500;
+  cursor: pointer;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background var(--t), color var(--t), border-color var(--t), transform var(--t-fast);
+}
+.inst-tab:hover { background: var(--surface-2); color: var(--text); }
+.inst-tab:active { transform: scale(0.97); }
+.inst-tab.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+.inst-tab-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.inst-tab-dot.running { background: var(--ok); }
+.inst-tab-dot.starting { background: var(--warn); animation: pulse 2.4s ease-in-out infinite; }
+.inst-tab-dot.stopped { background: var(--muted); }
+.inst-tab-dot.error { background: var(--err); }
+.inst-tab.add { border-style: dashed; color: var(--accent-2); }
+.inst-tab.add:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* ---------- Workspace-Kopf: Info / Steuerung / Backups ---------- */
+.ws-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 0.95fr);
+  gap: 0.9rem;
+  margin-top: 0.9rem;
+}
+.ws-box {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem 1rem;
+  min-width: 0;
+}
+.ws-box h3 {
+  margin: 0 0 0.55rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.ws-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+.ws-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+.ws-actions .btn { width: 100%; min-height: 42px; font-weight: 600; }
+.ws-btn-restart {
+  background: var(--warn-soft);
+  border-color: rgba(251, 191, 36, 0.4);
+  color: var(--warn);
+}
+.ws-btn-restart:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.22);
+  border-color: var(--warn);
+}
+#ws-uptime { margin: 0.55rem 0 0; }
+.ws-chat {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.7rem 0 0.75rem;
+}
+.ws-chat .search-input { flex: 1 1 auto; min-width: 0; }
+
+/* ---------- Bereichs-Tabs im Workspace ---------- */
+.ws-tabs {
+  display: flex;
+  gap: 0.3rem;
+  overflow-x: auto;
+  margin-top: 1.1rem;
+  padding-bottom: 0.35rem;
+}
+.ws-tab {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 500;
+  padding: 0.4rem 0.95rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t), color var(--t), border-color var(--t);
+}
+.ws-tab:hover { background: var(--surface-2); color: var(--text); }
+.ws-tab.active {
+  background: var(--grad);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.ws-panels { margin-top: 0.8rem; }
+.ws-panel { min-width: 0; }
+/* Detail-Boxen wirken innerhalb der Panels als Karten statt als Abschnitte */
+.ws-panel .upload-box {
+  margin-top: 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+  margin-bottom: 1.2rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem 1rem;
+}
+/* Mods-/Logs-Spalte aus dem alten Detail-Grid als Karte im Panel */
+.ws-modsbox,
+.ws-logcol {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem 1rem;
+  margin-bottom: 1.2rem;
+  min-width: 0;
+}
+
+@media (max-width: 1280px) {
+  .ws-top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ws-top .ws-box:nth-child(3) { grid-column: 1 / -1; }
+}
+@media (max-width: 760px) {
+  .ws-top { grid-template-columns: 1fr; gap: 0.7rem; }
 }

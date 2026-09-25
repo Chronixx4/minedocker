@@ -1132,6 +1132,9 @@
     state.ovUpdatedAt = Date.now();
     pushOverviewHistory();
     renderOverview();
+    renderInstTabs(state.ovInstances?.instances || []);
+    updateWsControls();
+    updateWsPerf();
     updateUpdatedHint();
     if (res.status === "rejected" && res.reason?.status !== 401) {
       setText($("#ov-error"), `Ressourcen nicht abrufbar: ${res.reason.message}`);
@@ -1668,6 +1671,8 @@
      Multi-Server-Verwaltung (Instanzen, Katalog, Modpacks)
      ===================================================================== */
   state.detailId = null;
+  state.detailData = null;   // letzte /api/instances/{id}-Antwort (Workspace-Steuerung)
+  state.wsTab = null;        // aktiver Workspace-Bereich (Mods, Welt, …)
   state.createLoaded = false;
   state.packOffset = 0;
   state.packTotal = 0;
@@ -1695,6 +1700,7 @@
       setText($("#inst-count"), `(${data.instances.length})`);
       show($("#inst-empty"), data.instances.length === 0);
       renderInstances(data.instances);
+      renderInstTabs(data.instances);
     } catch (e) {
       setText($("#inst-error"), `Instanzen konnten nicht geladen werden: ${e.message}`);
       show($("#inst-error"), true);
@@ -1825,6 +1831,7 @@
   }
 
   async function openCreate() {
+    if (state.detailId) closeDetail(); // Workspace schließen, Formular freilegen
     show($("#inst-create"), true);
     if (state.createLoaded) return;
     fillSelect($("#inst-mc-version"), [], "Versionen werden geladen…");
@@ -1958,6 +1965,7 @@
 
   /* ---------- Bestehenden Server importieren ---------- */
   $("#inst-import").addEventListener("click", async () => {
+    if (state.detailId) closeDetail(); // Workspace schließen, Import freilegen
     show($("#inst-import-box"), true);
     show($("#inst-create"), false);
     show($("#imp-msg"), false);
@@ -2117,13 +2125,19 @@
     }
   }
 
-  /* ---------- Detail-Ansicht ---------- */
+  /* ---------- Detail-Ansicht (Instanz-Workspace) ---------- */
   async function openDetail(id) {
     state.detailId = id;
+    show($("#inst-list-wrap"), false); // Workspace ersetzt die Liste (Tab-Look)
+    show($("#inst-create"), false);
+    show($("#inst-import-box"), false);
+    activateWsTab(state.wsTab || "mods");
+    updateWsControls();
+    updateWsPerf();
     updateInstSelection(); // Karte im Server-Tab hervorheben
     closeDetailLogStream(); // Stream/Timer der vorherigen Instanz beenden
     showSoft($("#inst-detail"), true);
-    // Mobil/Tablet: Detail liegt unter dem Karten-Raster — dorthin scrollen
+    // Mobil: Workspace liegt über der Liste — von oben einblenden
     if (window.matchMedia("(max-width: 760px)").matches) {
       $("#inst-detail").scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -2193,16 +2207,26 @@
       show($("#mp-update-error"), false);
       checkPackUpdate(true);
     }
-    if (state.cfgOpen) loadCfg();
+    // server.properties laden: füttert den Editor UND die Info-Box
+    // (Schwierigkeit, Spielmodus, MOTD) — nach dem Laden Info neu rendern
+    const openedId = state.detailId;
+    loadCfg().then(() => {
+      if (state.detailId === openedId && state.detailData) {
+        renderDetailInfo(state.detailData);
+      }
+    });
+    updateWsControls();
     loadBackups();
     loadWorldInfo();
     loadIconPreview();
   }
   function closeDetail() {
     state.detailId = null;
+    state.detailData = null;
     updateInstSelection(); // Hervorhebung aufheben
     closeDetailLogStream();
     showSoft($("#inst-detail"), false);
+    show($("#inst-list-wrap"), true); // Liste wieder einblenden
   }
   $("#detail-close").addEventListener("click", closeDetail);
 
@@ -2218,6 +2242,7 @@
       badge.className = "badge inst-badge";
       badge.classList.add(stateBadgeClass(detail));
       setText($("#detail-state-text"), OV_STATE_LABELS[instStateKey(detail)]);
+      state.detailData = detail;
       renderDetailInfo(detail);
       renderDetailMods(detail.mods || []);
       state.detailRunning = !!detail.container?.running;
@@ -2260,6 +2285,7 @@
       ["Loader", `${detail.loader}${detail.loader_version ? ` ${detail.loader_version}` : ""}`],
       ["Minecraft", detail.game_version],
       ["Port", String(detail.port)],
+      ["Adresse", hostFor(detail)],
       ["RAM", detail.memory || "2G"],
       ["Speicher", diskLine || "–"],
       ["Erstellt", fmtDate(detail.created_at)],
@@ -2269,6 +2295,17 @@
       ["Server-Version", ping.version || "–"],
       ["Verzeichnis", `${detail.id}/`],
     ];
+    // server.properties-Anreicherung (wenn Config schon geladen wurde)
+    const props = new Map(state.cfgProps.map((p) => [p.key, p.value]));
+    if (props.get("difficulty")) {
+      items.splice(5, 0, ["Schwierigkeit", String(props.get("difficulty"))]);
+    }
+    if (props.get("gamemode")) {
+      items.splice(6, 0, ["Spielmodus", String(props.get("gamemode"))]);
+    }
+    const motd = String(props.get("motd") || ping.motd || "")
+      .replace(/\s+/g, " ").trim();
+    if (motd) items.push(["MOTD", motd]);
     if (detail.modpack?.title) {
       items.push(["Modpack", `${detail.modpack.title} (${detail.modpack.files} Dateien)`]);
     }
@@ -2279,6 +2316,11 @@
       dt.textContent = k;
       const dd = document.createElement("dd");
       dd.textContent = v;
+      if (k === "Adresse") {
+        dd.title = "Klicken zum Kopieren";
+        dd.style.cursor = "copy";
+        dd.addEventListener("click", () => copyAddress(detail));
+      }
       dl.append(dt, dd);
     }
     box.appendChild(dl);
@@ -2465,8 +2507,8 @@
   $("#detail-logs-reload").addEventListener("click", loadDetailLogs);
 
   /* ---------- Statistik-Verlauf (persistente Charts) ---------- */
-  const CHART_COLORS = ["#f97316", "#60a5fa", "#2dd4bf", "#fbbf24",
-    "#a855f7", "#4ade80", "#ef4444", "#fda4af"];
+  const CHART_COLORS = ["#4ade80", "#60a5fa", "#2dd4bf", "#fbbf24",
+    "#a855f7", "#fda4af", "#ef4444", "#94a3b8"];
 
   function renderChart(box, seriesList, w = 720, h = 150) {
     box.textContent = "";
@@ -2534,7 +2576,7 @@
     setText($("#stats-cpu-now"), `aktuell: ${last.cpu} %`);
     setText($("#stats-ram-now"), `aktuell: ${fmtMb(last.ram_mb)}`);
     setText($("#stats-players-now"), `aktuell: ${Math.round(last.players)} online`);
-    renderChart($("#chart-cpu"), [{ values: points.map((p) => p.cpu), color: "#f97316" }]);
+    renderChart($("#chart-cpu"), [{ values: points.map((p) => p.cpu), color: "#4ade80" }]);
     renderChart($("#chart-ram"), [{ values: points.map((p) => p.ram_mb), color: "#60a5fa" }]);
 
     // Spieler: Gesamtlinie + eine Linie je Instanz (auf dasselbe Zeitraster
@@ -3410,10 +3452,42 @@
         row.append(info, btns);
         list.appendChild(row);
       }
+      renderBackupMini(data.backups);
     } catch (e) {
       show($("#backup-empty"), false);
       setText($("#backup-error"), `Backups nicht abrufbar: ${e.message}`);
       show($("#backup-error"), true);
+    }
+  }
+
+  /* ---------- Backup-Kompaktpanel im Workspace-Kopf ---------- */
+  function renderBackupMini(backups) {
+    const list = $("#bk-mini-list");
+    if (!list) return;
+    list.textContent = "";
+    const all = backups || [];
+    const total = all.reduce((s, b) => s + (b.size_bytes || 0), 0);
+    setText($("#bk-mini-summary"), all.length
+      ? `${all.length} Backup${all.length === 1 ? "" : "s"} · ${fmtBytes(total)} gesamt`
+      : "Noch keine Backups vorhanden.");
+    for (const b of all.slice(0, 4)) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const nm = document.createElement("span");
+      nm.className = "mod-name";
+      nm.textContent = b.name;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = `${fmtBytes(b.size_bytes)} · ${fmtDate(b.created)}`;
+      info.append(nm, meta);
+      const rb = document.createElement("button");
+      rb.className = "btn";
+      rb.textContent = "Wiederherstellen";
+      rb.addEventListener("click", () => restoreBackup(b.name));
+      li.append(info, rb);
+      list.appendChild(li);
     }
   }
 
@@ -4114,6 +4188,7 @@
   function loadSchedule(detail) {
     const sched = detail.schedule || {};
     $("#sched-autostart").checked = !!sched.auto_start;
+    $("#ws-autostart").checked = !!sched.auto_start;
     const rs = sched.restart || {};
     $("#sched-restart-enabled").checked = !!rs.enabled;
     $("#sched-restart-time").value = rs.time || "04:00";
@@ -4964,5 +5039,254 @@
     if (!state.detailId) return;
     instAction({ id: state.detailId }, "restart");
   });
+
+  /* =====================================================================
+     Instanz-Workspace (SpawnBox-Look)
+     - Instanz-Tabs oben: Schnellwechsel zwischen Servern + "Alle"-Tab
+     - Kopf-Grid: Server-Info · Steuerung (Start/Stop/Chat/Auto-Start) ·
+       Backup-Kompaktpanel
+     - Bereichs-Tabs: bestehende Detail-Boxen werden bei Init in Panels
+       einsortiert (DOM bleibt sonst unverändert — keine Backend-Änderung)
+     ===================================================================== */
+  const WS_TABS = [
+    ["mods", "Mods & Packs"],
+    ["welt", "Welt"],
+    ["dateien", "Dateien"],
+    ["spieler", "Spieler"],
+    ["konsole", "Konsole"],
+    ["einstellungen", "Einstellungen"],
+    ["zeitplan", "Zeitplan"],
+    ["backups", "Backups"],
+    ["logs", "Logs"],
+  ];
+
+  function activateWsTab(key) {
+    state.wsTab = key;
+    try { localStorage.setItem("md_ws_tab", key); } catch (e) { /* optional */ }
+    document.querySelectorAll("#ws-tabs .ws-tab").forEach((b) =>
+      b.classList.toggle("active", b.dataset.wsTab === key));
+    document.querySelectorAll("#ws-panels .ws-panel").forEach((p) =>
+      show(p, p.dataset.wsPanel === key));
+  }
+
+  /* Sortiert die Detail-Boxen einmalig in die Workspace-Panels um.
+     Anker = stabile IDs innerhalb der jeweiligen Box. */
+  function organizeWorkspace() {
+    const mapping = [
+      ["#mp-update-check", "mods"],       // Installiertes Modpack
+      ["#pack-search-input", "mods"],     // Modpack installieren (Suche)
+      ["#pack-upload-file", "mods"],      // Modpack hochladen
+      ["#world-reload", "welt"],          // Welt
+      ["#icon-reload", "welt"],           // Server-Icon
+      ["#dp-reload", "welt"],             // Datapacks
+      ["#fb-reload", "dateien"],          // Datei-Browser
+      ["#rcon-reload", "spieler"],        // Spieler verwalten (RCON)
+      ["#wl-reload-file", "spieler"],     // Whitelist
+      ["#gr-reload", "spieler"],          // Gamerules
+      ["#cfg-toggle", "einstellungen"],   // server.properties
+      ["#jvm-save", "einstellungen"],     // JVM & RAM
+      ["#tags-save", "einstellungen"],    // Tags & Port
+      ["#sched-autostart", "zeitplan"],   // Zeitplan
+      ["#console-send", "konsole"],       // RCON-Konsole
+      ["#backup-create-btn", "backups"],  // Backup-Verwaltung
+    ];
+    for (const [anchorSel, target] of mapping) {
+      const anchor = document.querySelector(anchorSel);
+      const panel = document.querySelector(`.ws-panel[data-ws-panel="${target}"]`);
+      if (!anchor || !panel) continue;
+      const box = anchor.closest(".upload-box");
+      if (box) panel.appendChild(box);
+    }
+    // Mods-/Logs-Spalte aus dem alten Detail-Grid einsortieren
+    const modsBox = document.querySelector("#detail-mods")?.closest("div");
+    const modsPanel = document.querySelector('.ws-panel[data-ws-panel="mods"]');
+    if (modsBox && modsPanel) {
+      modsBox.classList.add("ws-modsbox");
+      modsPanel.appendChild(modsBox);
+    }
+    const logsBox = document.querySelector(".ws-logcol");
+    const logsPanel = document.querySelector('.ws-panel[data-ws-panel="logs"]');
+    if (logsBox && logsPanel) logsPanel.appendChild(logsBox);
+    document.querySelector("#inst-detail .detail-grid")?.remove();
+
+    // Bereichs-Tabs aufbauen
+    const nav = $("#ws-tabs");
+    nav.textContent = "";
+    for (const [key, label] of WS_TABS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "ws-tab";
+      b.dataset.wsTab = key;
+      b.textContent = label;
+      b.addEventListener("click", () => activateWsTab(key));
+      nav.appendChild(b);
+    }
+    let saved = null;
+    try { saved = localStorage.getItem("md_ws_tab"); } catch (e) { /* optional */ }
+    activateWsTab(saved && WS_TABS.some(([k]) => k === saved) ? saved : "mods");
+  }
+
+  /* ---------- Instanz-Tab-Leiste oben ---------- */
+  function renderInstTabs(list) {
+    const nav = $("#inst-tabs");
+    if (!nav) return;
+    nav.textContent = "";
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "inst-tab" + (state.detailId ? "" : " active");
+    all.textContent = "Alle Server";
+    all.addEventListener("click", () => { if (state.detailId) closeDetail(); });
+    nav.appendChild(all);
+    const instances = (list || []).slice()
+      .sort((a, b) => a.name.localeCompare(b.name, "de"));
+    for (const inst of instances) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "inst-tab" + (inst.id === state.detailId ? " active" : "");
+      const dot = document.createElement("span");
+      dot.className = `inst-tab-dot ${instStateKey(inst)}`;
+      b.appendChild(dot);
+      b.appendChild(document.createTextNode(inst.name));
+      b.title = `${inst.loader} · MC ${inst.game_version} · Port ${inst.port}`;
+      b.addEventListener("click", () => {
+        if (inst.id === state.detailId) return;
+        activateTab("servers");
+        openDetail(inst.id);
+      });
+      nav.appendChild(b);
+    }
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "inst-tab add admin-only";
+    add.textContent = "+ Server";
+    add.title = "Neuen Server erstellen";
+    add.addEventListener("click", () => {
+      activateTab("servers");
+      openCreate();
+    });
+    nav.appendChild(add);
+  }
+
+  /* ---------- Workspace-Steuerung ---------- */
+  function currentDetailInst() {
+    return (state.ovInstances?.instances || [])
+      .find((i) => i.id === state.detailId) || null;
+  }
+
+  function updateWsControls() {
+    if (!state.detailId) return;
+    const inst = currentDetailInst() || state.detailData;
+    if (!inst) return;
+    const key = instStateKey(inst);
+    const running = key === "running";
+    const starting = key === "starting";
+    $("#ws-start").disabled = running || starting;
+    $("#ws-stop").disabled = !running;
+    $("#ws-restart").disabled = !running;
+    const badge = $("#detail-state");
+    badge.className = "badge inst-badge";
+    badge.classList.add(stateBadgeClass(inst));
+    setText($("#detail-state-text"), OV_STATE_LABELS[key]);
+    const up = running && inst.container?.started_at
+      ? fmtUptime(inst.container.started_at) : null;
+    setText($("#ws-uptime"), up ? `Läuft seit ${up}` : OV_STATE_LABELS[key]);
+  }
+
+  function updateWsPerf() {
+    if (!state.detailId) return;
+    const cpuVal = $("#ws-cpu-val");
+    if (!cpuVal) return;
+    const res = containerStatsById()[`mc-inst-${state.detailId}`];
+    if (res && currentDetailInst()?.container?.running) {
+      setText(cpuVal, `${res.cpu_percent} %`);
+      $("#ws-cpu-bar").style.width =
+        `${Math.max(2, Math.min(100, res.cpu_percent))}%`;
+      setText($("#ws-ram-val"), res.ram_limit_mb
+        ? `${fmtMb(res.ram_mb)} / ${fmtMb(res.ram_limit_mb)}` : fmtMb(res.ram_mb));
+      $("#ws-ram-bar").style.width = res.ram_limit_mb
+        ? `${Math.max(2, Math.min(100, (res.ram_mb / res.ram_limit_mb) * 100))}%`
+        : `${Math.max(2, Math.min(100, res.ram_mb))}%`;
+    } else {
+      setText(cpuVal, "–");
+      $("#ws-cpu-bar").style.width = "0%";
+      setText($("#ws-ram-val"), "–");
+      $("#ws-ram-bar").style.width = "0%";
+    }
+  }
+
+  for (const [sel, action] of [
+    ["#ws-start", "start"],
+    ["#ws-stop", "stop"],
+    ["#ws-restart", "restart"],
+  ]) {
+    $(sel).addEventListener("click", () => {
+      const inst = currentDetailInst()
+        || (state.detailData
+          ? { id: state.detailId, name: state.detailData.name }
+          : null);
+      if (inst) instAction(inst, action);
+    });
+  }
+
+  /* Chat-Kurzsprung: Nachricht an alle Spieler (say) */
+  async function sendWsChat() {
+    if (!state.detailId) return;
+    const input = $("#ws-chat-input");
+    const text = input.value.trim();
+    if (!text) return;
+    show($("#ws-controls-error"), false);
+    input.value = "";
+    const cmd = `say ${text}`;
+    try {
+      const data = await api(`/api/instances/${state.detailId}/console`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd }),
+      });
+      appendConsoleLine(`> ${cmd}`);
+      appendConsoleLine(data.output || "(gesendet)");
+    } catch (e) {
+      setText($("#ws-controls-error"), `Senden fehlgeschlagen: ${e.message}`);
+      show($("#ws-controls-error"), true);
+    }
+  }
+  $("#ws-chat-send").addEventListener("click", sendWsChat);
+  $("#ws-chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      sendWsChat();
+    }
+  });
+
+  /* Auto-Start-Schnellschalter (spiegelt den Zeitplan-Eintrag) */
+  $("#ws-autostart").addEventListener("change", async (e) => {
+    if (!state.detailId) return;
+    const checked = e.target.checked;
+    const sched = JSON.parse(JSON.stringify(state.detailData?.schedule || {}));
+    sched.auto_start = checked;
+    show($("#ws-controls-error"), false);
+    try {
+      await api(`/api/instances/${state.detailId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ schedule: sched }),
+      });
+      $("#sched-autostart").checked = checked;
+      toast(checked
+        ? "Auto-Start aktiviert — Server startet mit dem Dashboard."
+        : "Auto-Start deaktiviert.", "success");
+    } catch (err) {
+      e.target.checked = !checked;
+      setText($("#ws-controls-error"), `Auto-Start nicht gespeichert: ${err.message}`);
+      show($("#ws-controls-error"), true);
+    }
+  });
+
+  /* Backup-Kompaktpanel: Schalter in die Backup-Verwaltung */
+  $("#ws-backup-now").addEventListener("click", () =>
+    $("#backup-create-btn").click());
+  $("#ws-backups-open").addEventListener("click", () => activateWsTab("backups"));
+
+  organizeWorkspace();
 
 })();

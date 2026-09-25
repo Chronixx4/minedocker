@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#141210">
+<meta name="theme-color" content="#0c0f0e">
 <title>Minecraft Server Dashboard</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -208,6 +208,8 @@
 
   <!-- Server-Instanzen (Multi-Server-Verwaltung) -->
   <section id="tab-servers" class="panel">
+    <nav id="inst-tabs" class="inst-tabs" aria-label="Server-Tabs"></nav>
+    <div id="inst-list-wrap">
     <div class="card">
       <div class="card-head">
         <h2>Server-Instanzen <span id="inst-count" class="muted"></span></h2>
@@ -324,6 +326,7 @@
         </div>
       </div>
     </div>
+    </div>
 
     <div id="inst-detail" class="card hidden">
       <div class="card-head">
@@ -332,11 +335,67 @@
           <span id="detail-state" class="badge inst-badge off" title="Status dieser Instanz">
             <span class="dot"></span><span id="detail-state-text">–</span>
           </span>
-          <button id="detail-close" class="btn">Schließen</button>
+          <button id="detail-close" class="btn">Alle Server</button>
         </div>
       </div>
-      <div id="detail-info" class="detail-info"></div>
       <div id="detail-error" class="err hidden"></div>
+      <div class="ws-top">
+        <div class="ws-box">
+          <h3>Server-Informationen</h3>
+          <div id="detail-info" class="detail-info"></div>
+          <div class="ws-metrics">
+            <div class="metric">
+              <div class="metric-head"><span>CPU</span><span id="ws-cpu-val" class="muted small">–</span></div>
+              <div class="bar"><div id="ws-cpu-bar" class="bar-fill" style="width:0%"></div></div>
+            </div>
+            <div class="metric">
+              <div class="metric-head"><span>RAM</span><span id="ws-ram-val" class="muted small">–</span></div>
+              <div class="bar"><div id="ws-ram-bar" class="bar-fill ram" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="ws-box">
+          <h3>Server-Steuerung</h3>
+          <div class="ws-actions">
+            <button id="ws-start" class="btn primary ws-btn-start" title="Server starten">Start</button>
+            <button id="ws-restart" class="btn ws-btn-restart" title="Server neu starten">Neu starten</button>
+            <button id="ws-stop" class="btn danger" title="Server stoppen">Stop</button>
+          </div>
+          <p class="muted small" id="ws-uptime">–</p>
+          <div class="ws-chat">
+            <input id="ws-chat-input" class="search-input" type="text" maxlength="256"
+                   placeholder="Nachricht an alle Spieler (say …)" autocomplete="off" spellcheck="false">
+            <button id="ws-chat-send" class="btn admin-only">Senden</button>
+          </div>
+          <label class="check" for="ws-autostart">
+            <input type="checkbox" id="ws-autostart">
+            Beim Dashboard-Start automatisch starten
+          </label>
+          <div id="ws-controls-error" class="err hidden"></div>
+        </div>
+        <div class="ws-box">
+          <h3>Backups
+            <button id="ws-backups-open" class="btn small-btn" title="Backup-Verwaltung öffnen">Alle anzeigen</button>
+          </h3>
+          <p class="muted small" id="bk-mini-summary">–</p>
+          <div class="row">
+            <button id="ws-backup-now" class="btn primary admin-only">Backup erstellen</button>
+          </div>
+          <ul id="bk-mini-list" class="mod-list compact"></ul>
+        </div>
+      </div>
+      <nav id="ws-tabs" class="ws-tabs" aria-label="Bereiche dieser Instanz"></nav>
+      <div id="ws-panels" class="ws-panels">
+        <div class="ws-panel hidden" data-ws-panel="mods"></div>
+        <div class="ws-panel hidden" data-ws-panel="welt"></div>
+        <div class="ws-panel hidden" data-ws-panel="dateien"></div>
+        <div class="ws-panel hidden" data-ws-panel="spieler"></div>
+        <div class="ws-panel hidden" data-ws-panel="konsole"></div>
+        <div class="ws-panel hidden" data-ws-panel="einstellungen"></div>
+        <div class="ws-panel hidden" data-ws-panel="zeitplan"></div>
+        <div class="ws-panel hidden" data-ws-panel="backups"></div>
+        <div class="ws-panel hidden" data-ws-panel="logs"></div>
+      </div>
       <div class="detail-grid">
         <div class="detail-cols">
           <!-- Tags (Gruppen) + Port-Wechsel -->
@@ -699,6 +758,8 @@
           <div id="mods-update-error" class="err hidden"></div>
           <ul id="detail-mods" class="mod-list compact"></ul>
           <p id="detail-mods-empty" class="empty muted hidden">Keine Mods/Modpacks installiert.</p>
+        </div>
+        <div class="ws-logcol">
           <h3>Logs
             <button id="detail-logs-reload" class="btn small-btn">Aktualisieren</button>
           </h3>
