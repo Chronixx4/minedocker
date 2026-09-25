@@ -1696,6 +1696,7 @@
     show($("#inst-error"), false);
     try {
       const data = await api("/api/instances");
+      state.instList = data.instances;
       setText($("#inst-dir"), `Speicherort: ${data.directory}`);
       setText($("#inst-count"), `(${data.instances.length})`);
       show($("#inst-empty"), data.instances.length === 0);
@@ -2046,7 +2047,8 @@
     }
     if (state.detailLogTimer) {
       clearInterval(state.detailLogTimer);
-      state.detailLogTimer = null;
+  state.detailLogTimer = null;
+  state.instList = [];      // letzte /api/instances-Antwort (Sofort-Vorbefüllung)
     }
   }
 
@@ -2142,6 +2144,25 @@
       $("#inst-detail").scrollIntoView({ behavior: "smooth", block: "start" });
     }
     $("#detail-logs").textContent = "–";
+    // Logs SOFORT starten (Live-Stream; endet der Stream sofort, z. B. bei
+    // gestopptem Container, springt der Fallback auf Polling). Nicht erst
+    // nach dem Detail-Laden — sonst bleibt das Log-Fenster stehen, solange
+    // Docker/Ping/Scan dauern.
+    openDetailLogStream();
+    // Einstellungen sofort aus der zuletzt geladenen Liste vorbefüllen —
+    // der Workspace wirkt damit sofort bedienbar, während die Details
+    // (Ping, Mods, Speicher) noch nachladen.
+    const cached = (state.instList || []).find((i) => i.id === id);
+    if (cached) {
+      setText($("#detail-title"), cached.name);
+      $("#jvm-opts").value = cached.jvm_opts || "";
+      $("#jvm-aikar").checked = !!cached.use_aikar;
+      setRamFields(cached.memory);
+      state.detailMemory = (cached.memory || "2G").toUpperCase();
+      loadSchedule(cached);
+      show($("#sched-error"), false);
+      loadTagsAndPort(cached);
+    }
     // Filter der Mod-Liste zurücksetzen (eingeklappt bleibt eingeklappt)
     $("#mods-filter-input").value = "";
     // RCON-Ansicht zurücksetzen (Spielerliste lädt per Button)
@@ -2249,7 +2270,7 @@
       setText($("#pack-target"),
         `Ziel: ${detail.loader} ${detail.game_version}${detail.loader_version ? ` (${detail.loader_version})` : ""}`);
       if (detail.container?.running) openDetailLogStream();
-      else loadDetailLogs();
+      else if (!state.detailLogStream) startDetailLogPolling(); // gestoppt: Polling halten
       return detail;
     } catch (e) {
       if (e.status === 404) { closeDetail(); return null; }
@@ -2498,8 +2519,10 @@
     const pre = $("#detail-logs");
     try {
       const data = await api(`/api/instances/${state.detailId}/logs?tail=150`);
-      pre.textContent = data.logs.length ? data.logs.join("\n") : "(keine Logs)";
-      pre.scrollTop = pre.scrollHeight;
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
+      const fresh = data.logs.length ? data.logs.join("\n") : "(keine Logs)";
+      if (pre.textContent !== fresh) pre.textContent = fresh;
+      if (atBottom) pre.scrollTop = pre.scrollHeight;
     } catch (e) {
       pre.textContent = `Logs nicht abrufbar: ${e.message}`;
     }

@@ -603,7 +603,7 @@ async def list_mods():
         settings.mods_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"mods-Ordner nicht lesbar: {exc}")
-    mods = instances.list_mods_in(settings.mods_dir)
+    mods = await asyncio.to_thread(instances.list_mods_in, settings.mods_dir)
     return {"mods": mods, "directory": str(settings.mods_dir)}
 
 
@@ -1077,18 +1077,26 @@ async def instance_from_pack_upload(name: str = Form(""),
 @api.get("/instances/{instance_id}")
 async def instance_detail(instance_id: str):
     instance = instances.get_instance(instance_id)
-    status = await asyncio.to_thread(runtime.container_status, instance)
+    ping_host, ping_port = _instance_ping_host(instance)
+    # Docker-Status, Ping, Mod-Scan und Disk-Scan parallel (statt seriell) —
+    # die Antwort kommt so nach der langsamsten Einzelabfrage, nicht nach
+    # der Summe aller; jeder Schritt läuft im Worker-Thread, damit der
+    # Event-Loop nicht blockiert (sonst hängt das ganze Panel kurz).
+    status, ping, mods, disk = await asyncio.gather(
+        asyncio.to_thread(runtime.container_status, instance),
+        asyncio.to_thread(server_status, ping_host, ping_port, 1.0),
+        asyncio.to_thread(instances.list_mods, instance_id),
+        asyncio.to_thread(instances.disk_usage, instance_id),
+    )
     detail = dict(instance)
     detail["container"] = {"running": status["running"], "state": status["container"]}
     if status.get("started_at"):
         detail["container"]["started_at"] = status["started_at"]
     if status.get("error"):
         detail["container"]["error"] = status["error"]
-    ping_host, ping_port = _instance_ping_host(instance)
-    ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
     detail["ping"] = ping
-    detail["mods"] = instances.list_mods(instance_id)
-    detail["disk"] = await asyncio.to_thread(instances.disk_usage, instance_id)
+    detail["mods"] = mods
+    detail["disk"] = disk
     return detail
 
 
@@ -1259,13 +1267,14 @@ async def instance_delete(instance_id: str, force: bool = False):
 @api.get("/instances/{instance_id}/mods")
 async def instance_mods(instance_id: str):
     instances.get_instance(instance_id)  # 404 wenn unbekannt
-    return {"mods": instances.list_mods(instance_id)}
+    return {"mods": await asyncio.to_thread(instances.list_mods, instance_id)}
 
 
 @api.delete("/instances/{instance_id}/mods/{filename}")
 async def instance_delete_mod(instance_id: str, filename: str):
     instances.get_instance(instance_id)
     deleted = instances.delete_mod(instance_id, filename)
+    instances.invalidate_disk_cache(instance_id)
     updates_mod.invalidate_installed_cache(instance_id)
     return {"deleted": deleted}
 
@@ -1275,6 +1284,7 @@ async def instance_toggle_mod(instance_id: str, filename: str, req: ToggleModReq
     """Mod einer Instanz aktivieren/deaktivieren (Umbenennen .jar <-> .jar.disabled)."""
     instances.get_instance(instance_id)
     result = instances.toggle_mod(instance_id, filename, req.enabled)
+    instances.invalidate_disk_cache(instance_id)
     updates_mod.invalidate_installed_cache(instance_id)
     logger.info("Instanz %s: Mod %s → %s", instance_id, filename, result["filename"])
     return result

@@ -601,25 +601,55 @@ def world_dir(instance_id: str) -> Path | None:
 
 def _dir_size(path: Path) -> int:
     total = 0
-    for root, _dirs, files in os.walk(path, onerror=None):
-        for file in files:
-            try:
-                total += (Path(root) / file).stat().st_size
-            except OSError:
-                continue
+    stack = [str(path)]
+    while stack:
+        current = stack.pop()
+        try:
+            # scandir statt os.walk + Path.stat: ein Systemaufruf pro Eintrag
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
     return total
+
+
+# Kurzer Cache für disk_usage: Welten mit vielen Dateien sind teuer zu
+# vermessen; das Öffnen/Neuladen des Workspace darf nicht jedes Mal den
+# kompletten Instanz-Ordner durchwandern.
+_DISK_CACHE: dict = {}
+_DISK_CACHE_TTL = 30.0
+
+
+def invalidate_disk_cache(instance_id: str | None = None) -> None:
+    """Vergessenen Speicher-Cache ungültig machen (nach Uploads/Installation)."""
+    if instance_id is None:
+        _DISK_CACHE.clear()
+    else:
+        _DISK_CACHE.pop(instance_id, None)
 
 
 def disk_usage(instance_id: str) -> dict:
     """Speicherverbrauch der Instanz, aufgeschlüsselt nach Mods, Welt,
-    packs und Rest (Welt = gefundener level.dat-Ordner)."""
+    packs und Rest (Welt = gefundener level.dat-Ordner). Ergebnis wird
+    kurz (30 s) gecacht, damit häufiges Öffnen/Neuladen schnell bleibt."""
+    now = time.monotonic()
+    cached = _DISK_CACHE.get(instance_id)
+    if cached is not None and now - cached[0] < _DISK_CACHE_TTL:
+        return cached[1]
     directory = instance_dir(instance_id)
     world_path = find_world_dir(directory)
     world = _dir_size(world_path) if world_path else 0
     mods = _dir_size(directory / "mods")
     packs = _dir_size(directory / "packs")
     total = _dir_size(directory)
-    return {
+    result = {
         "total_bytes": total,
         "mods_bytes": mods,
         "world_bytes": world,
@@ -628,6 +658,8 @@ def disk_usage(instance_id: str) -> dict:
         "world_dir": world_path.name if world_path else None,
         "world_exists": world_path is not None,
     }
+    _DISK_CACHE[instance_id] = (now, result)
+    return result
 
 
 def list_mods(instance_id: str) -> list:
