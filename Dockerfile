@@ -21,13 +21,16 @@ WORKDIR /app
 # tzdata: ohne das Paket hätte TZ (z. B. Europe/Berlin für Scheduler-Zeiten)
 # keine Wirkung — slim-Images liefern keine Zoneinfo-Dateien mit. Vor den
 # COPY-Schritten platziert, bleibt der Layer über Code-Änderungen hinweg
-# gecacht (reläuft nur bei Wechsel des Base-Images).
+# gecacht (reläuft nur bei Wechsel des Base-Images). `apt-get upgrade` holt
+# Debian-Sicherheitsfixes, die das Base-Image noch nicht enthält (Trivy-Gate in CI).
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# requirements.txt ist ein gehashter Lock (aus requirements.in) → reproduzierbar
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 COPY app ./app
 COPY static ./static
@@ -53,6 +56,6 @@ EXPOSE 8080
 # History-Datenbank; langsame Hosts (NAS/ZimaOS) dürfen dafür Zeit brauchen.
 # Fehlversuche in der Startphase zählen nicht als "unhealthy".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)"]
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/health' % os.environ.get('DASHBOARD_PORT', '8080'), timeout=4)"]
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host \"$DASHBOARD_HOST\" --port \"$DASHBOARD_PORT\""]

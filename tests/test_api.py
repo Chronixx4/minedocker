@@ -246,3 +246,14 @@ class TestCors:
         resp = client.get("/api/health", headers={"Origin": "http://example.com"})
         assert resp.status_code == 200
         assert resp.headers.get("access-control-allow-origin") == "*"
+
+
+class TestSecurityHeaders:
+    def test_headers_on_api_and_static(self, client):
+        for path in ("/api/health", "/"):
+            resp = client.get(path)
+            assert resp.headers["x-content-type-options"] == "nosniff"
+            assert resp.headers["x-frame-options"] == "DENY"
+            csp = resp.headers["content-security-policy"]
+            assert "script-src 'self'" in csp
+            assert "frame-ancestors 'none'" in csp

@@ -93,3 +93,30 @@ async def auth_guard(request: Request,
     if role != "admin" and request.method in _WRITE_METHODS:
         raise HTTPException(status_code=403,
                             detail="Diese Aktion erfordert die Admin-Rolle")
+
+
+# Security-Header für alle Antworten. CSP bewusst konservativ: Skripte nur
+# von der eigenen Origin (keine Inline-Skripte im Frontend), Styles erlauben
+# 'unsafe-inline' (style-Attribute im Markup) + Google Fonts, Bilder von
+# beliebigen HTTPS-Hosts (Modrinth-/CurseForge-Icons, Spieler-Köpfe).
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob: https:; "
+        "connect-src 'self'; "
+        "object-src 'none'; base-uri 'self'; form-action 'self'; "
+        "frame-ancestors 'none'"),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for key, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(key, value)
+    return response

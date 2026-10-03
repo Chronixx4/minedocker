@@ -330,7 +330,7 @@ Seit der Dashboard-Erweiterung gibt es **Login mit Rollen**:
   mit HTTPS (z. B. Caddy/Traefik/NPM). Das Session-Cookie ist HttpOnly +
   SameSite=Strict — das blockt Cross-Site-Angriffe; die `secure`-Fahne ist
   bewusst nicht gesetzt, damit reiner HTTP-LAN-Zugang funktioniert. Beim
-  Proxy: `CORS_ORIGINS` auf die echte Origin einschränken und ggf.
+  Proxy: `CORS_ORIGINS` leer lassen (same-origin) oder die echte Origin setzen und ggf.
   `X-Forwarded-Proto`-Headers durchreichen.
 - **Datenschutz-Dateien im Volume:** `/data/users.json`, `/data/.auth_secret`
   und `/data/.rcon_salt` niemals in Backups/Commits außerhalb des Volumes

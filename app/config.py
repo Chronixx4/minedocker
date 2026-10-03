@@ -22,7 +22,7 @@ class Settings:
         self.api_key = os.getenv("DASHBOARD_API_KEY", "").strip()
         self.cors_origins = [
             origin.strip()
-            for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+            for origin in os.getenv("CORS_ORIGINS", "").split(",")
             if origin.strip()
         ]
         self.modrinth_api = os.getenv("MODRINTH_API", "https://api.modrinth.com/v2")
