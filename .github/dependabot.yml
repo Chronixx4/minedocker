@@ -1,0 +1,19 @@
+# Wöchentliche Update-PRs. Python-Abhängigkeiten liegen als *.in (Quelle) +
+# *.txt (gehashter Lock, erzeugt mit uv pip compile) vor — siehe README.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python-deps:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

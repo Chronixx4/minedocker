@@ -181,15 +181,20 @@ angelegte Benutzer wird automatisch Admin. Danach schützt das Login alle
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/pip install --require-hashes -r requirements.txt -r requirements-dev.txt
 
 python -m ruff check app tests   # Lint
 python -m mypy                   # Typen (app/)
 python -m pytest tests/          # Test-Suite (~500 Tests, Fake-Docker, keine echten Container nötig)
 ```
 
-CI ([ci.yml](.github/workflows/ci.yml)) läuft bei jedem Push/PR mit ruff, mypy
-und pytest; das Docker-Image baut
+Abhängigkeiten: Quelle sind `requirements.in` / `requirements-dev.in`, die
+gehashten Locks `requirements*.txt` entstehen per
+`uv pip compile requirements.in -o requirements.txt --python-version 3.12 --generate-hashes`
+(analog für `-dev`); Dependabot schlägt wöchentlich Updates vor.
+
+CI ([ci.yml](.github/workflows/ci.yml)) läuft bei jedem Push/PR mit Lock-Check,
+pip-audit, ruff, mypy, pytest und einem Trivy-Scan des Docker-Images; das Docker-Image baut
 [docker-publish.yml](.github/workflows/docker-publish.yml) bei jedem Push auf
 `main` und bei jedem Release. Issues und Pull Requests sind willkommen.
 
