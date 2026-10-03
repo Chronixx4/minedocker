@@ -22,7 +22,7 @@ jobs:
   build-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # GHCR verlangt Kleinschreibung; github.repository trägt hier die
       # Großschreibung des Owners (Chronixx4) — daher explizit lowercasing.
