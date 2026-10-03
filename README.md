@@ -124,7 +124,7 @@ ZimaOS-Import-Dialogs):
 |---|---|---|
 | `DASHBOARD_API_KEY` | *(leer)* | Admin-Bypass für alle API-Routen außer `/api/health` (Skripte/curl) — **setzen, wenn fremde Nutzer im Netz!** (z. B. `openssl rand -hex 32`) |
 | `FILEBROWSER_MAX_UPLOAD_MB` | `300` | Upload-Limit je Datei im Datei-Browser |
-| `CORS_ORIGINS` | `*` | Bei Reverse-Proxy auf die echte Origin einschränken |
+| `CORS_ORIGINS` | leer | Leer = nur same-origin (sicher). Fremde Origins explizit eintragen (`*` erlaubt alle) |
 | `CF_API_KEY` | *(leer)* | CurseForge-API-Key für Mod-/Modpack-Suche ([console.curseforge.com](https://console.curseforge.com)). **Optional:** Ohne Key sind CF-Suche und -Direktinstallation deaktiviert (503) — Modrinth-Suche/-Installation und der Modpack-Upload (CF-.zip) funktionieren weiterhin ohne Key (→ SERVER-SETUP.md §2). |
 | `CF_CLIENT_ONLY_MODS` | *(leer)* | Zusätzliche Muster (Komma-Liste) für Client-only-Mods, die beim CF-Pack-Upload übersprungen werden — ergänzt die eingebaute Liste (u. a. Sodium, Iris, Embeddium, Rubidium, Oculus, Magnesium, Nvidium, Dark Mode Everywhere, Toast Control, Mouse Tweaks, Controlling; diese sind auf Servern nutzlos bzw. crashen beim Start) |
 | `INSTANCES_DIR` | `/data/instances` | Instanz-Ordner im Dashboard-Container |

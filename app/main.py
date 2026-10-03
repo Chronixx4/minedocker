@@ -45,7 +45,12 @@ from . import watchdog as watchdog_mod
 from . import whitelist as whitelist_mod
 from .config import ALLOWED_LOADERS, current_game_version, settings
 from .minecraft import server_status
-from .security import auth_guard, safe_mods_path, validate_identifier
+from .security import (
+    auth_guard,
+    safe_mods_path,
+    security_headers_middleware,
+    validate_identifier,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -80,6 +85,11 @@ async def _lifespan(app: FastAPI):
                             if j.get("phase") == "Abgebrochen (Neustart)"))
     except Exception:
         logger.exception("Job-Spiegel konnte nicht geladen werden")
+    if auth_mod.anonymous_allowed():
+        logger.warning(
+            "SICHERHEIT: Weder DASHBOARD_API_KEY noch ein Benutzer ist konfiguriert — "
+            "das Dashboard ist ohne Anmeldung mit vollen Rechten erreichbar. "
+            "Admin-Konto im Setup-Dialog anlegen oder DASHBOARD_API_KEY setzen.")
     history_task = asyncio.create_task(history_mod.sampler_loop())
     flush_task = asyncio.create_task(_job_flusher())
     watchdog_mod.STOP.clear()
@@ -115,6 +125,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(security_headers_middleware)
 
 # Alle /api-Routen (außer /api/health und /api/auth/*) durchlaufen den
 # kombinierten Guard: DASHBOARD_API_KEY (Admin) ODER Login-Cookie; Rollen-

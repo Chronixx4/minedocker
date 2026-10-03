@@ -97,7 +97,7 @@ services:
       # (gitignored) — Defaults identisch zu vorher (leer = Funktion aus).
       # Überschreiben in .env: DASHBOARD_API_KEY=<openssl rand -hex 32>
       DASHBOARD_API_KEY: "${DASHBOARD_API_KEY:-}"  # schützt alle API-Routen außer /api/health
-      CORS_ORIGINS: "${CORS_ORIGINS:-*}"          # lokal okay; bei Reverse-Proxy auf echte Origin setzen
+      CORS_ORIGINS: "${CORS_ORIGINS:-}"           # leer = nur same-origin (sicher); fremde Origin explizit eintragen
       CF_API_KEY: "${CF_API_KEY:-}"               # CurseForge-API-Key (kostenlos: console.curseforge.com)
       TZ: "${TZ:-UTC}"                            # Scheduler-/Backup-Zeiten; z. B. Europe/Berlin
       # --- Multi-Server ---
