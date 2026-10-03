@@ -21,8 +21,10 @@ WORKDIR /app
 # tzdata: ohne das Paket hätte TZ (z. B. Europe/Berlin für Scheduler-Zeiten)
 # keine Wirkung — slim-Images liefern keine Zoneinfo-Dateien mit. Vor den
 # COPY-Schritten platziert, bleibt der Layer über Code-Änderungen hinweg
-# gecacht (reläuft nur bei Wechsel des Base-Images).
+# gecacht (reläuft nur bei Wechsel des Base-Images). `apt-get upgrade` holt
+# Debian-Sicherheitsfixes, die das Base-Image noch nicht enthält (Trivy-Gate in CI).
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
 
