@@ -516,6 +516,7 @@ def delete_instance(instance_id: str, force: bool = False) -> dict:
         shutil.rmtree(directory)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Löschen fehlgeschlagen: {exc}")
+    shutil.rmtree(trash_dir(instance_id), ignore_errors=True)
     return {"deleted": instance_id, "name": instance["name"]}
 
 
@@ -680,13 +681,15 @@ def disk_usage(instance_id: str) -> dict:
     return result
 
 
-def list_mods(instance_id: str) -> list:
+def list_mods(instance_id: str, with_meta: bool = False) -> list:
     """Mods einer einzelnen Instanz (getrennt von anderen Instanzen)."""
-    return list_mods_in(mods_dir(instance_id))
+    return list_mods_in(mods_dir(instance_id), with_meta=with_meta)
 
 
-def list_mods_in(directory) -> list:
-    """Mods in einem mods-Ordner; deaktivierte (*.jar.disabled) inklusive."""
+def list_mods_in(directory, with_meta: bool = False) -> list:
+    """Mods in einem mods-Ordner; deaktivierte (*.jar.disabled) inklusive.
+    with_meta=True liest zusätzlich Name/Version/Abhängigkeiten aus der .jar."""
+    from . import modmeta  # lazy, nur für die Mod-Liste nötig
     mods = []
     try:
         for path in directory.glob("*.jar*"):
@@ -697,16 +700,35 @@ def list_mods_in(directory) -> list:
                 stat = path.stat()
             except OSError:
                 continue
-            mods.append({
+            entry = {
                 "filename": path.name,
                 "enabled": path.suffix == ".jar",
                 "size_bytes": stat.st_size,
                 "modified": int(stat.st_mtime),
-            })
+            }
+            if with_meta:
+                entry["meta"] = modmeta.read_meta(path)
+            mods.append(entry)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Mods-Ordner nicht lesbar: {exc}")
     mods.sort(key=lambda m: m["filename"].lower())
     return mods
+
+
+def mods_overview(instance_id: str) -> dict:
+    """Mod-Liste mit Metadaten und erkannten Problemen (Detail-Ansicht)."""
+    from . import modmeta
+    instance = get_instance(instance_id)
+    mods = list_mods(instance_id, with_meta=True)
+    problems = modmeta.analyze(mods, instance.get("loader") or "",
+                               instance.get("game_version") or "")
+    try:
+        changed = int(mods_dir(instance_id).stat().st_mtime)
+    except OSError:
+        changed = None
+    # mods_changed_at: letzte Änderung am mods-Ordner (Installieren,
+    # Löschen, An/Aus) — das Frontend vergleicht mit dem Containerstart
+    return {"mods": mods, "problems": problems, "mods_changed_at": changed}
 
 
 def toggle_mod(instance_id: str, filename: str, enabled: bool) -> dict:
@@ -856,15 +878,129 @@ def toggle_mod_in(directory, filename: str, enabled: bool) -> dict:
 
 
 def delete_mod(instance_id: str, filename: str) -> str:
+    """Mod in den Papierkorb der Instanz verschieben (wiederherstellbar)."""
     from .security import safe_mods_path
     path = safe_mods_path(mods_dir(instance_id), filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Mod in dieser Instanz nicht gefunden")
     try:
-        path.unlink()
+        move_to_trash(instance_id, path, "deleted")
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Löschen fehlgeschlagen: {exc}")
     return filename
+
+
+# ---------------------------------------------------------------------------
+# Mod-Papierkorb: gelöschte und per Update ersetzte .jar-Dateien bleiben
+# TRASH_DAYS Tage wiederherstellbar. Liegt außerhalb des Instanz-Ordners
+# (kein Bind-Mount in den Container, nicht in Backups).
+# ---------------------------------------------------------------------------
+
+TRASH_DAYS = 7
+_TRASH_REASONS = ("deleted", "update")
+_TRASH_RE = re.compile(r"^(\d{10,13})-(\d{1,6})__(deleted|update)__(.+)$")
+
+
+def trash_dir(instance_id: str) -> Path:
+    validate_identifier(instance_id, "Instanz-ID")
+    return _root().parent / "mod-trash" / instance_id
+
+
+def move_to_trash(instance_id: str, path: Path, reason: str,
+                  copy: bool = False) -> str:
+    """Verschiebt (copy=True: kopiert) eine Mod-Datei in den Papierkorb;
+    liefert die Eintrags-ID."""
+    if reason not in _TRASH_REASONS:
+        raise ValueError(reason)
+    directory = trash_dir(instance_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = int(time.time())
+    for n in range(1000):
+        entry = f"{stamp}-{n}__{reason}__{path.name}"
+        if not (directory / entry).exists():
+            break
+    if copy:
+        shutil.copy2(path, directory / entry)
+    else:
+        shutil.move(str(path), str(directory / entry))
+    return entry
+
+
+def _trash_entries(instance_id: str) -> list:
+    directory = trash_dir(instance_id)
+    out: list[dict] = []
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return out
+    cutoff = time.time() - TRASH_DAYS * 86400
+    for name in names:
+        match = _TRASH_RE.match(name)
+        if not match:
+            continue
+        path = directory / name
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        stamp = int(match.group(1))
+        if stamp < cutoff:  # abgelaufen → endgültig weg
+            path.unlink(missing_ok=True)
+            continue
+        out.append({"id": name, "filename": match.group(4),
+                    "reason": match.group(3), "trashed_at": stamp,
+                    "size_bytes": st.st_size})
+    out.sort(key=lambda e: e["id"], reverse=True)
+    return out
+
+
+def discard_trash_entry(instance_id: str, entry: str) -> None:
+    """Eintrag endgültig entfernen (z. B. Sicherung eines gescheiterten Updates)."""
+    if _TRASH_RE.match(entry or "") and "/" not in entry and "\\" not in entry:
+        (trash_dir(instance_id) / entry).unlink(missing_ok=True)
+
+
+def list_trash(instance_id: str) -> list:
+    get_instance(instance_id)
+    return _trash_entries(instance_id)
+
+
+def _trash_path(instance_id: str, entry: str) -> tuple[Path, str]:
+    match = _TRASH_RE.match(entry or "")
+    if not match or "/" in entry or "\\" in entry or "\x00" in entry:
+        raise HTTPException(status_code=400, detail="Ungültiger Papierkorb-Eintrag")
+    path = trash_dir(instance_id) / entry
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Eintrag nicht im Papierkorb")
+    return path, match.group(4)
+
+
+def restore_from_trash(instance_id: str, entry: str) -> dict:
+    """Legt eine Mod aus dem Papierkorb zurück in den mods-Ordner."""
+    get_instance(instance_id)
+    src, filename = _trash_path(instance_id, entry)
+    dest = safe_mods_path(mods_dir(instance_id), filename)
+    if dest.exists():
+        raise HTTPException(status_code=409,
+                            detail=f"'{filename}' liegt bereits im mods-Ordner")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Wiederherstellen fehlgeschlagen: {exc}")
+    return {"restored": filename}
+
+
+def empty_trash(instance_id: str) -> dict:
+    get_instance(instance_id)
+    removed = 0
+    for item in _trash_entries(instance_id):
+        try:
+            (trash_dir(instance_id) / item["id"]).unlink()
+            removed += 1
+        except OSError:
+            continue
+    return {"removed": removed}
 
 
 def pack_dir(instance_id: str):

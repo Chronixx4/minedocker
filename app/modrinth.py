@@ -150,6 +150,9 @@ _SORT_INDEX = {
 # Umgebungsfilter: welche Seite den Mod braucht bzw. wo er zwingend nötig ist.
 # Modrinth-Feldwerte: required, optional, unsupported, unknown.
 _ENVIRONMENT_FACETS = {
+    # "läuft auf dem Server": alles außer reinen Client-Mods (unsupported)
+    "server_ok": ["server_side:required", "server_side:optional",
+                  "server_side:unknown"],
     "server_required": ["server_side:required"],
     "server": ["server_side:required", "server_side:optional"],
     "client_required": ["client_side:required"],

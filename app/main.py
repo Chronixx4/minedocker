@@ -1130,10 +1130,10 @@ async def instance_detail(instance_id: str):
     # die Antwort kommt so nach der langsamsten Einzelabfrage, nicht nach
     # der Summe aller; jeder Schritt läuft im Worker-Thread, damit der
     # Event-Loop nicht blockiert (sonst hängt das ganze Panel kurz).
-    status, ping, mods, disk = await asyncio.gather(
+    status, ping, overview, disk = await asyncio.gather(
         asyncio.to_thread(runtime.container_status, instance),
         asyncio.to_thread(server_status, ping_host, ping_port, 1.0),
-        asyncio.to_thread(instances.list_mods, instance_id),
+        asyncio.to_thread(instances.mods_overview, instance_id),
         asyncio.to_thread(instances.disk_usage, instance_id),
     )
     detail = dict(instance)
@@ -1143,7 +1143,9 @@ async def instance_detail(instance_id: str):
     if status.get("error"):
         detail["container"]["error"] = status["error"]
     detail["ping"] = ping
-    detail["mods"] = mods
+    detail["mods"] = overview["mods"]
+    detail["mod_problems"] = overview["problems"]
+    detail["mods_changed_at"] = overview["mods_changed_at"]
     detail["disk"] = disk
     return detail
 
@@ -1316,8 +1318,31 @@ async def instance_delete(instance_id: str, force: bool = False):
 
 @api.get("/instances/{instance_id}/mods")
 async def instance_mods(instance_id: str):
+    """Mods mit Metadaten aus der .jar (Name, Version, Abhängigkeiten) und
+    erkannten Problemen (fehlende Abhängigkeit, falscher Loader, …)."""
     instances.get_instance(instance_id)  # 404 wenn unbekannt
-    return {"mods": await asyncio.to_thread(instances.list_mods, instance_id)}
+    return await asyncio.to_thread(instances.mods_overview, instance_id)
+
+
+@api.get("/instances/{instance_id}/mod-trash")
+async def instance_mod_trash(instance_id: str):
+    """Papierkorb: gelöschte und per Update ersetzte Mods der letzten Tage."""
+    entries = await asyncio.to_thread(instances.list_trash, instance_id)
+    return {"entries": entries, "keep_days": instances.TRASH_DAYS}
+
+
+@api.post("/instances/{instance_id}/mod-trash/{entry}/restore")
+async def instance_mod_trash_restore(instance_id: str, entry: str):
+    result = await asyncio.to_thread(instances.restore_from_trash, instance_id, entry)
+    instances.invalidate_disk_cache(instance_id)
+    updates_mod.invalidate_installed_cache(instance_id)
+    logger.info("Instanz %s: Mod wiederhergestellt: %s", instance_id, result["restored"])
+    return result
+
+
+@api.delete("/instances/{instance_id}/mod-trash")
+async def instance_mod_trash_empty(instance_id: str):
+    return await asyncio.to_thread(instances.empty_trash, instance_id)
 
 
 @api.get("/instances/{instance_id}/mods/{filename}/icon")
@@ -1336,7 +1361,7 @@ async def instance_mod_icon(instance_id: str, filename: str):
 @api.delete("/instances/{instance_id}/mods/{filename}")
 async def instance_delete_mod(instance_id: str, filename: str):
     instances.get_instance(instance_id)
-    deleted = instances.delete_mod(instance_id, filename)
+    deleted = await asyncio.to_thread(instances.delete_mod, instance_id, filename)
     instances.invalidate_disk_cache(instance_id)
     updates_mod.invalidate_installed_cache(instance_id)
     return {"deleted": deleted}

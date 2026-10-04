@@ -630,6 +630,45 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .mod-list.compact .btn.toggle { min-width: 2.4rem; }
 .mod-list.collapsed { display: none; }
 
+/* Hinweise über der Mod-Liste (Neustart nötig / erkannte Probleme) */
+.mods-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  margin: 0.35rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(246, 197, 68, 0.35);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.82rem;
+}
+.mods-note.is-err {
+  display: block;
+  border-color: rgba(255, 91, 79, 0.35);
+  background: var(--err-soft);
+  color: #fca5a5;
+}
+.mods-note ul { margin: 0.25rem 0 0; padding-left: 1.1rem; }
+.mods-note li { overflow-wrap: anywhere; }
+.mod-tags { display: inline-flex; gap: 0.25rem; flex: none; }
+.mod-tags:empty { display: none; }
+.mod-tag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: help;
+}
+.mod-tag.is-err { background: var(--err-soft); color: var(--err); }
+.mod-row.has-problem { border-color: rgba(255, 91, 79, 0.4); }
+.mods-trash { margin-top: 0.6rem; }
+.mods-trash summary { cursor: pointer; font-size: 0.85rem; color: var(--text-2); }
+.mods-trash .mod-list { margin-bottom: 0.5rem; }
+
 /* ---------- Detail: Spieler-Verwaltung (RCON) ---------- */
 .rcon-actions {
   display: flex;

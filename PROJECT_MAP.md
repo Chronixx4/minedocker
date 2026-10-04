@@ -69,6 +69,13 @@ Checkliste, Dashboard-Schnellstart).
   - catalog.py – Katalog: Mojang-Versionen (Releases/Snapshots) + Loader-Versionen
     (Fabric/Quilt-Meta, Forge-Promotions, NeoForge-Maven, Paper Fill-API v3,
     Bukkit/Spigot-BuildTools-Hinweis); 10-min-Cache, nie werfend je Loader
+  - modmeta.py – Mod-Metadaten aus der .jar (fabric.mod.json, quilt.mod.json,
+    (neoforge.)mods.toml; Jar-in-Jar eine Ebene tief) + Problem-Erkennung
+    (fehlende/deaktivierte Pflicht-Abhängigkeit, falscher Loader, reine
+    Client-Mod, doppelte Mod-ID); instances.mods_overview() liefert Mods +
+    Probleme + mods_changed_at (Hinweis „Neustart nötig“). Mod-Papierkorb
+    unter {INSTANCES_DIR}/../mod-trash/{id}/ (Löschen und Mod-Updates legen
+    die alte .jar dort ab, 7 Tage, Routen /instances/{id}/mod-trash)
   - packs.py – Modpack-Installer: Modrinth-Suche, mrpack-Download+Entpacken,
     Upload-Installation (.mrpack + CurseForge-.zip mit manifest.json),
     Index-Normalisierung (mrpack/CF -> internes Schema: title, game_version,

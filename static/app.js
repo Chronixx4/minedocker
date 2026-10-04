@@ -1597,7 +1597,8 @@
   state.searchFilterSort = "relevance";
   state.searchFilterLoader = "";     // "" = wie Instanz, "any" = alle Loader
   state.searchFilterVersion = "";    // "" = wie Instanz, "any" = alle Versionen
-  state.searchFilterEnvironment = ""; // "" = alle Mods (nur Modrinth)
+  // Standard: reine Client-Mods ausblenden (nur Modrinth kennt die Angabe)
+  state.searchFilterEnvironment = "server_ok";
   state.searchFiltersLoaded = false;
 
   for (const [sel, key] of [
@@ -1608,6 +1609,7 @@
   ]) {
     $(sel).addEventListener("change", (e) => {
       state[key] = e.target.value;
+      if (key === "searchFilterEnvironment") state.searchEnvironmentTouched = true;
       doSearch(0);
     });
   }
@@ -1621,6 +1623,9 @@
     if (disabled) {
       sel.value = "";
       state.searchFilterEnvironment = "";
+    } else if (!state.searchFilterEnvironment && !state.searchEnvironmentTouched) {
+      sel.value = "server_ok";
+      state.searchFilterEnvironment = "server_ok";
     }
   }
   updateEnvironmentFilter();
@@ -1724,9 +1729,10 @@
       setText(node.querySelector(".version"),
         hit.latest_version ? `Version ${hit.latest_version}` : "Version unbekannt");
       setText(node.querySelector(".downloads"), `${fmtNumber(hit.downloads)} Downloads`);
-      const sideMap = { required: "Server: nötig", optional: "Server: optional" };
-      const side = sideMap[hit.server_side]
-        ?? (hit.server_side === null ? "Server: unbekannt" : "Server: client-seitig");
+      // Modrinth: required/optional/unsupported/unknown; CurseForge: null
+      const sideMap = { required: "Server: nötig", optional: "Server: optional",
+        unsupported: "Nur Client" };
+      const side = sideMap[hit.server_side] ?? "Server: unbekannt";
       setText(node.querySelector(".side"), side);
       // „Installiert“-Markierung: Mod liegt bereits in der Ziel-Instanz
       // (per Datei-Hash erkannt, auch bei abweichendem Dateinamen) —
@@ -1769,6 +1775,14 @@
     // Quelle des Treffers nutzen, nicht den aktuell gewählten Suchfilter
     // (verhindert Verwechslungen nach einem Quellenwechsel bei noch
     // sichtbaren Treffern der vorherigen Quelle)
+    // Reine Client-Mods (Sodium, Iris …) lassen den Server oft abstürzen
+    if (hit.server_side === "unsupported" && !window.confirm(
+      `"${hit.title}" ist laut Modrinth eine reine Client-Mod und kann den `
+      + "Serverstart verhindern.\nTrotzdem auf dem Server installieren?")) {
+      btn.disabled = false;
+      btn.textContent = "Installieren";
+      return;
+    }
     const endpoint = (hit._source || state.searchSource) === "curseforge"
       ? "/api/curseforge/download" : "/api/modrinth/download";
     const start = (overwrite) => api(endpoint, {
@@ -2468,7 +2482,7 @@
       setText($("#detail-state-text"), OV_STATE_LABELS[instStateKey(detail)]);
       state.detailData = detail;
       renderDetailInfo(detail);
-      renderDetailMods(detail.mods || []);
+      renderDetailMods(detail.mods || [], detail);
       if (!$("#detail-icon").src.startsWith("blob:")) $("#detail-icon").src = serverBlockIcon(detail.name);
       updateHotbarCounts();
       updateWsOverview();
@@ -2553,9 +2567,39 @@
     box.appendChild(dl);
   }
 
-  function renderDetailMods(mods) {
+  function renderDetailMods(mods, detail) {
     state.detailMods = mods || [];
+    renderModNotes(detail);
     applyModFilter();
+    loadModTrash();
+  }
+
+  // Hinweise über der Mod-Liste: erkannte Probleme + „Neustart nötig“
+  function renderModNotes(detail) {
+    const problems = Array.isArray(detail?.mod_problems) ? detail.mod_problems : [];
+    const list = $("#mods-problems-list");
+    list.textContent = "";
+    for (const p of problems.slice(0, 8)) {
+      const li = document.createElement("li");
+      li.textContent = p.message;
+      list.appendChild(li);
+    }
+    if (problems.length > 8) {
+      const li = document.createElement("li");
+      li.textContent = `… und ${problems.length - 8} weitere (in der Liste markiert)`;
+      list.appendChild(li);
+    }
+    setText($("#mods-problems-title"), problems.length === 1
+      ? "1 Problem erkannt:" : `${problems.length} Probleme erkannt:`);
+    show($("#mods-problems"), problems.length > 0);
+
+    // Läuft der Server und wurde der mods-Ordner nach dem Start geändert
+    // (Installieren, Löschen, An/Aus), wirkt das erst nach einem Neustart
+    const started = Date.parse(detail?.container?.started_at || "");
+    const changed = Number(detail?.mods_changed_at) * 1000;
+    const pending = !!detail?.container?.running && Number.isFinite(started)
+      && Number.isFinite(changed) && changed > started + 30000;
+    show($("#mods-restart-note"), pending);
   }
 
   // Lesbarer Anzeigename: Version-/Loader-Suffixe aus dem Dateinamen entfernen
@@ -2587,7 +2631,8 @@
     list.textContent = "";
     const all = state.detailMods;
     const q = ($("#mods-filter-input").value || "").trim().toLowerCase();
-    const mods = q ? all.filter((m) => m.filename.toLowerCase().includes(q)) : all;
+    const mods = q ? all.filter((m) => [m.filename, m.meta?.name, m.meta?.mod_id]
+      .some((v) => (v || "").toLowerCase().includes(q))) : all;
 
     const active = all.filter((m) => m.enabled).length;
     const bytes = all.reduce((s, m) => s + (m.size_bytes || 0), 0);
@@ -2603,10 +2648,30 @@
 
     for (const mod of mods) {
       const node = $("#tpl-mod-row").content.cloneNode(true);
-      const display = modDisplayName(mod.filename);
+      const meta = mod.meta || null;
+      const display = meta?.name || modDisplayName(mod.filename);
       const nameEl = node.querySelector(".mod-name");
       nameEl.textContent = display;
-      nameEl.title = mod.filename; // volle Nummer bei Abschneiden per Tooltip
+      // Tooltip: Beschreibung, Mod-ID und voller Dateiname
+      nameEl.title = [meta?.description, meta?.mod_id ? `Mod-ID: ${meta.mod_id}` : "",
+        mod.filename].filter(Boolean).join("\n");
+      const tags = node.querySelector(".mod-tags");
+      const problems = Array.isArray(mod.problems) ? mod.problems : [];
+      const tagLabels = {
+        missing_dependency: "Abhängigkeit fehlt",
+        disabled_dependency: "Abhängigkeit aus",
+        wrong_loader: "falscher Loader",
+        client_only: "nur Client",
+        duplicate: "doppelt",
+      };
+      for (const type of new Set(problems.map((p) => p.type))) {
+        const tag = document.createElement("span");
+        tag.className = "mod-tag is-err";
+        tag.textContent = tagLabels[type] || "Problem";
+        tag.title = problems.filter((p) => p.type === type).map((p) => p.message).join("\n");
+        tags.appendChild(tag);
+      }
+      if (problems.length) node.querySelector(".mod-row").classList.add("has-problem");
       // Icon: Logo aus der .jar (Backend-Endpoint); ohne Logo Platzhalter-
       // kachel mit den Anfangsbuchstaben in stabiler Zufallsfarbe
       const img = node.querySelector(".mod-icon");
@@ -2626,7 +2691,8 @@
       const updateItem = state.detailUpdates?.[mod.filename];
       const updateAvailable = updateItem?.status === "update_available";
       setText(node.querySelector(".mod-meta"),
-        `${fmtBytes(mod.size_bytes)}${mod.enabled ? "" : " · deaktiviert"}`
+        `${meta?.version ? `${meta.version} · ` : ""}${fmtBytes(mod.size_bytes)}`
+        + `${mod.enabled ? "" : " · deaktiviert"}`
         + (updateAvailable
           ? ` · Update: ${updateItem.latest?.version_number || "?"}`
           : ""));
@@ -2644,10 +2710,12 @@
       toggleBtn.addEventListener("click", () =>
         toggleInstanceMod(mod.filename, !mod.enabled, toggleBtn));
       node.querySelector(".delete").addEventListener("click", async () => {
-        if (!window.confirm(`"${mod.filename}" löschen?`)) return;
+        if (!window.confirm(`"${display}" löschen?\n`
+          + "Die Datei kommt in den Papierkorb und lässt sich dort wiederherstellen.")) return;
         try {
           await api(`/api/instances/${state.detailId}/mods/${encodeURIComponent(mod.filename)}`,
             { method: "DELETE" });
+          toast(`"${display}" in den Papierkorb verschoben.`, "success");
           loadDetail();
         } catch (e) {
           toast(`Löschen fehlgeschlagen: ${e.message}`, "error");
@@ -2656,6 +2724,88 @@
       list.appendChild(node);
     }
   }
+
+  /* ---------- Mod-Papierkorb ---------- */
+  async function loadModTrash() {
+    const id = state.detailId;
+    if (!id) return;
+    let data;
+    try {
+      data = await api(`/api/instances/${id}/mod-trash`);
+    } catch (e) {
+      show($("#mods-trash"), false);
+      return;
+    }
+    if (state.detailId !== id) return;
+    const entries = data.entries || [];
+    setText($("#mods-trash-count"), `(${entries.length})`);
+    setText($("#mods-trash-days"), String(data.keep_days ?? 7));
+    show($("#mods-trash"), entries.length > 0);
+    const list = $("#mods-trash-list");
+    list.textContent = "";
+    for (const entry of entries) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = entry.filename;
+      name.title = entry.filename;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      const when = new Date(entry.trashed_at * 1000).toLocaleString("de-DE",
+        { dateStyle: "short", timeStyle: "short" });
+      meta.textContent = `${entry.reason === "update" ? "vor Update gesichert" : "gelöscht"}`
+        + ` · ${when} · ${fmtBytes(entry.size_bytes)}`;
+      info.append(name, meta);
+      const btn = document.createElement("button");
+      btn.className = "btn small-btn admin-only";
+      btn.textContent = "Wiederherstellen";
+      btn.addEventListener("click", () => restoreModFromTrash(entry, btn));
+      const row = document.createElement("div");
+      row.className = "row";
+      row.appendChild(btn);
+      li.append(info, row);
+      list.appendChild(li);
+    }
+  }
+
+  async function restoreModFromTrash(entry, btn) {
+    const id = state.detailId;
+    if (!id) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/instances/${id}/mod-trash/${encodeURIComponent(entry.id)}/restore`,
+        { method: "POST" });
+      toast(`"${entry.filename}" wiederhergestellt.`, "success");
+      loadDetail();
+    } catch (e) {
+      btn.disabled = false;
+      const hint = e.status === 409
+        ? " Eine Datei mit diesem Namen liegt schon im mods-Ordner." : "";
+      toast(`Wiederherstellen fehlgeschlagen: ${e.message}${hint}`, "error");
+    }
+  }
+
+  $("#mods-trash-empty").addEventListener("click", async () => {
+    const id = state.detailId;
+    if (!id || !window.confirm("Papierkorb endgültig leeren?")) return;
+    try {
+      const data = await api(`/api/instances/${id}/mod-trash`, { method: "DELETE" });
+      toast(`${data.removed} Datei(en) endgültig gelöscht.`, "success");
+      loadModTrash();
+    } catch (e) {
+      toast(`Leeren fehlgeschlagen: ${e.message}`, "error");
+    }
+  });
+
+  $("#mods-restart-btn").addEventListener("click", async () => {
+    const detail = state.detailData;
+    if (!detail) return;
+    await instAction({ id: detail.id, name: detail.name }, "restart");
+    loadDetail();
+  });
 
   async function toggleInstanceMod(filename, enabled, btn) {
     const id = state.detailId;
