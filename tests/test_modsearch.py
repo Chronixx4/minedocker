@@ -176,3 +176,76 @@ class TestInstalliertMarkierung:
     def test_ungueltige_instanz_400(self, client):
         resp = client.get("/api/modrinth/search", params={"instance_id": "../x"})
         assert resp.status_code == 400
+
+
+class TestHashing:
+    def test_cf_fingerprint_ohne_whitespace_und_vorzeichenlos(self):
+        data = b"ab c\td\ne\rf" * 3
+        stripped = data.translate(None, b"\t\n\r ")
+        fp = updates.cf_fingerprint(data)
+        assert fp == updates.murmur2_cf(stripped) & 0xFFFFFFFF
+        assert 0 <= fp < 2 ** 32
+
+    def test_ohne_cf_key_kein_fingerprint(self, tmp_path, monkeypatch):
+        jar = tmp_path / "a.jar"
+        jar.write_bytes(b"x" * 1000)
+        called = []
+        monkeypatch.setattr(updates, "murmur2_cf",
+                            lambda d: called.append(1) or 0)
+        sha1, fp = updates.hashes_for(jar, with_murmur=False)
+        assert sha1 == hashlib.sha1(b"x" * 1000).hexdigest()
+        assert fp is None and not called
+
+
+class TestInstalliertNieBlockierend:
+    def test_gleichzeitige_anfragen_hashen_nur_einmal(self, instanz, monkeypatch):
+        mods = instances.mods_dir(instanz["id"])
+        mods.mkdir(parents=True, exist_ok=True)
+        (mods / "a.jar").write_bytes(b"a")
+        runs = []
+        real = updates._hash_files
+
+        def counting(files, with_murmur=False):
+            runs.append(1)
+            return real(files, with_murmur)
+
+        monkeypatch.setattr(updates, "_hash_files", counting)
+        _patch_http(monkeypatch, lambda r: httpx.Response(200, json={}))
+
+        async def run():
+            return await asyncio.gather(*(updates.installed_project_ids(instanz["id"])
+                                          for _ in range(3)))
+
+        results = asyncio.run(run())
+        assert len(runs) == 1
+        assert all(r["checked"] == 1 for r in results)
+
+    def test_suche_wartet_nicht_auf_langsame_erkennung(self, client, instanz, monkeypatch):
+        import time
+
+        from app import main
+
+        mods = instances.mods_dir(instanz["id"])
+        mods.mkdir(parents=True, exist_ok=True)
+        (mods / "a.jar").write_bytes(b"a")
+        monkeypatch.setattr(main, "_INSTALLED_WAIT", 0.05)
+        real = updates._hash_files
+
+        def slow(files, with_murmur=False):
+            time.sleep(0.5)
+            return real(files, with_murmur)
+
+        monkeypatch.setattr(updates, "_hash_files", slow)
+
+        def handler(request):
+            if request.url.path.endswith("/search"):
+                return httpx.Response(200, json={"total_hits": 1, "hits": [
+                    {"project_id": "AAA", "title": "A"}]})
+            return httpx.Response(200, json={})
+
+        _patch_http(monkeypatch, handler)
+        resp = client.get("/api/modrinth/search", params={"instance_id": instanz["id"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["installed_pending"] is True
+        assert body["hits"][0]["installed"] is False

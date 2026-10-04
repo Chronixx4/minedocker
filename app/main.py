@@ -731,25 +731,34 @@ def _parse_sort(sort: str | None) -> str:
     return sort
 
 
-async def _installed_ids(instance_id: str | None, source: str) -> set:
+# So lange wartet die Suche höchstens auf die erste Installiert-Ermittlung
+# (Hashen aller jars + Anbieter-Abgleich). Danach kommen die Treffer ohne
+# Markierung und mit installed_pending; das Frontend fragt kurz darauf
+# erneut, dann aus dem Cache.
+_INSTALLED_WAIT = 2.5
+
+
+async def _installed_ids(instance_id: str | None, source: str) -> set | None:
     """Projekt-IDs der Mods, die schon in der Ziel-Instanz liegen (per
     Datei-Hash identifiziert — Modrinth-Projekt-ID bzw. CurseForge-Mod-ID).
-    Fehler schlagen die Suche nicht fehl (leere Menge)."""
+    None = Ermittlung läuft noch. Fehler schlagen die Suche nicht fehl."""
     if not instance_id:
         return set()
     try:
-        ids = await updates_mod.installed_project_ids(instance_id)
+        ids = await updates_mod.installed_project_ids_within(instance_id, _INSTALLED_WAIT)
     except Exception as exc:
         logger.warning("Installiert-Markierung nicht möglich (%s): %s",
                        instance_id, exc)
         return set()
+    if ids is None:
+        return None
     return ids.get("modrinth" if source == "modrinth" else "curseforge") or set()
 
 
 async def _search_with_installed(search, instance_id: str | None, source: str):
-    """Suche und Installiert-Erkennung PARALLEL ausführen (vorher seriell:
-    die Seite wartete auf Anbieter-Suche + Hash-Abgleich nacheinander) und
-    Treffer mit 'installed' markieren."""
+    """Suche und Installiert-Erkennung PARALLEL ausführen und Treffer mit
+    'installed' markieren. Die Suche wartet höchstens _INSTALLED_WAIT
+    Sekunden auf die Erkennung (installed_pending=True, wenn sie noch läuft)."""
     if instance_id:
         try:
             instance_id = validate_identifier(instance_id, "Instanz-ID")
@@ -758,6 +767,9 @@ async def _search_with_installed(search, instance_id: str | None, source: str):
             raise
     data, installed = await asyncio.gather(search, _installed_ids(instance_id, source))
     if isinstance(data, dict):
+        if installed is None:
+            data["installed_pending"] = True
+            installed = set()
         for hit in data.get("hits") or []:
             if isinstance(hit, dict):
                 hit["installed"] = str(hit.get("project_id") or "") in installed
