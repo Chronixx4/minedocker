@@ -568,7 +568,14 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
   align-items: center;
   justify-content: center;
 }
-.mod-icon { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Logo liegt unsichtbar über dem Buchstaben-Platzhalter und wird erst
+   nach dem Laden eingeblendet. Nicht display:none: lazy-Bilder ohne Layout
+   lädt der Browser nie bzw. alle sofort — 300 gleichzeitige Icon-Anfragen
+   belegten alle Verbindungen zum Dashboard, jede andere Anfrage wartete. */
+.mod-ico { position: relative; }
+.mod-icon { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  display: block; opacity: 0; }
+.mod-icon.loaded { opacity: 1; }
 .mod-letter {
   width: 100%;
   height: 100%;

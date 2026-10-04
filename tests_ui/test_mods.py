@@ -277,3 +277,23 @@ def test_modbrowser_kategorie_blaettern_und_installiert(page, make_instance):
     expect(installed).to_have_class(re.compile(r"\bis-installed\b"))
     expect(installed.locator(".installed-tag")).to_have_text("Installiert")
     expect(installed.locator(".install")).to_be_disabled()
+
+
+def test_modbrowser_fragt_nach_wenn_installiert_noch_ermittelt_wird(page, make_instance):
+    inst = make_instance("Pending-SMP")
+    calls = []
+
+    def search(route):
+        calls.append(route.request.url)
+        first = len(calls) == 1
+        hits = [dict(h, installed=not first and h["project_id"] == "gvQqBUqZ") for h in HITS]
+        route.fulfill(json={"total": 2, "hits": hits, "loader": "fabric",
+                            "game_version": "1.21.4", "installed_pending": first})
+
+    page.route("**/api/modrinth/search?*", search)
+    _open_mods(page, inst, "Hinzufügen")
+    results = page.locator("#search-results .result")
+    expect(results).to_have_count(2)
+    # Zweite Anfrage kommt von selbst und bringt die Markierung
+    expect(results.nth(0).locator(".installed-tag")).to_have_text("Installiert", timeout=8000)
+    assert len(calls) == 2

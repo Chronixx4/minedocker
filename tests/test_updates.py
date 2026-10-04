@@ -335,7 +335,7 @@ class TestUpdateJob:
 
 CF_CONTENT = b"jei-mod-content"
 CF_SHA = hashlib.sha1(CF_CONTENT).hexdigest()
-CF_MURMUR = updates.murmur2_cf(CF_CONTENT)
+CF_MURMUR = updates.cf_fingerprint(CF_CONTENT)
 JEI_NEW = b"JEI-NEW-BYTES"                      # CDN-Inhalt der neuen Version
 
 CF_FILES = [

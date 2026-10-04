@@ -1763,7 +1763,8 @@
       "hochladen (Upload-Box im Modpacks-Tab) — beides funktioniert ohne Key.";
   }
 
-  async function doSearch(offset) {
+  async function doSearch(offset, pendingRetry = 0) {
+    clearTimeout(state.searchPendingTimer);
     state.offset = offset;
     const q = $("#search-input").value.trim();
     const target = searchTarget();
@@ -1790,7 +1791,18 @@
       if (seq !== state.searchSeq) return; // überholt von neuerer Suche
       state.total = data.total;
       renderResults(data);
-      prefetchSearch(target, q, offset + 20);
+      if (data.installed_pending) {
+        // Server erkennt die installierten Mods noch (erstes Hashen großer
+        // Modpacks) → gleich noch einmal fragen, dann mit Markierung.
+        // Nicht vorladen: die Seite käme ebenfalls ohne Markierung.
+        if (pendingRetry < 40) {
+          state.searchPendingTimer = setTimeout(() => {
+            if (seq === state.searchSeq) doSearch(offset, pendingRetry + 1);
+          }, 3000);
+        }
+      } else {
+        prefetchSearch(target, q, offset + 20);
+      }
     } catch (e) {
       if (seq !== state.searchSeq) return;
       const hint = state.searchSource === "curseforge" ? cfNoKeyHint(e) : null;
@@ -3217,11 +3229,11 @@
         .toUpperCase() || "?";
       letter.style.background = modLetterColor(mod.filename);
       img.addEventListener("load", () => {
-        show(img, true);
+        img.classList.add("loaded");
         letter.classList.add("hidden");
       });
       img.addEventListener("error", () => {
-        show(img, false);
+        img.classList.remove("loaded");
         letter.classList.remove("hidden");
       });
       img.src = `/api/instances/${state.detailId}/mods/${encodeURIComponent(mod.filename)}/icon`;

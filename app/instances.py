@@ -647,6 +647,31 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+def _dir_sizes(path: Path, buckets: dict) -> dict:
+    """Größe eines Ordners in EINEM Durchlauf, aufgeteilt nach Unterordnern
+    (buckets: Pfad → Name; alles andere zählt als 'rest'). Vorher wurde die
+    Welt zweimal durchwandert (einzeln und im Gesamtordner)."""
+    sizes = {name: 0 for name in buckets.values()}
+    sizes.setdefault("world", 0)
+    sizes["rest"] = 0
+    stack = [(str(path), "rest")]
+    while stack:
+        current, bucket = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append((entry.path, buckets.get(entry.path, bucket)))
+                        elif entry.is_file(follow_symlinks=False):
+                            sizes[bucket] += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return sizes
+
+
 # Kurzer Cache für disk_usage: Welten mit vielen Dateien sind teuer zu
 # vermessen; das Öffnen/Neuladen des Workspace darf nicht jedes Mal den
 # kompletten Instanz-Ordner durchwandern.
@@ -672,10 +697,12 @@ def disk_usage(instance_id: str) -> dict:
         return cached[1]
     directory = instance_dir(instance_id)
     world_path = find_world_dir(directory)
-    world = _dir_size(world_path) if world_path else 0
-    mods = _dir_size(directory / "mods")
-    packs = _dir_size(directory / "packs")
-    total = _dir_size(directory)
+    buckets = {str(directory / "mods"): "mods", str(directory / "packs"): "packs"}
+    if world_path:
+        buckets[str(world_path)] = "world"
+    sizes = _dir_sizes(directory, buckets)
+    world, mods, packs = sizes["world"], sizes["mods"], sizes["packs"]
+    total = sum(sizes.values())
     result = {
         "total_bytes": total,
         "mods_bytes": mods,
