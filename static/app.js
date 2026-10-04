@@ -947,7 +947,13 @@
     const stats = containerStatsById();
     for (const inst of visible) {
       const node = $("#tpl-ov-card").content.cloneNode(true);
+      const card = node.querySelector(".ov-card");
+      card.dataset.state = instStateKey(inst);
+      card.dataset.id = inst.id;
+      node.querySelector(".ov-card-icon").src = cardIcon(inst);
       setText(node.querySelector(".inst-name"), inst.name);
+      setText(node.querySelector(".ov-card-sub"),
+        `${inst.loader}${inst.loader_version ? ` ${inst.loader_version}` : ""} · MC ${inst.game_version}`);
       const badge = node.querySelector(".inst-badge");
       badge.classList.add(stateBadgeClass(inst));
       setText(node.querySelector(".inst-state"), OV_STATE_LABELS[instStateKey(inst)]);
@@ -962,8 +968,6 @@
         chips.appendChild(c);
         return c;
       };
-      addChip(`${inst.loader}${inst.loader_version ? ` ${inst.loader_version}` : ""}`, "Server-Loader");
-      addChip(`MC ${inst.game_version}`, "Minecraft-Version");
       addChip(`${inst.memory || "2G"} RAM`, "Zugewiesener RAM");
       if (inst.modpack?.title) addChip(inst.modpack.title, "Installiertes Modpack");
       for (const tag of inst.tags || []) addChip(`#${tag}`, "Gruppe/Tag").classList.add("tag");
@@ -979,36 +983,51 @@
         addChip(`Docker: ${cstate}`, "Docker-Container-Status");
       }
 
-      // Live-Info: Spieler/MOTD (aus /api/instances/live)
-      const ping = pingLine(inst);
+      // Live-Info: MOTD bzw. Startzustand (aus /api/instances/live)
+      const livePing = inst.container?.running ? liveEntry(inst)?.ping : null;
       const pingBox = node.querySelector(".ov-ping");
-      if (ping) {
-        setText(pingBox, ping);
+      if (inst.container?.running && !livePing?.online) {
+        setText(pingBox, pingLine(inst));
         show(pingBox, true);
-        pingBox.classList.toggle("has-players", /Spieler online/.test(ping));
+      } else if (livePing?.motd) {
+        setText(pingBox, livePing.motd.replace(/\s+/g, " ").trim());
+        show(pingBox, true);
       }
 
-      // Spielernamen als Chips (aus dem SLP-Sample)
-      const livePing = inst.container?.running ? liveEntry(inst)?.ping : null;
-      const sample = livePing?.online ? (livePing.players?.sample || []).map((p) => p.name).filter(Boolean) : [];
+      // Spieler: Pixel-Köpfe (aus dem SLP-Sample) + Zähler
+      const pcount = node.querySelector(".ov-pcount");
       const playersBox = node.querySelector(".ov-players");
-      if (sample.length) {
+      if (livePing?.online) {
+        const p = livePing.players || {};
+        setText(pcount, `${p.online || 0} / ${p.max || 0}`);
+        pcount.title = "Spieler online";
+        const sample = (p.sample || []).map((x) => x.name).filter(Boolean);
         for (const name of sample.slice(0, 8)) {
-          const chip = document.createElement("span");
-          chip.className = "player-chip";
-          chip.textContent = name;
-          playersBox.appendChild(chip);
+          const head = document.createElement("img");
+          head.className = "ov-head";
+          head.src = playerFace(name);
+          head.alt = name;
+          head.title = name;
+          playersBox.appendChild(head);
         }
         if (sample.length > 8) {
           const more = document.createElement("span");
-          more.className = "player-chip more";
+          more.className = "ov-head more";
           more.textContent = `+${sample.length - 8}`;
           more.title = sample.join(", ");
           playersBox.appendChild(more);
         }
-        show(playersBox, true);
+        if (!sample.length) {
+          const none = document.createElement("span");
+          none.className = "muted small";
+          none.textContent = p.online ? "Namen nicht freigegeben" : "niemand online";
+          playersBox.appendChild(none);
+        }
       } else {
-        show(playersBox, false);
+        const off = document.createElement("span");
+        off.className = "muted small";
+        off.textContent = inst.container?.running ? "–" : "offline";
+        playersBox.appendChild(off);
       }
 
       // Docker-Statistiken je Container (mc-inst-{id})
@@ -1024,6 +1043,11 @@
         node.querySelector(".ov-ram-bar").style.width = res.ram_limit_mb
           ? `${Math.max(2, Math.min(100, (res.ram_mb / res.ram_limit_mb) * 100))}%`
           : `${Math.max(2, Math.min(100, res.ram_mb))}%`;
+        const hist = state.ovHistory.cont[`mc-inst-${inst.id}`];
+        if (hist) {
+          node.querySelector(".ov-cpu-spark").appendChild(sparkline(hist.cpu, "", 120, 16, 100));
+          node.querySelector(".ov-ram-spark").appendChild(sparkline(hist.ram, "", 120, 16));
+        }
       }
 
       const errBox = node.querySelector(".inst-error");
@@ -1040,17 +1064,75 @@
       node.querySelector(".start").addEventListener("click", () => instAction(inst, "start"));
       node.querySelector(".stop").addEventListener("click", () => instAction(inst, "stop"));
       node.querySelector(".restart").addEventListener("click", () => instAction(inst, "restart"));
-      node.querySelector(".logs").addEventListener("click", () => {
-        activateTab("servers");
-        openDetail(inst.id).then(() =>
-          $("#detail-logs").scrollIntoView({ behavior: "smooth", block: "nearest" }));
-      });
-      node.querySelector(".open").addEventListener("click", () => {
-        activateTab("servers");
-        openDetail(inst.id);
+      node.querySelector(".logs").addEventListener("click", () => openServer(inst.id, "konsole"));
+      node.querySelector(".open").addEventListener("click", () => openServer(inst.id));
+      // Klick auf die Karte (außer auf Buttons/Chips) öffnet den Server
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("button, a, .chip-btn, input, select")) return;
+        openServer(inst.id);
       });
       grid.appendChild(node);
     }
+
+    // „+ Neuer Server“ als letzte Karte (nur Admins, nur ohne aktiven Filter)
+    if (state.ovInstances !== null && state.ovFilter === "all" && !q && !state.ovGroup) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "ov-card-add admin-only";
+      const plus = document.createElement("span");
+      plus.className = "ov-card-add-plus";
+      plus.textContent = "+";
+      const label = document.createElement("span");
+      label.textContent = "Neuer Server";
+      add.append(plus, label);
+      add.addEventListener("click", () => {
+        activateTab("servers");
+        openCreate();
+      });
+      grid.appendChild(add);
+    }
+  }
+
+  /* Öffnet eine Instanz im Server-Tab, optional direkt in einem Hotbar-Slot */
+  function openServer(id, slot) {
+    activateTab("servers");
+    // openDetail setzt detailId und Slot synchron vor dem ersten await —
+    // den Ziel-Slot daher direkt danach wählen (nicht erst nach allen Ladevorgängen)
+    const p = Promise.resolve(id === state.detailId ? null : openDetail(id)).catch(() => {});
+    if (slot) activateWsTab(slot, true);
+    return p;
+  }
+
+  /* Karten-Icon: echtes server-icon.png (einmal je Instanz geladen), sonst Pixel-Block */
+  state.iconCache = {}; // id -> Object-URL | null (kein Icon) | "pending"
+  function cardIcon(inst) {
+    const cached = state.iconCache[inst.id];
+    if (typeof cached === "string" && cached !== "pending") return cached;
+    if (cached === undefined) {
+      state.iconCache[inst.id] = "pending";
+      const headers = {};
+      if (state.apiKey) headers["X-API-Key"] = state.apiKey;
+      fetch(`/api/instances/${inst.id}/icon`, { headers })
+        .then((res) => {
+          if (res.ok) return res.blob();
+          if (res.status === 404) return null;            // kein Icon hochgeladen
+          throw new Error(`HTTP ${res.status}`);          // später erneut versuchen
+        })
+        .then((blob) => {
+          state.iconCache[inst.id] = blob ? URL.createObjectURL(blob) : null;
+          if (blob) {
+            document.querySelectorAll(`.ov-card[data-id="${CSS.escape(inst.id)}"] .ov-card-icon`)
+              .forEach((img) => { img.src = state.iconCache[inst.id]; });
+          }
+        })
+        .catch(() => { delete state.iconCache[inst.id]; });
+    }
+    return serverBlockIcon(inst.name);
+  }
+  function forgetCardIcon(id) {
+    const cached = state.iconCache[id];
+    if (typeof cached === "string" && cached !== "pending") URL.revokeObjectURL(cached);
+    delete state.iconCache[id];
   }
 
   function renderResources() {
@@ -1159,6 +1241,55 @@
     renderResources();
     updateWsOverview();
     updateHotbarCounts();
+    renderOverviewSummary(list);
+    updateInstTabCounts();
+  }
+
+  /* Ein-Satz-Zusammenfassung über der Kartenansicht + Status im Browser-Tab */
+  function onlinePlayers(inst) {
+    if (!inst.container?.running) return null;
+    const ping = liveEntry(inst)?.ping;
+    return ping?.online ? (ping.players?.online || 0) : null;
+  }
+  function renderOverviewSummary(list) {
+    const running = list.filter((i) => instStateKey(i) === "running").length;
+    const players = list.reduce((n, i) => n + (onlinePlayers(i) || 0), 0);
+    const parts = [];
+    if (state.ovInstances === null) {
+      parts.push("Server konnten nicht geladen werden");
+    } else if (!list.length) {
+      parts.push("Noch keine Welt angelegt");
+    } else {
+      parts.push(`${running} von ${list.length} ${list.length === 1 ? "Server läuft" : "Servern laufen"}`);
+      parts.push(`${players} ${players === 1 ? "Spieler" : "Spieler"} online`);
+      const r = state.ovStatus?.resources || {};
+      if (r.found) {
+        parts.push(r.ram_limit_mb
+          ? `RAM ${fmtMb(r.ram_mb)} / ${fmtMb(r.ram_limit_mb)}`
+          : `RAM ${fmtMb(r.ram_mb)}`);
+      }
+    }
+    setText($("#ov-summary"), parts.join(" · "));
+    document.title = running
+      ? `● ${players} online · Minedocker`
+      : "Minedocker";
+  }
+
+  /* Spielerzahl je Server-Chip in der Leiste oben (ohne Neuaufbau der Leiste) */
+  function updateInstTabCounts() {
+    for (const inst of state.ovInstances?.instances || []) {
+      const b = document.querySelector(`#inst-tabs .inst-tab[data-id="${CSS.escape(inst.id)}"]`);
+      if (!b) continue;
+      const dot = b.querySelector(".inst-tab-dot");
+      const key = instStateKey(inst);
+      dot.className = `inst-tab-dot ${key}`;
+      dot.title = OV_STATE_LABELS[key];
+      const n = onlinePlayers(inst);
+      const count = b.querySelector(".inst-tab-count");
+      setText(count, n === null ? "" : String(n));
+      count.title = n === null ? "" : `${n} Spieler online`;
+      show(count, n !== null);
+    }
   }
 
   async function refreshOverview() {
@@ -3822,6 +3953,7 @@
     try {
       await apiUpload(`/api/instances/${state.detailId}/icon`, form, null, "PUT");
       toast("Server-Icon gesetzt.", "success");
+      forgetCardIcon(state.detailId);
       $("#icon-upload-file").value = "";
       $("#icon-upload-btn").disabled = true;
       loadIconPreview();
@@ -3839,6 +3971,7 @@
     try {
       await api(`/api/instances/${state.detailId}/icon`, { method: "DELETE" });
       toast("Server-Icon entfernt.", "success");
+      forgetCardIcon(state.detailId);
       loadIconPreview();
     } catch (e) {
       iconSetError(`Löschen fehlgeschlagen: ${e.message}`);
@@ -5422,12 +5555,10 @@
     const all = document.createElement("button");
     all.type = "button";
     const onServers = state.tab === "servers";
-    all.className = "inst-tab" + (onServers && !state.detailId ? " active" : "");
+    all.className = "inst-tab" + (state.tab === "overview" ? " active" : "");
     all.textContent = "Alle Server";
-    all.addEventListener("click", () => {
-      if (state.detailId) closeDetail();
-      activateTab("servers");
-    });
+    all.title = "Kartenansicht aller Server";
+    all.addEventListener("click", () => activateTab("overview"));
     nav.appendChild(all);
     const instances = (list || []).slice()
       .sort((a, b) => a.name.localeCompare(b.name, "de"));
@@ -5442,7 +5573,10 @@
       const dot = document.createElement("span");
       dot.className = `inst-tab-dot ${instStateKey(inst)}`;
       dot.title = OV_STATE_LABELS[instStateKey(inst)];
-      b.append(icon, document.createTextNode(inst.name), dot);
+      const count = document.createElement("span");
+      count.className = "inst-tab-count hidden";
+      b.dataset.id = inst.id;
+      b.append(icon, document.createTextNode(inst.name), count, dot);
       b.title = `${inst.loader} · MC ${inst.game_version} · Port ${inst.port}`;
       b.addEventListener("click", () => {
         activateTab("servers");
@@ -5461,6 +5595,7 @@
     });
     nav.appendChild(add);
     updateHotbarCounts();
+    updateInstTabCounts();
   }
 
   /* ---------- Workspace-Steuerung ---------- */
@@ -5591,5 +5726,291 @@
   $("#ws-backups-open").addEventListener("click", () => activateWsTab("backups"));
 
   organizeWorkspace();
+
+  /* =====================================================================
+     Befehlspalette (Strg+K): Server, Bereiche, Aktionen und /Befehle
+     ===================================================================== */
+  const cmdk = { items: [], shown: [], active: 0 };
+  const canAdmin = () => state.role !== "viewer";
+  const allInstances = () => (state.ovInstances?.instances || []).slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "de"));
+  const NAV_ICON = pixelIcon(["...ss...", "..sYYs..", ".sYwwYs.", "sYwkkwYs", "sYwkkwYs", ".sYwwYs.", "..sYYs..", "...ss..."]);
+  const ACT_ICONS = {
+    start: pixelIcon(["........", ".ee.....", ".eeee...", ".eeeeee.", ".eeeeee.", ".eeee...", ".ee.....", "........"]),
+    stop: pixelIcon(["........", ".rrrrrr.", ".rRRRRr.", ".rRRRRr.", ".rRRRRr.", ".rRRRRr.", ".rrrrrr.", "........"]),
+    restart: pixelIcon(["..yyyy..", ".y....y.", "y.......", "y....yyy", "y.....yy", ".y....y.", "..yyyy..", "........"]),
+    add: pixelIcon(["........", "...ee...", "...ee...", ".eeeeee.", ".eeeeee.", "...ee...", "...ee...", "........"]),
+  };
+
+  // Ziel für /Befehle: geöffneter Server, sonst der einzige laufende
+  function cmdkConsoleTargets() {
+    const running = allInstances().filter((i) => instStateKey(i) === "running");
+    const cur = running.find((i) => i.id === state.detailId);
+    return cur ? [cur, ...running.filter((i) => i !== cur)] : running;
+  }
+
+  async function cmdkSendCommand(inst, cmd) {
+    try {
+      const data = await api(`/api/instances/${inst.id}/console`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd }),
+      });
+      if (inst.id === state.detailId) {
+        appendConsoleLine(`> ${cmd}`);
+        appendConsoleLine(data.output || "(keine Antwort)");
+      }
+      const out = (data.output || "").trim();
+      toast(`${inst.name}: /${cmd}${out ? ` → ${out.length > 160 ? `${out.slice(0, 160)}…` : out}` : ""}`, "success");
+    } catch (e) {
+      toast(`${inst.name}: Befehl fehlgeschlagen — ${e.message}`, "error");
+    }
+  }
+
+  function buildCmdkItems() {
+    const items = [];
+    const add = (group, label, opts) => items.push({ group, label, ...opts });
+    const insts = allInstances();
+    const cur = currentDetailInst();
+
+    for (const inst of insts) {
+      const key = instStateKey(inst);
+      const n = onlinePlayers(inst);
+      add("Server", inst.name, {
+        icon: cardIcon(inst),
+        hint: OV_STATE_LABELS[key] + (n !== null ? ` · ${n} online` : ""),
+        keywords: `${inst.loader} ${inst.game_version} ${(inst.tags || []).join(" ")} öffnen`,
+        dot: key,
+        run: () => openServer(inst.id),
+      });
+    }
+
+    // Bereiche: für den geöffneten Server immer, für andere nur bei Suche
+    for (const inst of insts) {
+      const isCur = cur && inst.id === cur.id && state.tab === "servers";
+      WS_TABS.forEach(([slot, label, icon], i) => {
+        add("Bereiche", isCur ? label : `${inst.name} › ${label}`, {
+          icon: SLOT_ICONS[icon],
+          hint: isCur ? `Taste ${i + 1}` : "",
+          keywords: inst.name,
+          deep: !isCur,
+          run: () => openServer(inst.id, slot),
+        });
+      });
+    }
+
+    if (canAdmin()) {
+      for (const inst of insts) {
+        const key = instStateKey(inst);
+        const isCur = cur && inst.id === cur.id;
+        const acts = key === "running"
+          ? [["restart", "neu starten"], ["stop", "stoppen"]]
+          : key === "starting" ? [["stop", "stoppen"]] : [["start", "starten"]];
+        for (const [action, verb] of acts) {
+          add("Aktionen", `${inst.name} ${verb}`, {
+            icon: ACT_ICONS[action],
+            keywords: action === "restart" ? "neustart restart" : action,
+            deep: !isCur,
+            run: () => instAction(inst, action),
+          });
+        }
+        add("Aktionen", `Backup von ${inst.name} erstellen`, {
+          icon: SLOT_ICONS.chest,
+          keywords: "sichern sicherung backup",
+          deep: !isCur,
+          run: () => { openServer(inst.id, "backups"); $("#backup-create-btn").click(); },
+        });
+      }
+      add("Aktionen", "Neuen Server erstellen", {
+        icon: ACT_ICONS.add, keywords: "anlegen new server instanz",
+        run: () => { activateTab("servers"); openCreate(); },
+      });
+      if (insts.some((i) => instStateKey(i) === "stopped")) {
+        add("Aktionen", "Alle gestoppten Server starten", {
+          icon: ACT_ICONS.start, keywords: "alle start", run: () => $("#ov-start-all").click(),
+        });
+      }
+      if (insts.some((i) => instStateKey(i) === "running")) {
+        add("Aktionen", "Alle laufenden Server stoppen", {
+          icon: ACT_ICONS.stop, keywords: "alle stop", run: () => $("#ov-stop-all").click(),
+        });
+      }
+    }
+
+    // Spieler (aus dem Live-Ping): springt in den Spieler-Slot ihres Servers
+    for (const inst of insts) {
+      const ping = inst.container?.running ? liveEntry(inst)?.ping : null;
+      for (const p of (ping?.online && ping.players?.sample) || []) {
+        if (!p.name) continue;
+        add("Spieler", p.name, {
+          icon: playerFace(p.name), hint: `auf ${inst.name}`, keywords: inst.name, deep: true,
+          run: () => openServer(inst.id, "spieler"),
+        });
+      }
+    }
+
+    document.querySelectorAll(".tabs .tab").forEach((tab) => {
+      const label = tab.querySelector(".tab-label")?.textContent || tab.dataset.tab;
+      add("Navigation", `Gehe zu ${label}`, {
+        icon: NAV_ICON, keywords: tab.dataset.tab, run: () => activateTab(tab.dataset.tab),
+      });
+    });
+    return items;
+  }
+
+  function filterCmdk(query) {
+    const q = query.trim().toLowerCase();
+    // „/befehl“ → an einen laufenden Server per RCON senden
+    if (q.startsWith("/")) {
+      const cmd = query.trim().replace(/^\/+/, "");
+      const targets = canAdmin() ? cmdkConsoleTargets() : [];
+      if (!targets.length) {
+        return [{ group: "Befehl", label: canAdmin()
+          ? "Kein laufender Server für Befehle" : "Befehle sind nur für Admins",
+          disabled: true }];
+      }
+      return targets.map((inst) => ({
+        group: "Befehl",
+        label: cmd ? `/${cmd}` : "Befehl eingeben …",
+        hint: `an ${inst.name}`,
+        icon: SLOT_ICONS.cmd,
+        disabled: !cmd,
+        run: () => cmdkSendCommand(inst, cmd),
+      }));
+    }
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const groups = ["Server", "Bereiche", "Aktionen", "Spieler", "Navigation"];
+    const out = [];
+    for (const g of groups) {
+      const hits = [];
+      cmdk.items.forEach((it, idx) => {
+        if (it.group !== g) return;
+        if (!tokens.length) { if (!it.deep) hits.push([0, idx, it]); return; }
+        const label = it.label.toLowerCase();
+        const hay = `${label} ${(it.keywords || "").toLowerCase()} ${g.toLowerCase()}`;
+        if (!tokens.every((t) => hay.includes(t))) return;
+        const score = label.startsWith(q) ? 0 : label.includes(q) ? 1
+          : tokens.every((t) => label.includes(t)) ? 2 : 3;
+        hits.push([score, idx, it]);
+      });
+      hits.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      out.push(...hits.slice(0, tokens.length ? 8 : 30).map((h) => h[2]));
+    }
+    return out;
+  }
+
+  function renderCmdk() {
+    const list = $("#cmdk-list");
+    list.textContent = "";
+    cmdk.shown = filterCmdk($("#cmdk-input").value);
+    if (cmdk.active >= cmdk.shown.length) cmdk.active = 0;
+    let lastGroup = null;
+    cmdk.shown.forEach((it, i) => {
+      if (it.group !== lastGroup) {
+        lastGroup = it.group;
+        const h = document.createElement("div");
+        h.className = "cmdk-group";
+        h.textContent = it.group;
+        list.appendChild(h);
+      }
+      const row = document.createElement("div");
+      row.className = "cmdk-item" + (i === cmdk.active ? " active" : "")
+        + (it.disabled ? " disabled" : "");
+      row.id = `cmdk-opt-${i}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(i === cmdk.active));
+      if (it.icon) {
+        const img = document.createElement("img");
+        img.src = it.icon;
+        img.alt = "";
+        row.appendChild(img);
+      }
+      const label = document.createElement("span");
+      label.className = "cmdk-label";
+      label.textContent = it.label;
+      row.appendChild(label);
+      if (it.dot) {
+        const dot = document.createElement("span");
+        dot.className = `inst-tab-dot ${it.dot}`;
+        row.appendChild(dot);
+      }
+      if (it.hint) {
+        const hint = document.createElement("span");
+        hint.className = "cmdk-hint-text";
+        hint.textContent = it.hint;
+        row.appendChild(hint);
+      }
+      row.addEventListener("mousemove", () => {
+        if (cmdk.active === i) return;
+        cmdk.active = i;
+        list.querySelectorAll(".cmdk-item").forEach((el) => {
+          const on = el.id === row.id;
+          el.classList.toggle("active", on);
+          el.setAttribute("aria-selected", String(on));
+        });
+        $("#cmdk-input").setAttribute("aria-activedescendant", row.id);
+      });
+      row.addEventListener("click", () => runCmdk(i));
+      list.appendChild(row);
+    });
+    if (!cmdk.shown.length) {
+      const empty = document.createElement("div");
+      empty.className = "cmdk-empty muted";
+      empty.textContent = "Nichts gefunden — mit „/“ beginnt ein Server-Befehl.";
+      list.appendChild(empty);
+    }
+    $("#cmdk-input").setAttribute("aria-activedescendant", cmdk.shown.length ? `cmdk-opt-${cmdk.active}` : "");
+    list.querySelector(".cmdk-item.active")?.scrollIntoView({ block: "nearest" });
+    const target = cmdkConsoleTargets()[0];
+    setText($("#cmdk-target"), target ? target.name : "laufenden Server");
+  }
+
+  function runCmdk(i) {
+    const it = cmdk.shown[i];
+    if (!it || it.disabled || !it.run) return;
+    closeDialog($("#cmdk"));
+    it.run();
+  }
+
+  function openCmdk() {
+    const dlg = $("#cmdk");
+    if (dlg.open) return;
+    if (document.querySelector("dialog[open]")) return; // andere Dialoge nicht überlagern
+    cmdk.items = buildCmdkItems();
+    cmdk.active = 0;
+    $("#cmdk-input").value = "";
+    renderCmdk();
+    dlg.showModal();
+    $("#cmdk-input").focus();
+  }
+
+  $("#cmdk-input").addEventListener("input", () => { cmdk.active = 0; renderCmdk(); });
+  $("#cmdk-input").addEventListener("keydown", (e) => {
+    const n = cmdk.shown.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!n) return;
+      cmdk.active = (cmdk.active + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      renderCmdk();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      runCmdk(cmdk.active);
+    }
+  });
+  $("#cmdk").addEventListener("cancel", (e) => { e.preventDefault(); closeDialog($("#cmdk")); });
+  // Klick auf den Hintergrund schließt die Palette
+  $("#cmdk").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeDialog($("#cmdk"));
+  });
+  $("#cmdk-open").addEventListener("click", openCmdk);
+  $("#ov-cmdk").addEventListener("click", openCmdk);
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      if (!$("#auth-overlay").classList.contains("hidden")) return; // nicht über dem Login
+      e.preventDefault();
+      if ($("#cmdk").open) closeDialog($("#cmdk"));
+      else openCmdk();
+    }
+  });
 
 })();

@@ -2493,3 +2493,239 @@ body.has-hotbar #toasts { bottom: 100px; }
 }
 .auth-brand .brand-mark { background: none; }
 .auth-brand .brand-mark svg { width: 30px; height: 30px; image-rendering: pixelated; }
+
+/* ==========================================================================
+   Schritt 3: Startseite „Alle Server“ (Kartenansicht) + Befehlspalette
+   ========================================================================== */
+
+/* --- Kopf der Startseite: Titel, Ein-Satz-Zusammenfassung, Palette --- */
+.ov-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.1rem;
+}
+.ov-hero-title {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-weight: 600;
+  font-size: 1.7rem;
+  line-height: 1.1;
+}
+.ov-summary { margin: 0.3rem 0 0; color: var(--text-2); }
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--edge-lo);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.cmdk-hint {
+  min-width: min(340px, 100%);
+  justify-content: flex-start;
+  color: var(--muted);
+  gap: 0.55rem;
+}
+.cmdk-hint svg,
+.cmdk-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+.cmdk-hint span { flex: 1; text-align: left; }
+.cmdk-btn { gap: 0.4rem; padding-inline: 0.6rem; }
+
+/* --- Server-Karten --- */
+.ov-card { cursor: pointer; position: relative; overflow: hidden; }
+.ov-card::before {
+  /* Statusleiste links wie ein Redstone-Signal */
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--muted);
+  opacity: 0.6;
+}
+.ov-card[data-state="running"]::before { background: var(--ok); opacity: 1; box-shadow: 0 0 8px var(--ok); }
+.ov-card[data-state="starting"]::before { background: var(--warn); opacity: 1; }
+.ov-card[data-state="error"]::before { background: var(--err); opacity: 1; }
+.ov-card:hover { transform: none; border-color: var(--edge-hi); filter: brightness(1.06); }
+.ov-card .inst-head { align-items: center; gap: 0.7rem; }
+.ov-card-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  border: 1px solid var(--edge-lo);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 1px 1px 0 var(--edge-hi);
+  background: var(--surface-3);
+}
+.ov-card-title { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ov-card .inst-name {
+  font-family: var(--font-pixel);
+  font-weight: 600;
+  font-size: 1.1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-card-players {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-height: 26px;
+}
+.ov-card .ov-players { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; margin: 0; }
+.ov-head {
+  width: 22px;
+  height: 22px;
+  image-rendering: pixelated;
+  border: 1px solid var(--edge-lo);
+  border-radius: 2px;
+}
+.ov-head.more {
+  width: auto;
+  min-width: 22px;
+  padding: 0 0.3rem;
+  display: inline-grid;
+  place-items: center;
+  font-size: 0.72rem;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.ov-pcount {
+  font-family: var(--font-pixel);
+  font-size: 1.05rem;
+  color: var(--xp);
+  white-space: nowrap;
+}
+.ov-card .ov-ping { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-card .spark.sm { height: 16px; margin: 2px 0 4px; }
+.ov-card .spark.sm svg { width: 100%; height: 16px; display: block; }
+.ov-card .chips { margin-top: auto; }
+
+/* „+ Neuer Server“ als gestrichelte Karte */
+.ov-card-add {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--accent-2);
+  font: inherit;
+  font-family: var(--font-pixel);
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+.ov-card-add:hover { border-color: var(--accent); background: var(--accent-soft); }
+.ov-card-add:focus-visible { outline: none; box-shadow: var(--ring); }
+.ov-card-add-plus { font-size: 2.2rem; line-height: 1; }
+
+/* Spielerzahl in der Server-Leiste */
+.inst-tab-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--xp);
+  padding: 0 0.3rem;
+  border-radius: var(--radius-sm);
+  background: rgba(155, 227, 59, 0.12);
+}
+
+/* --- Befehlspalette --- */
+.modal.cmdk {
+  width: min(640px, calc(100vw - 2rem));
+  margin-top: 12vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--edge-lo);
+  box-shadow: inset 1px 1px 0 var(--edge-hi), var(--shadow-lg);
+}
+.modal.cmdk:not([open]) { display: none; }
+.cmdk-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--edge-lo);
+}
+.cmdk-input-row svg { width: 18px; height: 18px; color: var(--muted); flex-shrink: 0; }
+.cmdk-input-row input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 1.05rem;
+  padding: 0.2rem 0;
+  box-shadow: none;
+}
+.cmdk-input-row input:focus { outline: none; box-shadow: none; }
+.cmdk-list {
+  overflow-y: auto;
+  max-height: min(56vh, 460px);
+  padding: 0.35rem;
+  overscroll-behavior: contain;
+}
+.cmdk-group {
+  font-family: var(--font-pixel);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0.55rem 0.65rem 0.25rem;
+}
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 38px;
+}
+.cmdk-item img { width: 22px; height: 22px; image-rendering: pixelated; flex-shrink: 0; }
+.cmdk-item.active {
+  background: var(--surface-3);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.cmdk-item.disabled { cursor: default; opacity: 0.6; }
+.cmdk-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-hint-text { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+.cmdk-item .inst-tab-dot { flex-shrink: 0; }
+.cmdk-empty { padding: 1rem 0.8rem; }
+.cmdk-foot {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 1rem;
+  border-top: 1px solid var(--edge-lo);
+  background: var(--bg-soft);
+}
+.cmdk-foot kbd { margin-right: 0.2rem; }
+
+@media (max-width: 640px) {
+  .ov-hero-title { font-size: 1.35rem; }
+  .cmdk-hint { min-width: 0; width: 100%; }
+  .cmdk-btn kbd, .cmdk-hint kbd { display: none; }
+  .modal.cmdk { margin-top: 1rem; }
+  .cmdk-foot span:nth-child(-n+2) { display: none; }
+  .cmdk-hint-text { display: none; }
+}
+@media (hover: none) {
+  .cmdk-btn kbd { display: none; }
+}
+#ov-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.cmdk-btn { display: inline-flex; align-items: center; }
+@media (max-width: 640px) { #ov-grid { grid-template-columns: 1fr; } }

@@ -46,6 +46,10 @@
   </nav>
   <div class="topbar-right">
     <a id="update-badge" class="hidden" href="https://github.com/Chronixx4/minedocker/releases" target="_blank" rel="noopener">Update verfügbar</a>
+    <button type="button" id="cmdk-open" class="btn cmdk-btn" title="Befehlspalette (Strg+K)" aria-label="Befehlspalette öffnen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
+      <kbd>Strg K</kbd>
+    </button>
     <span id="app-version" class="muted small" title="Installierte Dashboard-Version">–</span>
     <span id="inst-badge" class="badge off"><span class="dot"></span><span id="inst-badge-text">–</span></span>
     <div class="user-menu">
@@ -74,6 +78,18 @@
 <main>
   <!-- Übersicht -->
   <section id="tab-overview" class="panel active">
+    <!-- Startseite: alle Welten auf einen Blick -->
+    <div class="ov-hero">
+      <div class="ov-hero-text">
+        <h2 class="ov-hero-title">Alle Server</h2>
+        <p id="ov-summary" class="ov-summary">Lade…</p>
+      </div>
+      <button type="button" id="ov-cmdk" class="btn cmdk-hint" title="Befehlspalette öffnen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
+        <span>Server, Aktion oder /Befehl …</span>
+        <kbd>Strg K</kbd>
+      </button>
+    </div>
     <!-- KPI-Kacheln -->
     <div class="stat-row">
       <div class="stat-tile">
@@ -1265,20 +1281,29 @@
 </template>
 
 <template id="tpl-ov-card">
-  <article class="inst-card">
+  <article class="inst-card ov-card">
     <div class="inst-head">
-      <span class="inst-name"></span>
+      <img class="ov-card-icon" alt="">
+      <div class="ov-card-title">
+        <span class="inst-name"></span>
+        <span class="ov-card-sub muted small"></span>
+      </div>
       <span class="inst-badge badge"><span class="dot"></span><span class="inst-state"></span></span>
     </div>
-    <div class="chips"></div>
+    <div class="ov-card-players">
+      <div class="ov-players"></div>
+      <span class="ov-pcount"></span>
+    </div>
     <div class="ov-ping muted small hidden"></div>
-    <div class="ov-players hidden"></div>
     <div class="ov-res hidden">
       <div class="ov-res-line"><span>CPU</span><span class="ov-cpu-val">–</span></div>
       <div class="bar mini"><div class="bar-fill ov-cpu-bar" style="width:0%"></div></div>
+      <div class="spark sm ov-cpu-spark"></div>
       <div class="ov-res-line"><span>RAM</span><span class="ov-ram-val">–</span></div>
       <div class="bar mini"><div class="bar-fill ram ov-ram-bar" style="width:0%"></div></div>
+      <div class="spark sm ram ov-ram-spark"></div>
     </div>
+    <div class="chips"></div>
     <div class="inst-error err hidden"></div>
     <div class="inst-actions row">
       <button class="btn primary start admin-only">Starten</button>
@@ -1306,6 +1331,23 @@
     </div>
   </article>
 </template>
+
+<!-- Befehlspalette (Strg+K) -->
+<dialog id="cmdk" class="modal cmdk" aria-label="Befehlspalette">
+  <div class="cmdk-input-row">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
+    <input id="cmdk-input" type="text" autocomplete="off" spellcheck="false"
+           placeholder="Server, Bereich, Aktion … oder /befehl" aria-controls="cmdk-list"
+           role="combobox" aria-expanded="true" aria-autocomplete="list">
+    <kbd>Esc</kbd>
+  </div>
+  <div id="cmdk-list" class="cmdk-list" role="listbox"></div>
+  <div class="cmdk-foot muted small">
+    <span><kbd>↑</kbd><kbd>↓</kbd> auswählen</span>
+    <span><kbd>Enter</kbd> ausführen</span>
+    <span><kbd>/</kbd> Befehl an <b id="cmdk-target">–</b></span>
+  </div>
+</dialog>
 
 <!-- Hotbar: 9 Bereiche der geöffneten Instanz (Tasten 1–9 wie im Spiel) -->
 <div id="hotbar-wrap" class="hotbar-wrap hidden">
