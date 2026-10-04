@@ -26,7 +26,7 @@ from .config import settings
 
 _MAX_CHECKED = 300       # harte Obergrenze geprüfter Dateien pro Lauf
 _CF_CHUNK = 50           # Fingerprints pro CurseForge-Batch-Request
-_MR_CHUNK = 40           # SHA1-Hashes pro Modrinth-Batch-Lookup
+_MR_CHUNK = 100          # SHA1-Hashes pro Modrinth-Batch-Lookup
 _LOOKUP_CONCURRENCY = 8  # parallele Anbieter-Abfragen im Check
 _JOB_CONCURRENCY = 4     # parallele Downloads im Update-Job
 _INSTALLED_TTL = 60.0    # Cache-Dauer für installierte Projekte (Such-Marker)
@@ -343,13 +343,17 @@ async def _installed_project_ids_uncached(instance_id: str) -> dict:
     # Status-Polls — Symptom: „Suche dauert ewig / Katalog nicht erreichbar“).
     sha1s, murms = await asyncio.to_thread(_hash_files, files)
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # Modrinth: Batch-Lookup der SHA1s → Versionen (oder null) → Projekt-IDs
+        # Modrinth: Batch-Lookup POST /version_files {hashes, algorithm} →
+        # {sha1: Version}. (GET /version_file/{hash} nimmt nur EINEN Hash —
+        # kommagetrennte Listen liefern 404, dann wurde nichts als
+        # installiert erkannt.)
         for start in range(0, len(sha1s), _MR_CHUNK):
             chunk = sha1s[start:start + _MR_CHUNK]
             try:
-                resp = await client.get(
-                    f"{settings.modrinth_api}/version_file/{','.join(chunk)}",
-                    params={"multiple": "true"}, headers=modrinth._headers())
+                resp = await client.post(
+                    f"{settings.modrinth_api}/version_files",
+                    json={"hashes": chunk, "algorithm": "sha1"},
+                    headers=modrinth._headers())
             except httpx.HTTPError:
                 continue
             if resp.status_code != 200:
@@ -358,9 +362,9 @@ async def _installed_project_ids_uncached(instance_id: str) -> dict:
                 versions = resp.json()
             except ValueError:
                 continue
-            if not isinstance(versions, list):
+            if not isinstance(versions, dict):
                 continue
-            for version in versions:
+            for version in versions.values():
                 if isinstance(version, dict) and version.get("project_id"):
                     out["modrinth"].add(str(version["project_id"]))
         # CurseForge: Fingerprints batchweise → Mod-IDs (nur mit CF_API_KEY)

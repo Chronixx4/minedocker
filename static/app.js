@@ -1648,6 +1648,9 @@
   $("#search-source").addEventListener("change", (e) => {
     state.searchSource = e.target.value;
     updateEnvironmentFilter(); // Server/Client-Filter nur bei Modrinth
+    // Kategorie-IDs gelten nur je Anbieter → zurücksetzen, Liste neu laden
+    state.searchFilterCategory = "";
+    loadSearchCategories();
     doSearch(0);
   });
 
@@ -1667,13 +1670,17 @@
   state.searchFilterVersion = "";    // "" = wie Instanz, "any" = alle Versionen
   // Standard: reine Client-Mods ausblenden (nur Modrinth kennt die Angabe)
   state.searchFilterEnvironment = "server_ok";
+  state.searchFilterCategory = "";   // "" = alle Kategorien
   state.searchFiltersLoaded = false;
+  state.searchSeq = 0;               // nur die jüngste Suche darf rendern
+  state.searchPrefetch = null;       // vorab geladene nächste Seite
 
   for (const [sel, key] of [
     ["#search-filter-sort", "searchFilterSort"],
     ["#search-filter-loader", "searchFilterLoader"],
     ["#search-filter-version", "searchFilterVersion"],
     ["#search-filter-environment", "searchFilterEnvironment"],
+    ["#search-filter-category", "searchFilterCategory"],
   ]) {
     $(sel).addEventListener("change", (e) => {
       state[key] = e.target.value;
@@ -1698,9 +1705,32 @@
   }
   updateEnvironmentFilter();
 
+  // Kategorien („Was kann die Mod?“) kommen vom jeweiligen Anbieter —
+  // Modrinth und CurseForge führen unterschiedliche Listen.
+  const searchCategoryCache = {};
+  async function loadSearchCategories() {
+    const source = state.searchSource || "modrinth";
+    const sel = $("#search-filter-category");
+    try {
+      searchCategoryCache[source] ??= api(`/api/mods/categories?source=${source}`)
+        .then((d) => d.categories || []);
+      const cats = await searchCategoryCache[source];
+      if ((state.searchSource || "modrinth") !== source) return; // inzwischen gewechselt
+      fillSelect(sel, cats.map((c) => ({ value: c.id, label: c.name })), "Alle Kategorien");
+      sel.value = cats.some((c) => c.id === state.searchFilterCategory)
+        ? state.searchFilterCategory : "";
+      sel.disabled = !cats.length;
+    } catch (e) {
+      delete searchCategoryCache[source]; // später erneut versuchen
+      fillSelect(sel, [], "Alle Kategorien");
+      sel.disabled = true;
+    }
+  }
+
   async function loadSearchFilters() {
     if (state.searchFiltersLoaded) return;
     state.searchFiltersLoaded = true;
+    loadSearchCategories();
     try {
       const options = await fetchMcVersionOptions();
       fillSelect($("#search-filter-version"), options, "Wie Instanz");
@@ -1714,8 +1744,14 @@
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(() => doSearch(0), 400); // Debounce
   });
-  $("#search-prev").addEventListener("click", () => doSearch(Math.max(0, state.offset - 20)));
-  $("#search-next").addEventListener("click", () => doSearch(state.offset + 20));
+  // Seitenwechsel: zurück an den Anfang der Trefferliste, damit man die
+  // neue Seite wieder von oben nach unten durchgehen kann
+  function searchPage(offset) {
+    doSearch(offset);
+    $("#search-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  $("#search-prev").addEventListener("click", () => searchPage(Math.max(0, state.offset - 20)));
+  $("#search-next").addEventListener("click", () => searchPage(state.offset + 20));
 
   // CurseForge ohne API-Key: Backend antwortet mit 503 („CF_API_KEY" im Detail).
   // Statt der generischen Meldung einen Alternativ-Hinweis zeigen (keylos möglich:
@@ -1741,37 +1777,60 @@
       $("#search-next").disabled = true;
       return;
     }
+    const seq = ++state.searchSeq;
     show($("#search-loading"), true);
     show($("#search-error"), false);
     try {
-      const params = new URLSearchParams({ q, offset: String(offset), sort: state.searchFilterSort });
-      // Filter: Standard = Loader/MC-Version des Installationsziels,
-      // überschreibbar („Alle …“ = filterfrei), damit man besser findet.
-      const loader = state.searchFilterLoader === "any" ? "any"
-        : (state.searchFilterLoader || target.loader);
-      const gameVersion = state.searchFilterVersion === "any" ? "any"
-        : (state.searchFilterVersion || target.game_version);
-      params.set("loader", loader);
-      params.set("game_version", gameVersion);
-      // Ziel-Instanz mitsenden → Treffer werden mit "installiert" markiert
-      params.set("instance_id", target.instanceId);
-      // Server/Client-Umgebung nur bei Modrinth senden (CurseForge ohne Daten)
-      if (state.searchFilterEnvironment && state.searchSource !== "curseforge") {
-        params.set("environment", state.searchFilterEnvironment);
-      }
-      const cf = state.searchSource === "curseforge";
-      const path = cf ? "/api/curseforge/search" : "/api/modrinth/search";
-      const data = await api(`${path}?${params}`);
+      const url = searchUrl(target, q, offset);
+      // Vorab geladene Seite nutzen (Weiter-Klick ohne Wartezeit)
+      const pre = state.searchPrefetch;
+      const fresh = pre && pre.url === url && Date.now() - pre.at < 60000;
+      state.searchPrefetch = null;
+      const data = await (fresh ? pre.promise : api(url));
+      if (seq !== state.searchSeq) return; // überholt von neuerer Suche
       state.total = data.total;
       renderResults(data);
+      prefetchSearch(target, q, offset + 20);
     } catch (e) {
+      if (seq !== state.searchSeq) return;
       const hint = state.searchSource === "curseforge" ? cfNoKeyHint(e) : null;
       setText($("#search-error"), hint || `Suche fehlgeschlagen: ${e.message}`);
       show($("#search-error"), true);
       $("#search-results").textContent = "";
     } finally {
-      show($("#search-loading"), false);
+      if (seq === state.searchSeq) show($("#search-loading"), false);
     }
+  }
+
+  // Lädt die nächste Seite im Hintergrund, solange man die aktuelle liest
+  function prefetchSearch(target, q, offset) {
+    if (offset >= state.total) return;
+    const url = searchUrl(target, q, offset);
+    const promise = api(url);
+    promise.catch(() => {}); // Fehler zeigt erst der echte Seitenwechsel
+    state.searchPrefetch = { url, promise, at: Date.now() };
+  }
+
+  function searchUrl(target, q, offset) {
+    const params = new URLSearchParams({ q, offset: String(offset), sort: state.searchFilterSort });
+    // Filter: Standard = Loader/MC-Version des Installationsziels,
+    // überschreibbar („Alle …“ = filterfrei), damit man besser findet.
+    const loader = state.searchFilterLoader === "any" ? "any"
+      : (state.searchFilterLoader || target.loader);
+    const gameVersion = state.searchFilterVersion === "any" ? "any"
+      : (state.searchFilterVersion || target.game_version);
+    params.set("loader", loader);
+    params.set("game_version", gameVersion);
+    // Ziel-Instanz mitsenden → Treffer werden mit "installiert" markiert
+    params.set("instance_id", target.instanceId);
+    // Server/Client-Umgebung nur bei Modrinth senden (CurseForge ohne Daten)
+    if (state.searchFilterEnvironment && state.searchSource !== "curseforge") {
+      params.set("environment", state.searchFilterEnvironment);
+    }
+    if (state.searchFilterCategory) params.set("category", state.searchFilterCategory);
+    const cf = state.searchSource === "curseforge";
+    const path = cf ? "/api/curseforge/search" : "/api/modrinth/search";
+    return `${path}?${params}`;
   }
 
   function renderResults(data) {
@@ -1889,6 +1948,7 @@
       job = await start(true);
     }
     if (ui.onStart) ui.onStart(job);
+    state.searchPrefetch = null; // vorab geladene Seite kennt die neue Mod noch nicht
     const finalJob = await pollJob(job, ui.bar, ui.btn);
     const deps = (job.dependencies || []).length;
     const done = (job.items || []).length - (finalJob.item_errors || []).length;

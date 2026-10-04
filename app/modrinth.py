@@ -12,12 +12,14 @@ from pathlib import Path
 import httpx
 from fastapi import HTTPException
 
+from . import searchcache
 from .config import settings
 from .security import validate_curseforge_download_url
 
 logger = logging.getLogger("dashboard.modrinth")
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_CATEGORY_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 
 # In-Memory-Jobs (leichtgewichtig, Maximalbegrenzung gegen Speicherwucher).
 # Zusätzlich wird jeder Job-Zustand als JSON-Datei gespiegelt (Überleben von
@@ -162,11 +164,13 @@ _ENVIRONMENT_FACETS = {
 
 async def search_mods(query: str, loader: str | None, game_version: str | None,
                       limit: int = 20, offset: int = 0, sort: str = "relevance",
-                      environment: str | None = None) -> dict:
-    """Sucht Mods, optional gefiltert nach Loader/MC-Version/Umgebung.
+                      environment: str | None = None,
+                      category: str | None = None) -> dict:
+    """Sucht Mods, optional gefiltert nach Loader/MC-Version/Umgebung/Kategorie.
 
     loader=None bzw. game_version=None lässt den jeweiligen Filter weg
-    (Treffer aller Loader bzw. aller MC-Versionen)."""
+    (Treffer aller Loader bzw. aller MC-Versionen). category ist ein
+    Modrinth-Kategoriename (z. B. "worldgen", "magic")."""
     if sort not in _SORT_INDEX:
         raise HTTPException(status_code=400,
                             detail=f"Sortierung muss einer von {', '.join(_SORT_INDEX)} sein")
@@ -174,7 +178,16 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
         raise HTTPException(status_code=400,
                             detail=f"Umgebung muss einer von "
                                    f"{', '.join(_ENVIRONMENT_FACETS)} sein")
+    if category and not _CATEGORY_RE.match(category):
+        raise HTTPException(status_code=400, detail="Ungültige Kategorie")
+    cache_key = ("modrinth", query, loader, game_version, limit, offset, sort,
+                 environment, category)
+    hit_cache = searchcache.cached(cache_key)
+    if hit_cache is not None:
+        return hit_cache
     facets = [["project_type:mod"]]
+    if category:
+        facets.append([f"categories:{category}"])
     if loader:
         facets.append([f"categories:{loader}"])
     if game_version:
@@ -190,9 +203,10 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
     if query:
         params["query"] = query
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{settings.modrinth_api}/search",
-                                    params=params, headers=_headers())
+        # Keep-Alive-Client: spart DNS/TLS-Aufbau bei jedem Seitenwechsel
+        client = searchcache.shared_client("modrinth-search", timeout=15.0)
+        resp = await client.get(f"{settings.modrinth_api}/search",
+                                params=params, headers=_headers())
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502,
                             detail=f"Modrinth nicht erreichbar ({exc.__class__.__name__})")
@@ -214,13 +228,15 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
         }
         for h in data.get("hits", [])
     ]
-    return {
+    result = {
         # Modrinth nennt das Feld total_hits; 'total' ist ein Fallback
         "total": int(data.get("total_hits") or data.get("total") or len(hits)),
         "hits": hits,
         "loader": loader,
         "game_version": game_version,
     }
+    searchcache.store(cache_key, result)
+    return result
 
 
 async def _get_json(client: httpx.AsyncClient, path: str, params: dict | None = None):

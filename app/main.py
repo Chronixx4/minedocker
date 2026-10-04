@@ -32,7 +32,7 @@ from starlette.background import BackgroundTask
 
 from . import auth as auth_mod
 from . import backups as backups_mod
-from . import catalog, curseforge, instances, modinstall, modrinth, packs, runtime, worlds
+from . import catalog, curseforge, instances, modcategories, modinstall, modrinth, packs, runtime, worlds
 from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
@@ -731,25 +731,47 @@ def _parse_sort(sort: str | None) -> str:
     return sort
 
 
-async def _mark_installed(data: object, instance_id: str | None, source: str) -> None:
-    """Markiert Treffer der Mod-Suche mit 'installed', wenn der Mod bereits
-    in der Ziel-Instanz liegt (per Datei-Hash identifiziert — Modrinth-
-    Projekt-ID bzw. CurseForge-Mod-ID). Fehler schlagen die Suche nicht fehl."""
-    if not instance_id or not isinstance(data, dict) or not data.get("hits"):
-        return
-    instance_id = validate_identifier(instance_id, "Instanz-ID")
+async def _installed_ids(instance_id: str | None, source: str) -> set:
+    """Projekt-IDs der Mods, die schon in der Ziel-Instanz liegen (per
+    Datei-Hash identifiziert — Modrinth-Projekt-ID bzw. CurseForge-Mod-ID).
+    Fehler schlagen die Suche nicht fehl (leere Menge)."""
+    if not instance_id:
+        return set()
     try:
         ids = await updates_mod.installed_project_ids(instance_id)
     except Exception as exc:
         logger.warning("Installiert-Markierung nicht möglich (%s): %s",
                        instance_id, exc)
-        return
-    installed = ids.get("modrinth" if source == "modrinth" else "curseforge") or set()
-    if not installed:
-        return
-    for hit in data.get("hits") or []:
-        if isinstance(hit, dict):
-            hit["installed"] = str(hit.get("project_id") or "") in installed
+        return set()
+    return ids.get("modrinth" if source == "modrinth" else "curseforge") or set()
+
+
+async def _search_with_installed(search, instance_id: str | None, source: str):
+    """Suche und Installiert-Erkennung PARALLEL ausführen (vorher seriell:
+    die Seite wartete auf Anbieter-Suche + Hash-Abgleich nacheinander) und
+    Treffer mit 'installed' markieren."""
+    if instance_id:
+        try:
+            instance_id = validate_identifier(instance_id, "Instanz-ID")
+        except HTTPException:
+            search.close()  # Koroutine nie gestartet → sauber verwerfen
+            raise
+    data, installed = await asyncio.gather(search, _installed_ids(instance_id, source))
+    if isinstance(data, dict):
+        for hit in data.get("hits") or []:
+            if isinstance(hit, dict):
+                hit["installed"] = str(hit.get("project_id") or "") in installed
+    return data
+
+
+@api.get("/mods/categories")
+async def mod_categories(source: str = "modrinth"):
+    """Kategorien für den Modbrowser-Filter (Weltgenerierung, Magie, Technik …)
+    — so, wie Modrinth bzw. CurseForge sie selbst führen."""
+    source = (source or "").strip().lower()
+    if source not in ("modrinth", "curseforge"):
+        raise HTTPException(status_code=400, detail="Quelle muss modrinth oder curseforge sein")
+    return {"source": source, "categories": await modcategories.categories(source)}
 
 
 @api.get("/modrinth/search")
@@ -758,16 +780,17 @@ async def modrinth_search(q: str = "", offset: int = 0,
                           game_version: str | None = None,
                           sort: str | None = None,
                           environment: str | None = None,
+                          category: str | None = None,
                           instance_id: str | None = None):
     loader, game_version = _parse_search_filters(loader, game_version)
     sort = _parse_sort(sort)
     query = (q or "").strip()[:100]
     offset = max(0, min(offset, 1000))
-    data = await modrinth.search_mods(query, loader, game_version,
-                                      sort=sort, offset=offset,
-                                      environment=(environment or "").strip().lower() or None)
-    await _mark_installed(data, instance_id, "modrinth")
-    return data
+    search = modrinth.search_mods(query, loader, game_version,
+                                  sort=sort, offset=offset,
+                                  environment=(environment or "").strip().lower() or None,
+                                  category=(category or "").strip().lower() or None)
+    return await _search_with_installed(search, instance_id, "modrinth")
 
 
 async def _start_mod_download(req: DownloadRequest, resolver, provider: str,
@@ -903,14 +926,15 @@ async def curseforge_search(q: str = "", offset: int = 0,
                             loader: str | None = None,
                             game_version: str | None = None,
                             sort: str | None = None,
+                            category: str | None = None,
                             instance_id: str | None = None):
     loader, game_version = _parse_search_filters(loader, game_version)
     sort = _parse_sort(sort)
     query = (q or "").strip()[:100]
-    data = await curseforge.search_mods(query, loader, game_version,
-                                        sort=sort, offset=offset)
-    await _mark_installed(data, instance_id, "curseforge")
-    return data
+    search = curseforge.search_mods(query, loader, game_version,
+                                    sort=sort, offset=offset,
+                                    category=(category or "").strip() or None)
+    return await _search_with_installed(search, instance_id, "curseforge")
 
 
 @api.post("/curseforge/download")
