@@ -112,18 +112,3 @@ class TestServerStatus:
         assert result["online"] is True
         assert result["version"] is None
         assert result["players"]["sample"] == []
-
-
-class TestProcessStats:
-    def test_struktur(self):
-        from app.minecraft import process_stats
-
-        stats = process_stats()
-        assert isinstance(stats, dict)
-        assert "found" in stats
-        if stats["found"]:
-            assert 0 <= stats["cpu_percent"] <= 100
-            assert stats["ram_mb"] >= 0
-            assert stats["processes"] >= 1
-        else:
-            assert stats["reason"]

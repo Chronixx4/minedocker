@@ -6,6 +6,7 @@ selbst und ein Restore kann den Instanz-Ordner ohne Sondernfälle leeren.
 Hinweis: Die Snapshots liegen im selben Volume wie die Server-Daten — für
 echte Off-Site-Sicherheit regelmäßig herunterladen (SERVER-SETUP.md §5).
 """
+import contextlib
 import logging
 import re
 import shutil
@@ -52,14 +53,65 @@ def _safe_backup_path(instance_id: str, name: str) -> Path:
     return candidate
 
 
+# Ordner, die nie ins Backup gehören: BlueMap-Renderdaten (Live-Karte) sind
+# jederzeit neu erzeugbar, aber bei großen Welten mehrere GB groß.
+_ALWAYS_EXCLUDE = {"bluemap"}
+
+
+def _top_filter(excludes: set):
+    """tarfile-Filter: lässt Einträge weg, deren oberster Ordner in excludes liegt."""
+    def _filter(info):
+        name = info.name[2:] if info.name.startswith("./") else info.name
+        top = name.split("/", 1)[0]
+        return None if top in excludes else info
+    return _filter
+
+
+def _rcon_quiet(instance: dict, command: str) -> bool:
+    from . import rcon as rcon_mod  # lazy, vermeidet Import-Zirkel
+    from . import runtime
+    try:
+        host, port = runtime.rcon_target(instance)
+        rcon_mod.command(host, port, runtime.rcon_secret(instance), command,
+                         timeout=60.0)
+        return True
+    except Exception as exc:  # best effort: Backup läuft trotzdem
+        logger.warning("RCON '%s' fehlgeschlagen (%s): %s",
+                       command, instance.get("name"), exc)
+        return False
+
+
+@contextlib.contextmanager
+def world_flushed(instance_id: str):
+    """Bei laufendem Server: Auto-Save aus + alles auf die Platte schreiben
+    (save-off, save-all flush), danach Auto-Save wieder an. So landen keine
+    halb geschriebenen Region-Dateien im Backup. Gestoppt: nichts zu tun."""
+    from . import instances, runtime  # lazy, vermeidet Import-Zirkel
+    try:
+        instance = instances.get_instance(instance_id)
+        running = runtime.is_running(instance)
+    except Exception:
+        running = False
+    paused = False
+    if running:
+        paused = _rcon_quiet(instance, "save-off")
+        if paused:
+            _rcon_quiet(instance, "save-all flush")
+    try:
+        yield
+    finally:
+        if paused:
+            _rcon_quiet(instance, "save-on")
+
+
 def create_backup(instance_id: str, instance_dir: Path) -> dict:
     """Erzeugt einen konsistent benannten tar.gz-Snapshot der Instanz."""
     bdir = instance_backups_dir(instance_id)
     bdir.mkdir(parents=True, exist_ok=True)
     name = f"backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
     dest = bdir / name
-    with tarfile.open(dest, "w:gz", compresslevel=6) as tar:
-        tar.add(str(instance_dir), arcname=".")
+    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=6) as tar:
+        tar.add(str(instance_dir), arcname=".", filter=_top_filter(_ALWAYS_EXCLUDE))
     stat = dest.stat()
     return {"name": name, "size_bytes": stat.st_size, "created": int(stat.st_mtime)}
 
@@ -68,7 +120,7 @@ def _safety_excludes(kind: str, instance_dir: Path) -> set:
     """Zu überspringende Top-Level-Ordner je Snapshot-Typ:
     - pre-install: Welt (bleibt unberührt) + packs (Installations-Quellen)
     - pre-restore: nur packs — Restore ersetzt ALLE Daten"""
-    excludes = {"packs"}
+    excludes = {"packs", *_ALWAYS_EXCLUDE}
     if kind == "pre-install":
         from .instances import find_world_dir  # lazy, vermeidet Import-Zirkel
         world = find_world_dir(instance_dir)
@@ -93,14 +145,8 @@ def safety_backup(instance_id: str, instance_dir: Path, kind: str) -> dict:
         dest = bdir / f"{kind}-{stamp}-{counter}.tar.gz"
         counter += 1
     excludes = _safety_excludes(kind, instance_dir)
-
-    def _filter(info):
-        name = info.name[2:] if info.name.startswith("./") else info.name
-        top = name.split("/", 1)[0]
-        return None if top in excludes else info
-
-    with tarfile.open(dest, "w:gz", compresslevel=6) as tar:
-        tar.add(str(instance_dir), arcname=".", filter=_filter)
+    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=6) as tar:
+        tar.add(str(instance_dir), arcname=".", filter=_top_filter(excludes))
     _rotate_safety(instance_id)
     stat = dest.stat()
     logger.info("Sicherheits-Snapshot: %s (%d Bytes) → %s",
@@ -130,7 +176,7 @@ def _rotate_safety(instance_id: str) -> int:
 def scheduled_backup(instance_id: str, instance_dir: Path, keep: int = 5) -> dict:
     """Zeitgesteuertes Backup (Scheduler): tar.gz-Snapshot 'scheduled-…' mit
     eigener Rotation auf max. keep Snapshots (1-20). Läuft auch bei laufender
-    Instanz — für 100 % konsistente Weltschnappschüsse vorher stoppen (§5)."""
+    Instanz (vorher save-off + save-all flush per RCON, danach save-on)."""
     keep = max(1, min(20, int(keep)))
     bdir = instance_backups_dir(instance_id)
     bdir.mkdir(parents=True, exist_ok=True)
@@ -140,8 +186,8 @@ def scheduled_backup(instance_id: str, instance_dir: Path, keep: int = 5) -> dic
     while dest.exists():  # zwei Backups in derselben Sekunde
         dest = bdir / f"scheduled-{stamp}-{counter}.tar.gz"
         counter += 1
-    with tarfile.open(dest, "w:gz", compresslevel=6) as tar:
-        tar.add(str(instance_dir), arcname=".")
+    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=6) as tar:
+        tar.add(str(instance_dir), arcname=".", filter=_top_filter(_ALWAYS_EXCLUDE))
     _rotate_scheduled(instance_id, keep)
     stat = dest.stat()
     logger.info("Geplantes Backup: %s (%d Bytes) → %s",

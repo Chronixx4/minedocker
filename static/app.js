@@ -270,11 +270,6 @@
     else $("#auth-apikey").focus();
   }
 
-  function hideAuthOverlay() {
-    state.authOverlay = false;
-    showSoft($("#auth-overlay"), false);
-  }
-
   function authError(sel, message) {
     const box = $(sel);
     if (message) {
@@ -1359,8 +1354,31 @@
     state.liveTimer = null;
     state.tickTimer = null;
   }
-  document.addEventListener("visibilitychange", () =>
-    document.hidden ? stopPolling() : startPolling());
+  /* Tab im Hintergrund: normales Polling aus, aber bei aktiven
+     Benachrichtigungen langsam weiter abfragen — sonst bemerkt
+     checkNotifications Absturz/Beitritt erst beim Zurückkehren. */
+  async function backgroundPoll() {
+    if (!state.notify || !state.pollingAllowed) return;
+    await refreshOverview(); // Container-Status (Absturz/Stopp)
+    await refreshLive();     // Ping (bereit, Spieler beigetreten)
+  }
+  function startBackgroundPolling() {
+    if (state.bgTimer || !state.notify) return;
+    state.bgTimer = setInterval(backgroundPoll, 30000);
+  }
+  function stopBackgroundPolling() {
+    clearInterval(state.bgTimer);
+    state.bgTimer = null;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopPolling();
+      startBackgroundPolling();
+    } else {
+      stopBackgroundPolling();
+      startPolling();
+    }
+  });
   // Erst Auth prüfen (Login-Overlay?), dann Polling starten — sonst laufen
   // die 5-s-Polls gegen 401, während der Login noch offen ist.
   initAuth().then((authorized) => {
@@ -4235,11 +4253,6 @@
 
   function fbJoin(dir, name) {
     return dir ? `${dir}/${name}` : name;
-  }
-
-  function fbParent(rel) {
-    const idx = rel.lastIndexOf("/");
-    return idx >= 0 ? rel.slice(0, idx) : "";
   }
 
   function fbBaseName(rel) {

@@ -1307,7 +1307,9 @@ async def instance_log_stream(instance_id: str, tail: int = Query(100, ge=1, le=
 async def instance_delete(instance_id: str, force: bool = False):
     # Watchdog: ein erzwungenes Entfernen darf nicht als Crash gemeldet werden
     watchdog_mod.expect_stop(instance_id)
-    result = instances.delete_instance(instance_id, force=force)
+    # Container entfernen + mehrere GB löschen: im Thread, sonst blockiert
+    # die Event-Loop (Dashboard reagiert so lange für niemanden)
+    result = await asyncio.to_thread(instances.delete_instance, instance_id, force=force)
     logger.info("Instanz gelöscht: %s", instance_id)
     return result
 

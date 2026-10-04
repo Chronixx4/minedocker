@@ -213,3 +213,107 @@ class TestBackupApi:
         iid = create.json()["id"]
         r = client.post(f"/api/instances/{iid}/backups/gibtsnicht-20260101-000000.tar.gz/restore")
         assert r.status_code == 404
+
+
+class TestKonsistenz:
+    def _names(self, inst, result):
+        with tarfile.open(backups_mod.backup_path(inst["id"], result["name"])) as tar:
+            return [m.name for m in tar.getmembers()]
+
+    def test_bluemap_daten_nicht_im_backup(self):
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        (d / "bluemap" / "web" / "maps").mkdir(parents=True)
+        (d / "bluemap" / "web" / "maps" / "tile.prbm").write_text("x" * 100)
+        for result in (backups_mod.create_backup(inst["id"], d),
+                       backups_mod.scheduled_backup(inst["id"], d),
+                       backups_mod.safety_backup(inst["id"], d, "pre-restore")):
+            names = self._names(inst, result)
+            assert any("world/level.dat" in n for n in names)
+            assert not any("bluemap" in n for n in names)
+
+    def test_laufender_server_save_off_flush_on(self, monkeypatch):
+        from app import rcon, runtime
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        calls = []
+        monkeypatch.setattr(runtime, "is_running", lambda i: True)
+        monkeypatch.setattr(rcon, "command",
+                            lambda host, port, pw, cmd, timeout=5.0: calls.append(cmd) or "")
+        backups_mod.create_backup(inst["id"], d)
+        backups_mod.scheduled_backup(inst["id"], d)
+        assert calls == ["save-off", "save-all flush", "save-on"] * 2
+
+    def test_save_on_auch_bei_fehler(self, monkeypatch):
+        from app import rcon, runtime
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        calls = []
+        monkeypatch.setattr(runtime, "is_running", lambda i: True)
+        monkeypatch.setattr(rcon, "command",
+                            lambda host, port, pw, cmd, timeout=5.0: calls.append(cmd) or "")
+
+        def kaputt(*a, **k):
+            raise OSError("Platte voll")
+
+        monkeypatch.setattr(backups_mod.tarfile, "open", kaputt)
+        try:
+            backups_mod.create_backup(inst["id"], d)
+        except OSError:
+            pass
+        assert calls[-1] == "save-on"
+
+    def test_rcon_nicht_erreichbar_backup_trotzdem(self, monkeypatch):
+        from app import rcon, runtime
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        calls = []
+        monkeypatch.setattr(runtime, "is_running", lambda i: True)
+
+        def down(host, port, pw, cmd, timeout=5.0):
+            calls.append(cmd)
+            raise rcon.RconError("weg")
+
+        monkeypatch.setattr(rcon, "command", down)
+        result = backups_mod.create_backup(inst["id"], d)
+        assert result["size_bytes"] > 0
+        assert calls == ["save-off"]  # kein save-on nötig, Auto-Save war nie aus
+
+    def test_gestoppt_kein_rcon(self, monkeypatch):
+        from app import rcon, runtime
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        monkeypatch.setattr(runtime, "is_running", lambda i: False)
+        monkeypatch.setattr(rcon, "command", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+        backups_mod.create_backup(inst["id"], d)
+
+
+class TestMetadaten:
+    def test_paralleles_set_status_ohne_fehler(self):
+        import threading
+        inst = _create_instance()
+        errors = []
+
+        def worker(status):
+            try:
+                for _ in range(40):
+                    instances_mod.set_status(inst["id"], status, None)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(s,))
+                   for s in ("running", "stopped", "starting", "error")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+        d = instances_mod.instance_dir(inst["id"])
+        assert instances_mod.get_instance(inst["id"])["status"] in (
+            "running", "stopped", "starting", "error")
+        assert not list(d.glob("instance.json*.tmp"))
