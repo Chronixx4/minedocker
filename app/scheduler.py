@@ -124,7 +124,10 @@ def run_auto_start() -> int:
 # ---------------------------------------------------------------------------
 
 def _rcon_say(instance: dict, message: str) -> bool:
-    """RCON 'say' an die laufende Instanz (best effort, wirft nie)."""
+    """RCON 'say' an die laufende Instanz (best effort, wirft nie).
+    Schlafende Server werden nicht geweckt: dort spielt ohnehin niemand."""
+    if instances.is_paused(instance["id"]):
+        return False
     try:
         host, port = runtime.rcon_target(instance)
         rcon.command(host, port, runtime.rcon_secret(instance), f"say {message}")

@@ -80,6 +80,10 @@ class FakeContainer:
     def stop(self, timeout=None):
         self.attrs["State"]["Running"] = False
 
+    def exec_run(self, cmd, **kwargs):
+        self.execs = [*getattr(self, "execs", []), cmd]
+        return (0, b"")
+
     def remove(self, force=False):
         self.removed = True
 

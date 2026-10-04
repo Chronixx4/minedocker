@@ -331,9 +331,56 @@ def set_status(instance_id: str, status: str, error: str | None = None) -> None:
         _save_meta(instance)
 
 
+# Schlafmodus (itzg): "pause" friert den Java-Prozess ein, wenn niemand
+# spielt, und weckt ihn beim nächsten Verbindungsversuch; "stop" beendet den
+# Server (spart auch RAM), Start dann wieder übers Dashboard.
+HIBERNATE_MODES = ("off", "pause", "stop")
+HIBERNATE_MINUTES = (5, 1440, 30)  # min, max, Standard
+PAUSED_FLAG = ".paused"  # legt itzg beim Pausieren in /data an
+
+
+def _validate_hibernate(data: object) -> dict:
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Schlafmodus: Objekt erwartet")
+    mode = data.get("mode", "off")
+    if mode not in HIBERNATE_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Schlafmodus muss einer von {', '.join(HIBERNATE_MODES)} sein")
+    lo, hi, default = HIBERNATE_MINUTES
+    try:
+        minutes = int(data.get("minutes", default))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Schlafmodus: Minuten müssen eine Zahl sein")
+    if not lo <= minutes <= hi:
+        raise HTTPException(status_code=400,
+                            detail=f"Schlafmodus: Minuten zwischen {lo} und {hi}")
+    return {"mode": mode, "minutes": minutes}
+
+
+def hibernate_settings(instance: dict) -> dict:
+    """Schlafmodus einer Instanz mit Standardwerten (Bestandsinstanzen: aus)."""
+    raw = instance.get("hibernate")
+    try:
+        return _validate_hibernate(raw) if raw else {"mode": "off",
+                                                     "minutes": HIBERNATE_MINUTES[2]}
+    except HTTPException:
+        return {"mode": "off", "minutes": HIBERNATE_MINUTES[2]}
+
+
+def is_paused(instance_id: str) -> bool:
+    """True, wenn itzg den Server gerade schlafen gelegt hat (Datei .paused).
+    Nur bei laufendem Container aussagekräftig: nach einem Stop im
+    Schlafzustand kann die Datei liegen bleiben."""
+    try:
+        return (instance_dir(instance_id) / PAUSED_FLAG).exists()
+    except (HTTPException, OSError):
+        return False
+
+
 def update_settings(instance_id: str, *, name=None, memory=None,
                     jvm_opts=None, use_aikar=None,
-                    tags=None, port=None, java=None) -> dict:
+                    tags=None, port=None, java=None, hibernate=None) -> dict:
     """Ändert Instanz-Einstellungen (Name, RAM, JVM-Flags, Java, Tags, Port).
     Nur übergebene Felder werden geändert; JVM-/Port-Änderungen wirken
     beim nächsten (Neu-)Start. Port nur bei gestoppter Instanz änderbar."""
@@ -365,6 +412,9 @@ def update_settings(instance_id: str, *, name=None, memory=None,
                 detail=f"Java-Version muss eine von {', '.join(runtime.JAVA_CHOICES)} sein")
         instance["java"] = java
         changed.append("java")
+    if hibernate is not None:
+        instance["hibernate"] = _validate_hibernate(hibernate)
+        changed.append("hibernate")
     if tags is not None:
         instance["tags"] = _validate_tags(tags)
         changed.append("tags")

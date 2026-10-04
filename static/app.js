@@ -702,8 +702,16 @@
     return "stopped";
   }
 
+  // Anzeige-Zustand: wie instStateKey, aber schlafende Server (Schlafmodus)
+  // heißen „schläft“; für Steuerung zählen sie weiter als laufend
+  function instDisplayKey(inst) {
+    const key = instStateKey(inst);
+    return key === "running" && inst.container?.paused ? "paused" : key;
+  }
+
   const OV_STATE_LABELS = {
     running: "läuft", starting: "startet…", error: "Fehler", stopped: "gestoppt",
+    paused: "schläft",
   };
 
   function containerStatsById() {
@@ -819,7 +827,11 @@
 
   function pingLine(inst) {
     if (!inst.container?.running) return null;
-    const ping = liveEntry(inst)?.ping;
+    const live = liveEntry(inst);
+    if (live?.paused || inst.container?.paused) {
+      return "Schläft, niemand online. Wacht beim Verbinden auf.";
+    }
+    const ping = live?.ping;
     if (!ping) return "Status-Abfrage läuft…";
     if (!ping.online) return "Server antwortet noch nicht (Start kann dauern)";
     const p = ping.players || {};
@@ -997,7 +1009,7 @@
         `${inst.loader}${inst.loader_version ? ` ${inst.loader_version}` : ""} · MC ${inst.game_version}`);
       const badge = node.querySelector(".inst-badge");
       badge.classList.add(stateBadgeClass(inst));
-      setText(node.querySelector(".inst-state"), OV_STATE_LABELS[instStateKey(inst)]);
+      setText(node.querySelector(".inst-state"), OV_STATE_LABELS[instDisplayKey(inst)]);
 
       // Info-Chips: Loader, MC-Version, RAM, Modpack, Port (klickbar = Adresse kopieren), Uptime
       const chips = node.querySelector(".chips");
@@ -1223,7 +1235,7 @@
       meta.className = "res-c-meta muted small";
       const metaParts = [];
       if (inst) {
-        metaParts.push(OV_STATE_LABELS[instStateKey(inst)]);
+        metaParts.push(OV_STATE_LABELS[instDisplayKey(inst)]);
         if (inst.container?.running && inst.container.started_at) {
           const up = fmtUptime(inst.container.started_at);
           if (up) metaParts.push(`seit ${up}`);
@@ -2473,6 +2485,7 @@
   $("#inst-reload").addEventListener("click", loadInstances);
 
   function stateBadgeClass(inst) {
+    if (inst.container?.running && inst.container?.paused) return "sleep";
     if (inst.status === "running" || inst.container?.running) return "on";
     if (inst.status === "starting") return "starting";
     if (inst.status === "error") return "error";
@@ -2933,6 +2946,7 @@
       $("#jvm-opts").value = cached.jvm_opts || "";
       $("#jvm-aikar").checked = !!cached.use_aikar;
       $("#jvm-java").value = cached.java || "auto";
+      loadHibernate(cached);
       setRamFields(cached.memory);
       state.detailMemory = (cached.memory || "2G").toUpperCase();
       loadSchedule(cached);
@@ -2990,6 +3004,7 @@
       $("#jvm-opts").value = detail.jvm_opts || "";
       $("#jvm-aikar").checked = !!detail.use_aikar;
       $("#jvm-java").value = detail.java || "auto";
+      loadHibernate(detail);
       setRamFields(detail.memory);
       state.detailMemory = (detail.memory || "2G").toUpperCase();
       show($("#jvm-error"), false);
@@ -3044,7 +3059,7 @@
       const badge = $("#detail-state");
       badge.className = "badge inst-badge";
       badge.classList.add(stateBadgeClass(detail));
-      setText($("#detail-state-text"), OV_STATE_LABELS[instStateKey(detail)]);
+      setText($("#detail-state-text"), OV_STATE_LABELS[instDisplayKey(detail)]);
       state.detailData = detail;
       // Eingebettete Mod-Suche: Ziel steht erst jetzt sicher fest
       if (state.searchEmbedded && state.wsTab === "mods" && state.modsView === "add") {
@@ -3104,7 +3119,7 @@
         + ` · Packs ${fmtBytes(disk.packs_bytes)}` : "")
       : (detail.disk_pending ? "wird berechnet…" : null);
     const items = [
-      ["Status", OV_STATE_LABELS[instStateKey(detail)]],
+      ["Status", OV_STATE_LABELS[instDisplayKey(detail)]],
       ["Docker", detail.container?.state || "–"],
       ["Uptime", up || "–"],
       ["Loader", `${detail.loader}${detail.loader_version ? ` ${detail.loader_version}` : ""}`],
@@ -3114,7 +3129,8 @@
       ["RAM", detail.memory || "2G"],
       ["Speicher", diskLine || "–"],
       ["Erstellt", fmtDate(detail.created_at)],
-      ["Erreichbar", ping.online ? "ja" : "nein"],
+      ["Erreichbar", detail.container?.paused ? "schläft (wacht beim Verbinden auf)"
+        : ping.online ? "ja" : "nein"],
       ["Spieler", ping.online && ping.players
         ? `${ping.players.online}/${ping.players.max}` : "–"],
       ["Server-Version", ping.version || "–"],
@@ -5476,6 +5492,40 @@
     }
   });
 
+  /* ---------- Schlafmodus je Instanz ---------- */
+  function loadHibernate(inst) {
+    const hib = inst.hibernate || {};
+    $("#hib-mode").value = hib.mode || "off";
+    $("#hib-minutes").value = hib.minutes || 30;
+    show($("#hib-error"), false);
+  }
+
+  $("#hib-save").addEventListener("click", async () => {
+    const btn = $("#hib-save");
+    btn.disabled = true;
+    show($("#hib-error"), false);
+    const minutes = Math.min(1440, Math.max(5, parseInt($("#hib-minutes").value, 10) || 30));
+    const hibernate = { mode: $("#hib-mode").value, minutes };
+    try {
+      const inst = await api(`/api/instances/${state.detailId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hibernate }),
+      });
+      loadHibernate(inst);
+      const cached = (state.instList || []).find((i) => i.id === state.detailId);
+      if (cached) cached.hibernate = inst.hibernate;
+      toast(state.detailRunning
+        ? "Schlafmodus gespeichert, wirksam nach dem nächsten Neustart."
+        : "Schlafmodus gespeichert.", "success");
+    } catch (e) {
+      setText($("#hib-error"), `Speichern fehlgeschlagen: ${e.message}`);
+      show($("#hib-error"), true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   /* ---------- Zeitplan je Instanz (Scheduler) ---------- */
   function schedInt(value, lo, hi, fallback) {
     const num = parseInt(value, 10);
@@ -6693,7 +6743,7 @@
       icon.alt = "";
       const dot = document.createElement("span");
       dot.className = `inst-tab-dot ${instStateKey(inst)}`;
-      dot.title = OV_STATE_LABELS[instStateKey(inst)];
+      dot.title = OV_STATE_LABELS[instDisplayKey(inst)];
       const count = document.createElement("span");
       count.className = "inst-tab-count hidden";
       b.dataset.id = inst.id;

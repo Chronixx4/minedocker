@@ -286,6 +286,11 @@ class ScheduleModel(BaseModel):
     update_check: UpdateCheckScheduleModel | None = None
 
 
+class HibernateModel(BaseModel):
+    mode: str = Field(pattern=r"^(off|pause|stop)$")
+    minutes: int = Field(default=30, ge=5, le=1440)
+
+
 class UpdateInstanceRequest(BaseModel):
     """Instanz-Einstellungen ändern (Name, RAM, JVM-Flags, Tags, Port, Zeitplan)."""
     name: str | None = Field(default=None, min_length=1, max_length=64)
@@ -298,6 +303,8 @@ class UpdateInstanceRequest(BaseModel):
     tags: list[str] | None = None
     port: int | None = Field(default=None, ge=1024, le=65535)
     schedule: ScheduleModel | None = None
+    # Schlafmodus: {"mode": "off"|"pause"|"stop", "minutes": 5-1440}
+    hibernate: HibernateModel | None = None
 
 
 class AuthSetupRequest(BaseModel):
@@ -1028,7 +1035,8 @@ async def list_instances():
     for instance in instances.list_instances():
         status = await asyncio.to_thread(runtime.container_status, instance)
         entry = dict(instance)
-        entry["container"] = {"running": status["running"], "state": status["container"]}
+        entry["container"] = {"running": status["running"], "state": status["container"],
+                              "paused": status["running"] and instances.is_paused(instance["id"])}
         if status.get("started_at"):
             entry["container"]["started_at"] = status["started_at"]
         if status.get("error"):
@@ -1049,13 +1057,19 @@ async def live_instances():
             running.append(instance)
 
     async def ping_one(instance: dict) -> dict:
-        ping_host, ping_port = _instance_ping_host(instance)
-        ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
+        paused = instances.is_paused(instance["id"])
+        if paused:
+            # Ein Ping würde den schlafenden Server sofort wecken
+            ping = dict(_OFFLINE_PING)
+        else:
+            ping_host, ping_port = _instance_ping_host(instance)
+            ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
         return {
             "id": instance["id"],
             "name": instance["name"],
             "port": instance["port"],
             "ping": ping,
+            "paused": paused,
         }
 
     live = list(await asyncio.gather(*(ping_one(i) for i in running))) \
@@ -1256,6 +1270,9 @@ async def instance_detail(instance_id: str, response: Response):
                               asyncio.to_thread(runtime.container_status, instance))
         if not status["running"]:
             return status, dict(_OFFLINE_PING)
+        if instances.is_paused(instance_id):
+            # Schlafmodus: ein Ping würde den Server wecken
+            return status, dict(_OFFLINE_PING)
         ping = await _timed(timings, "ping",
                             asyncio.to_thread(server_status, ping_host, ping_port, 1.0))
         return status, ping
@@ -1269,7 +1286,8 @@ async def instance_detail(instance_id: str, response: Response):
         _timed(timings, "disk", _detail_disk(instance_id)),
     )
     detail = dict(instance)
-    detail["container"] = {"running": status["running"], "state": status["container"]}
+    detail["container"] = {"running": status["running"], "state": status["container"],
+                           "paused": status["running"] and instances.is_paused(instance_id)}
     if status.get("started_at"):
         detail["container"]["started_at"] = status["started_at"]
     if status.get("error"):
@@ -1310,7 +1328,7 @@ async def instance_update(instance_id: str, req: UpdateInstanceRequest):
     if not body and schedule is None:
         raise HTTPException(status_code=400,
                             detail="Keine Änderungen übergeben "
-                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule)")
+                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule/hibernate)")
     result = {"instance": instances.get_instance(instance_id), "changed": []}
     if schedule is not None:
         result = instances.update_schedule(

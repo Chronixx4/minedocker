@@ -92,6 +92,10 @@ def world_flushed(instance_id: str):
         running = runtime.is_running(instance)
     except Exception:
         running = False
+    # Schlafmodus: Welt wurde vor dem Einfrieren gespeichert, der Prozess
+    # schreibt nichts — RCON würde den Server nur unnötig wecken
+    if running and instances.is_paused(instance_id):
+        running = False
     paused = False
     if running:
         paused = _rcon_quiet(instance, "save-off")

@@ -692,6 +692,32 @@
             <div id="jvm-error" class="err hidden"></div>
           </div>
 
+          <!-- Schlafmodus (itzg Autopause/Autostop) -->
+          <div class="upload-box">
+            <h3>Schlafmodus <span class="muted small">(wirksam beim nächsten Start)</span></h3>
+            <div class="row">
+              <label class="muted small" for="hib-mode">Wenn niemand spielt</label>
+              <select id="hib-mode">
+                <option value="off">Aus (Server läuft immer)</option>
+                <option value="pause">Pausieren (wacht beim Verbinden auf)</option>
+                <option value="stop">Stoppen (spart auch RAM)</option>
+              </select>
+              <span class="muted small">nach</span>
+              <input id="hib-minutes" type="number" min="5" max="1440" step="5"
+                     class="sched-num" value="30">
+              <span class="muted small">Min</span>
+            </div>
+            <p class="muted small"><strong>Pausieren</strong> friert den Server ein, sobald
+              die eingestellte Zeit niemand online war. Er spart dann CPU, behält aber
+              seinen RAM. Wer sich verbindet, weckt ihn automatisch (der erste Versuch kann
+              einen Moment dauern). <strong>Stoppen</strong> beendet den Server und gibt
+              auch den RAM frei; starten dann wieder hier im Dashboard.</p>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="hib-save" class="btn primary admin-only">Speichern</button>
+            </div>
+            <div id="hib-error" class="err hidden"></div>
+          </div>
+
           <!-- Zeitplan (Auto-Start, geplanter Neustart, Backups, Update-Check) -->
           <div class="upload-box">
             <h3>Zeitplan <span class="muted small">(Container-Lokalzeit, geprüft alle 30 s)</span></h3>

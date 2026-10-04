@@ -176,7 +176,34 @@ def _env(instance: dict) -> list:
         env.append(f"JVM_OPTS={jvm_opts}")
     if instance.get("use_aikar"):
         env.append("USE_AIKAR_FLAGS=TRUE")
+    env.extend(_hibernate_env(instance))
     return env
+
+
+# Server mit eigenem Watchdog, der eine eingefrorene JVM als hängenden Tick
+# werten und den Server beim Aufwachen abschießen würde
+_BUKKIT_LIKE = ("paper", "spigot", "bukkit")
+
+
+def _hibernate_env(instance: dict) -> list:
+    """itzg-Variablen für den Schlafmodus (siehe instances.HIBERNATE_MODES)."""
+    from . import instances  # lazy, vermeidet Import-Zirkel
+    hib = instances.hibernate_settings(instance)
+    seconds = hib["minutes"] * 60
+    if hib["mode"] == "pause":
+        env = ["ENABLE_AUTOPAUSE=TRUE",
+               f"AUTOPAUSE_TIMEOUT_EST={seconds}",
+               f"AUTOPAUSE_TIMEOUT_INIT={seconds}",
+               # Pausieren wirkt wie ein ewig langer Tick: Watchdog aus
+               "MAX_TICK_TIME=-1"]
+        if instance.get("loader") in _BUKKIT_LIKE:
+            env.append("JVM_DD_OPTS=disable.watchdog:true")
+        return env
+    if hib["mode"] == "stop":
+        return ["ENABLE_AUTOSTOP=TRUE",
+                f"AUTOSTOP_TIMEOUT_EST={seconds}",
+                f"AUTOSTOP_TIMEOUT_INIT={seconds}"]
+    return []
 
 
 def _host_instances_root() -> str:
@@ -348,6 +375,13 @@ def start_instance(instance: dict) -> None:
     if not host_dir.name:
         raise RuntimeError("Instanz-Host-Pfad ergibt kein gültiges Verzeichnis")
     network = _network_of_dashboard(client)
+    from . import instances  # lazy, vermeidet Import-Zirkel
+    hib_mode = instances.hibernate_settings(instance)["mode"]
+    # Liegengebliebene Schlaf-Markierung (Stop im Schlafzustand) entfernen
+    try:
+        (instances.instance_dir(instance["id"]) / instances.PAUSED_FLAG).unlink(missing_ok=True)
+    except OSError:
+        pass
     kwargs = {
         "image": image_for(instance),
         "name": name,
@@ -355,13 +389,20 @@ def start_instance(instance: dict) -> None:
         "environment": _env(instance),
         "ports": ports,
         "volumes": {str(host_dir): {"bind": "/data", "mode": "rw"}},
-        "restart_policy": {"Name": "unless-stopped"},
+        # Schlafmodus "stop" beendet den Server mit Exit-Code 0: dann darf
+        # Docker ihn nicht sofort wieder hochfahren (nur nach Absturz)
+        "restart_policy": ({"Name": "on-failure", "MaximumRetryCount": 3}
+                           if hib_mode == "stop" else {"Name": "unless-stopped"}),
         "labels": {"mc-dashboard.instance": instance["id"],
                    "mc-dashboard.managed": "true"},
         # Best Practices: Speicher-Deckel, Log-Rotation, Privilegien-Bremse
         "mem_limit": _mem_limit(instance) or None,
         "log_config": _LOG_CONFIG,
-        "security_opt": ["no-new-privileges:true"],
+        # Ausnahme Schlafmodus "pause": knockd (weckt den Server beim
+        # Verbinden) braucht seine Datei-Capability CAP_NET_RAW, die
+        # no-new-privileges unterdrücken würde
+        "security_opt": ([] if hib_mode == "pause"
+                         else ["no-new-privileges:true"]),
     }
     if network:
         kwargs["network"] = network
@@ -378,11 +419,27 @@ def stop_instance(instance: dict) -> None:
     container = _get_container(client, instance)
     if container is None:
         return  # nichts zu tun
+    _wake_for_stop(container, instance)
     try:
         container.stop(timeout=30)
     except Exception as exc:
         raise RuntimeError(f"Container-Stop fehlgeschlagen: {exc}") from exc
     logger.info("Instanz-Container gestoppt: %s", container_name(instance["id"]))
+
+
+def _wake_for_stop(container, instance: dict) -> None:
+    """Eingefrorenen Java-Prozess (Schlafmodus) vor dem Stop auftauen, sonst
+    kann er SIGTERM nicht verarbeiten und wird nach dem Timeout hart beendet.
+    Best effort: das Pausieren hat die Welt vorher bereits gespeichert."""
+    from . import instances  # lazy, vermeidet Import-Zirkel
+    if not instances.is_paused(instance["id"]):
+        return
+    try:
+        container.exec_run(["pkill", "-CONT", "java"])
+        (instances.instance_dir(instance["id"]) / instances.PAUSED_FLAG).unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Aufwecken vor dem Stop fehlgeschlagen (%s): %s",
+                       container_name(instance["id"]), exc)
 
 
 def remove_container(instance: dict) -> None:
