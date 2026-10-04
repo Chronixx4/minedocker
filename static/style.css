@@ -2729,3 +2729,51 @@ kbd {
 #ov-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .cmdk-btn { display: inline-flex; align-items: center; }
 @media (max-width: 640px) { #ov-grid { grid-template-columns: 1fr; } }
+
+/* ==========================================================================
+   Aktivität & Chat, Spielzeit in Spieler-Karten
+   ========================================================================== */
+.ws-ov-main .logs { height: 220px; }
+.ws-activity-box h3 { margin-top: 0; }
+.ws-activity-box > p { margin: 0.3rem 0 0; }
+.ws-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.act {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+}
+.act img { width: 20px; height: 20px; flex: none; image-rendering: pixelated; border-radius: 2px; }
+.act-body { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+.act-time { flex: none; font-family: var(--mono); font-size: 0.75rem; }
+.act-join { border-left-color: var(--ok); }
+.act-join .act-text, .act-leave .act-text { color: var(--text-2); }
+.act-leave { border-left-color: var(--muted); }
+.act-chat { background: rgba(255, 255, 255, 0.03); }
+.act-from-server b { color: var(--warn); }
+.act-adv { border-left-color: var(--xp); }
+.act-adv .act-text { color: var(--xp); }
+.act-death { border-left-color: var(--err); }
+.act-death .act-text { color: #ff9a92; }
+.act-server { border-left-color: var(--diamond); }
+.act-server .act-text { color: var(--diamond); }
+
+.player-card-text { display: flex; flex-direction: column; min-width: 0; }
+.player-card-time { white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .ws-ov-main .logs { height: 200px; }
+  .ws-activity { max-height: 220px; }
+}

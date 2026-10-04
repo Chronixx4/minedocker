@@ -1243,6 +1243,7 @@
     updateHotbarCounts();
     renderOverviewSummary(list);
     updateInstTabCounts();
+    checkNotifications(list);
   }
 
   /* Ein-Satz-Zusammenfassung über der Kartenansicht + Status im Browser-Tab */
@@ -1419,6 +1420,7 @@
     const label = wanted ? ` der Gruppe "${tagFilter}"` : "";
     if (targets.length > 2 && !window.confirm(
       `${targets.length} Server${label} ${action === "start" ? "starten" : "stoppen"}?`)) return;
+    for (const i of targets) state.userActionAt[i.id] = Date.now();
     const results = await Promise.allSettled(targets.map((i) =>
       api(`/api/instances/${i.id}/${action}`, { method: "POST" })));
     const ok = results.filter((r) => r.status === "fulfilled").length;
@@ -1935,6 +1937,7 @@
   }
 
   async function instAction(inst, action) {
+    state.userActionAt[inst.id] = Date.now();
     const done = action === "start" ? "gestartet"
       : action === "stop" ? "gestoppt" : "neu gestartet";
     const failed = action === "start" ? "Start"
@@ -2223,6 +2226,7 @@
   }
 
   function appendLogLine(line) {
+    feedActivity(line);
     const pre = $("#detail-logs");
     const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
     pre.textContent = pre.textContent === "–" || !pre.textContent
@@ -2319,6 +2323,7 @@
       $("#inst-detail").scrollIntoView({ behavior: "smooth", block: "start" });
     }
     $("#detail-logs").textContent = "–";
+    rebuildActivity([]);
     // Logs SOFORT starten (Live-Stream; endet der Stream sofort, z. B. bei
     // gestopptem Container, springt der Fallback auf Polling). Nicht erst
     // nach dem Detail-Laden — sonst bleibt das Log-Fenster stehen, solange
@@ -2742,7 +2747,10 @@
       const data = await api(`/api/instances/${state.detailId}/logs?tail=150`);
       const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 8;
       const fresh = data.logs.length ? data.logs.join("\n") : "(keine Logs)";
-      if (pre.textContent !== fresh) pre.textContent = fresh;
+      if (pre.textContent !== fresh) {
+        pre.textContent = fresh;
+        rebuildActivity(data.logs);
+      }
       if (atBottom) pre.scrollTop = pre.scrollHeight;
     } catch (e) {
       pre.textContent = `Logs nicht abrufbar: ${e.message}`;
@@ -4517,7 +4525,14 @@
     const hint = $("#rcon-hint");
     const list = $("#rcon-players");
     try {
-      const data = await api(`/api/instances/${state.detailId}/players`);
+      const id = state.detailId;
+      // Spielzeit parallel laden — fehlt sie, bleiben die Karten trotzdem nutzbar
+      const [data, pt] = await Promise.all([
+        api(`/api/instances/${id}/players`),
+        api(`/api/players/playtime?hours=all&instance=${encodeURIComponent(id)}`).catch(() => null),
+      ]);
+      if (state.detailId !== id) return;
+      const playtime = new Map((pt?.players || []).map((p) => [p.player, p.seconds]));
       list.textContent = "";
       const names = data.names || [];
       setText(hint, data.online != null
@@ -4535,7 +4550,15 @@
         nm.className = "player-card-name";
         nm.textContent = name;
         nm.title = name;
-        info.append(face, nm);
+        const txt = document.createElement("div");
+        txt.className = "player-card-text";
+        const time = document.createElement("span");
+        time.className = "player-card-time muted small";
+        time.textContent = playtime.has(name)
+          ? `Spielzeit ${fmtDuration(playtime.get(name))}` : "Spielzeit –";
+        time.title = "Gesamte Spielzeit auf diesem Server (seit Aufzeichnung)";
+        txt.append(nm, time);
+        info.append(face, txt);
         const btns = document.createElement("div");
         btns.className = "player-card-actions";
         const mkBtn = (label, action, cls = "", title = "") => {
@@ -5416,11 +5439,11 @@
     document.querySelectorAll("#ws-panels .ws-panel").forEach((p) =>
       show(p, p.dataset.wsPanel === key));
     // Das Live-Log gibt es nur einmal: in der Konsole groß über den
-    // Befehlen, sonst in der Übersicht über dem Chat
+    // Befehlen, sonst in der Übersicht unter Aktivität & Chat
     const logs = document.querySelector(".ws-logcol");
     if (logs) {
       if (key === "konsole") document.querySelector('.ws-panel[data-ws-panel="konsole"]')?.prepend(logs);
-      else if (logs.parentElement?.id !== "ws-ov-main") $("#ws-ov-main")?.prepend(logs);
+      else if (logs.parentElement?.id !== "ws-ov-main") $("#ws-ov-main")?.append(logs);
     }
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
@@ -5499,8 +5522,8 @@
       modsPanel.prepend(modsBox); // installierte Mods vor Modpack-Kästen
     }
     const logsBox = document.querySelector(".ws-logcol");
-    const logsTarget = $("#ws-ov-main"); // Live-Log über dem Chat
-    if (logsBox && logsTarget) logsTarget.prepend(logsBox);
+    const logsTarget = $("#ws-ov-main"); // Live-Log unter Aktivität & Chat
+    if (logsBox && logsTarget) logsTarget.append(logsBox);
     document.querySelector("#inst-detail .detail-grid")?.remove();
 
     // Hotbar-Slots aufbauen
@@ -5726,6 +5749,198 @@
   $("#ws-backups-open").addEventListener("click", () => activateWsTab("backups"));
 
   organizeWorkspace();
+
+  /* =====================================================================
+     Aktivität & Chat: Beitritte, Chat, Tode und Erfolge aus dem Live-Log
+     ===================================================================== */
+  state.activity = [];
+  const ACT_MAX = 80;
+  const MC_NAME = "([A-Za-z0-9_]{2,16})";
+  const DEATH_RE = new RegExp(`^${MC_NAME} (was (?:slain|shot|killed|blown up|fireballed|pummeled|stung|impaled|squashed|squished|struck by lightning|pricked|poked|skewered|obliterated|frozen|doomed|knocked|burnt|roasted)|drowned|died|fell |hit the ground|burned to death|went up in flames|went off with a bang|blew up|tried to swim in lava|starved|suffocated|froze to death|withered away|walked into|discovered the floor was lava|experienced kinetic energy|left the confines|didn't want to live)`);
+
+  /* Eine Logzeile → Ereignis {type, name, text, time} oder null */
+  function parseActivity(line) {
+    const raw = String(line || "");
+    // Vanilla/Fabric: "[12:34:56] [Server thread/INFO]: …", Paper: "[12:34:56 INFO]: …"
+    const m = /^\[(\d{1,2}:\d{2})(?::\d{2})?[^\]]*\](?:\s*\[[^\]]*\])?:\s?(.*)$/.exec(raw);
+    const time = m ? m[1] : "";
+    const msg = (m ? m[2] : raw).trim();
+    let r;
+    if ((r = new RegExp(`^${MC_NAME} joined the game$`).exec(msg))) {
+      return { type: "join", name: r[1], text: "ist beigetreten", time };
+    }
+    if ((r = new RegExp(`^${MC_NAME} left the game$`).exec(msg))) {
+      return { type: "leave", name: r[1], text: "hat den Server verlassen", time };
+    }
+    if ((r = new RegExp(`^(?:\\[Not Secure\\] )?<${MC_NAME}> (.+)$`).exec(msg))) {
+      return { type: "chat", name: r[1], text: r[2], time };
+    }
+    if ((r = /^(?:\[Not Secure\] )?\[(Server|Rcon)\] (.+)$/.exec(msg))) {
+      return { type: "chat server", name: "Server", text: r[2], time };
+    }
+    if ((r = new RegExp(`^${MC_NAME} has (made the advancement|completed the challenge|reached the goal) \\[(.+)\\]$`).exec(msg))) {
+      const kind = r[2] === "made the advancement" ? "Fortschritt"
+        : r[2] === "completed the challenge" ? "Aufgabe" : "Ziel";
+      return { type: "adv", name: r[1], text: `${kind} erzielt: ${r[3]}`, time };
+    }
+    if ((r = DEATH_RE.exec(msg))) {
+      return { type: "death", name: r[1], text: msg.slice(r[1].length + 1), time };
+    }
+    if (/^Done \([\d.,]+s\)!/.test(msg)) {
+      return { type: "server", name: "Server", text: "ist bereit — Spieler können beitreten", time };
+    }
+    if (/^Stopping (the )?server/.test(msg)) {
+      return { type: "server", name: "Server", text: "wird gestoppt", time };
+    }
+    return null;
+  }
+
+  let activityFrame = 0;
+  function feedActivity(line) {
+    const ev = parseActivity(line);
+    if (!ev) return;
+    // Neu verbundener Stream schickt die letzten Zeilen erneut → doppelte überspringen
+    if (ev.time && state.activity.some((x) => x.time === ev.time && x.type === ev.type
+        && x.name === ev.name && x.text === ev.text)) return;
+    state.activity.push(ev);
+    if (state.activity.length > ACT_MAX) state.activity.splice(0, state.activity.length - ACT_MAX);
+    if (!activityFrame) {
+      activityFrame = requestAnimationFrame(() => { activityFrame = 0; renderActivity(); });
+    }
+  }
+  function rebuildActivity(lines) {
+    state.activity = [];
+    for (const line of lines) {
+      const ev = parseActivity(line);
+      if (ev) state.activity.push(ev);
+    }
+    state.activity = state.activity.slice(-ACT_MAX);
+    renderActivity();
+  }
+
+  const ACT_SERVER_ICON = SLOT_ICONS.cmd;
+  function renderActivity() {
+    const ul = $("#ws-activity");
+    if (!ul) return;
+    const atBottom = ul.scrollTop + ul.clientHeight >= ul.scrollHeight - 8;
+    ul.textContent = "";
+    for (const ev of state.activity) {
+      const li = document.createElement("li");
+      li.className = `act act-${ev.type.split(" ")[0]}${ev.type.includes("server") ? " act-from-server" : ""}`;
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = ev.name === "Server" ? ACT_SERVER_ICON : playerFace(ev.name);
+      const body = document.createElement("div");
+      body.className = "act-body";
+      const who = document.createElement("b");
+      who.textContent = ev.name;
+      const text = document.createElement("span");
+      text.className = "act-text";
+      text.textContent = ev.type.startsWith("chat") ? `: ${ev.text}` : ` ${ev.text}`;
+      body.append(who, text);
+      li.append(img, body);
+      if (ev.time) {
+        const t = document.createElement("time");
+        t.className = "act-time muted small";
+        t.textContent = ev.time;
+        li.appendChild(t);
+      }
+      ul.appendChild(li);
+    }
+    show($("#ws-activity-empty"), state.activity.length === 0);
+    show(ul, state.activity.length > 0);
+    if (atBottom) ul.scrollTop = ul.scrollHeight;
+  }
+  renderActivity();
+
+  /* =====================================================================
+     Benachrichtigungen: Server bereit, unerwartet gestoppt, Spieler-Beitritte
+     — im sichtbaren Tab als Hinweis, im Hintergrund als Desktop-Meldung
+     ===================================================================== */
+  state.userActionAt = state.userActionAt || {};
+  state.notifySnap = null; // id -> {key, ready, online, names: Set|null}
+  try { state.notify = localStorage.getItem("md_notify") === "1"; } catch (e) { state.notify = false; }
+
+  function desktopNotifyOk() {
+    return "Notification" in window && window.isSecureContext
+      && Notification.permission === "granted";
+  }
+  function renderNotifyMenu() {
+    const btn = $("#menu-notify");
+    const label = !state.notify ? "aus" : desktopNotifyOk() ? "an" : "an (nur im Dashboard)";
+    setText(btn, `Benachrichtigungen: ${label}`);
+    btn.setAttribute("aria-checked", String(!!state.notify));
+    btn.title = "Hinweise bei Server bereit, unerwartetem Stopp und Spieler-Beitritten";
+  }
+  $("#menu-notify").addEventListener("click", async () => {
+    state.notify = !state.notify;
+    try { localStorage.setItem("md_notify", state.notify ? "1" : "0"); } catch (e) { /* optional */ }
+    if (state.notify) {
+      if (!("Notification" in window) || !window.isSecureContext) {
+        toast("Benachrichtigungen an. Desktop-Meldungen braucht der Browser per HTTPS oder localhost — bis dahin erscheinen sie nur hier im Dashboard.", "info");
+      } else if (Notification.permission === "default") {
+        try { await Notification.requestPermission(); } catch (e) { /* alte Browser */ }
+      }
+      if (desktopNotifyOk()) toast("Benachrichtigungen an — auch wenn der Tab im Hintergrund liegt.", "success");
+      else if (window.isSecureContext && "Notification" in window && Notification.permission === "denied") {
+        toast("Benachrichtigungen an, Desktop-Meldungen sind im Browser blockiert — sie erscheinen nur hier im Dashboard.", "info");
+      }
+    } else {
+      toast("Benachrichtigungen aus.", "info");
+    }
+    renderNotifyMenu();
+  });
+  renderNotifyMenu();
+
+  function notifyUser(inst, text, type) {
+    if (!state.notify) return;
+    if (document.hidden && desktopNotifyOk()) {
+      try {
+        const n = new Notification(`${inst.name} · Minedocker`, { body: text, tag: `md-${inst.id}-${type}` });
+        n.onclick = () => { window.focus(); openServer(inst.id); n.close(); };
+        return;
+      } catch (e) { /* z. B. Android ohne Service Worker → Hinweis im Dashboard */ }
+    }
+    toast(`${inst.name}: ${text}`, type);
+  }
+
+  function checkNotifications(list) {
+    if (state.ovInstances === null) return; // Fehler beim Laden ≠ alle Server weg
+    const snap = {};
+    for (const inst of list) {
+      const key = instStateKey(inst);
+      const ping = inst.container?.running ? liveEntry(inst)?.ping : null;
+      const ready = !!ping?.online;
+      const online = ready ? (ping.players?.online || 0) : 0;
+      const sample = ready ? (ping.players?.sample || []).map((p) => p.name).filter(Boolean) : [];
+      // Namen nur verwenden, wenn der Server alle liefert (sonst nur Zähler)
+      snap[inst.id] = { key, ready, online, names: sample.length === online ? new Set(sample) : null };
+    }
+    const prev = state.notifySnap;
+    state.notifySnap = snap;
+    if (!prev) return; // erste Messung: nur merken
+    for (const inst of list) {
+      const was = prev[inst.id];
+      const now = snap[inst.id];
+      if (!was) continue;
+      const byUser = Date.now() - (state.userActionAt[inst.id] || 0) < 3 * 60 * 1000;
+      if (was.key === "running" && now.key !== "running" && now.key !== "starting" && !byUser) {
+        notifyUser(inst, now.key === "error"
+          ? "ist abgestürzt" : "wurde unerwartet gestoppt (nicht über das Dashboard)", "error");
+      }
+      if (!was.ready && now.ready) {
+        notifyUser(inst, "ist bereit — Spieler können beitreten", "success");
+      }
+      if (was.ready && now.ready && now.online > was.online) {
+        const joined = was.names && now.names
+          ? [...now.names].filter((n) => !was.names.has(n)) : [];
+        notifyUser(inst, joined.length
+          ? `${joined.join(", ")} ${joined.length === 1 ? "ist" : "sind"} beigetreten (${now.online} online)`
+          : `${now.online - was.online === 1 ? "Ein Spieler ist" : `${now.online - was.online} Spieler sind`} beigetreten (${now.online} online)`,
+        "info");
+      }
+    }
+  }
 
   /* =====================================================================
      Befehlspalette (Strg+K): Server, Bereiche, Aktionen und /Befehle
