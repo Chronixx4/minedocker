@@ -1176,19 +1176,78 @@ async def instance_from_pack_upload(name: str = Form(""),
     return {"instance": result["instance"], "job": result["job"]}
 
 
+# Speicher-Zählung der Detail-Ansicht: Läuft sie länger als dieses Budget
+# (erster Aufruf, große Welt, langsame Platte), kommt die Antwort ohne
+# Speicherwert ('disk_pending') und das Frontend holt ihn über /disk nach.
+_DISK_BUDGET_SECONDS = 1.0
+_DISK_TASKS: dict = {}
+_OFFLINE_PING = {"online": False, "version": None, "motd": "",
+                 "players": {"online": 0, "max": 0, "sample": []}, "error": None}
+# Anfragen, die länger dauern, landen mit Zeit im Log (Diagnose langsamer Hosts)
+_SLOW_REQUEST_MS = 1000
+
+
+def _disk_task(instance_id: str) -> asyncio.Task:
+    """Eine laufende Speicher-Zählung pro Instanz (und Event-Loop) teilen."""
+    loop = asyncio.get_running_loop()
+    entry = _DISK_TASKS.get(instance_id)
+    if entry is not None and entry[0] is loop and not entry[1].done():
+        return entry[1]
+    task = loop.create_task(asyncio.to_thread(instances.disk_usage, instance_id))
+    # Ergebnis/Fehler abholen, auch wenn niemand mehr wartet (kein Warn-Log)
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    _DISK_TASKS[instance_id] = (loop, task)
+    return task
+
+
+async def _detail_disk(instance_id: str) -> dict | None:
+    """Speicherwert für die Detail-Ansicht ohne lange Wartezeit: frischer
+    Cache sofort; älterer Cache sofort + Neuzählung im Hintergrund; ohne
+    Cache höchstens _DISK_BUDGET_SECONDS warten, sonst None."""
+    cached, fresh = instances.disk_usage_cached(instance_id)
+    if fresh:
+        return cached
+    task = _disk_task(instance_id)
+    if cached is not None:
+        return cached
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), _DISK_BUDGET_SECONDS)
+    except TimeoutError:
+        return None
+
+
+async def _timed(timings: dict, name: str, awaitable):
+    start = time.perf_counter()
+    try:
+        return await awaitable
+    finally:
+        timings[name] = (time.perf_counter() - start) * 1000
+
+
 @api.get("/instances/{instance_id}")
-async def instance_detail(instance_id: str):
+async def instance_detail(instance_id: str, response: Response):
     instance = instances.get_instance(instance_id)
     ping_host, ping_port = _instance_ping_host(instance)
-    # Docker-Status, Ping, Mod-Scan und Disk-Scan parallel (statt seriell) —
-    # die Antwort kommt so nach der langsamsten Einzelabfrage, nicht nach
-    # der Summe aller; jeder Schritt läuft im Worker-Thread, damit der
-    # Event-Loop nicht blockiert (sonst hängt das ganze Panel kurz).
-    status, ping, overview, disk = await asyncio.gather(
-        asyncio.to_thread(runtime.container_status, instance),
-        asyncio.to_thread(server_status, ping_host, ping_port, 1.0),
-        asyncio.to_thread(instances.mods_overview, instance_id),
-        asyncio.to_thread(instances.disk_usage, instance_id),
+    timings: dict = {}
+
+    async def status_and_ping():
+        # Ping nur bei laufendem Container: bei gestopptem Server kostet er
+        # sonst bis zum Timeout (bzw. eine DNS-Anfrage auf den Containernamen)
+        status = await _timed(timings, "docker",
+                              asyncio.to_thread(runtime.container_status, instance))
+        if not status["running"]:
+            return status, dict(_OFFLINE_PING)
+        ping = await _timed(timings, "ping",
+                            asyncio.to_thread(server_status, ping_host, ping_port, 1.0))
+        return status, ping
+
+    # Docker+Ping, Mod-Scan und Speicher parallel; jeder Schritt im Worker-
+    # Thread, damit der Event-Loop nicht blockiert. Der Speicher wartet
+    # höchstens kurz (siehe _detail_disk).
+    (status, ping), overview, disk = await asyncio.gather(
+        status_and_ping(),
+        _timed(timings, "mods", asyncio.to_thread(instances.mods_overview, instance_id)),
+        _timed(timings, "disk", _detail_disk(instance_id)),
     )
     detail = dict(instance)
     detail["container"] = {"running": status["running"], "state": status["container"]}
@@ -1201,7 +1260,25 @@ async def instance_detail(instance_id: str):
     detail["mod_problems"] = overview["problems"]
     detail["mods_changed_at"] = overview["mods_changed_at"]
     detail["disk"] = disk
+    detail["disk_pending"] = disk is None
+    # Teilzeiten für die Browser-Entwicklertools (Netzwerk → Timing)
+    response.headers["Server-Timing"] = ", ".join(
+        f"{name};dur={ms:.0f}" for name, ms in timings.items())
+    if timings and max(timings.values()) >= _SLOW_REQUEST_MS:
+        logger.info("Server-Details %s langsam: %s", instance_id, ", ".join(
+            f"{name} {ms:.0f} ms" for name, ms in timings.items()))
     return detail
+
+
+@api.get("/instances/{instance_id}/disk")
+async def instance_disk(instance_id: str):
+    """Speicherverbrauch der Instanz (wartet auf eine laufende Zählung) —
+    Nachladen, wenn die Detail-Antwort 'disk_pending' gemeldet hat."""
+    instances.get_instance(instance_id)
+    cached, fresh = instances.disk_usage_cached(instance_id)
+    if fresh:
+        return cached
+    return await asyncio.shield(_disk_task(instance_id))
 
 
 @api.patch("/instances/{instance_id}")
@@ -2270,6 +2347,23 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
 
 
 app.include_router(api)
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    """Gesamtdauer jeder Anfrage als Server-Timing-Header ('app') und
+    langsame Anfragen (ab _SLOW_REQUEST_MS) im Log — zeigt auf dem
+    eigenen Host, welche Abfrage das Dashboard ausbremst."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - start) * 1000
+    existing = response.headers.get("Server-Timing")
+    response.headers["Server-Timing"] = (
+        f"{existing}, app;dur={ms:.0f}" if existing else f"app;dur={ms:.0f}")
+    if ms >= _SLOW_REQUEST_MS and request.url.path.startswith("/api"):
+        logger.info("Langsame Anfrage: %s %s %.0f ms",
+                    request.method, request.url.path, ms)
+    return response
 
 
 @app.middleware("http")

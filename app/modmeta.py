@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import threading
 import tomllib
@@ -33,6 +34,11 @@ _MAX_NESTED_BYTES = 8 * 1024 * 1024
 _CACHE: dict[tuple, dict | None] = {}
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 4096
+# Der Cache wird zusätzlich auf Platte gespiegelt: Nach einem Dashboard-
+# Neustart müsste sonst jede .jar (bei Modpacks 300+) erneut geöffnet werden,
+# bevor die Detail-Ansicht eines Servers erscheint.
+_CACHE_FILE = ".modmeta-cache.json"
+_CACHE_STATE = {"loaded": False, "dirty": False}
 
 
 def _authors(value) -> list[str]:
@@ -260,6 +266,64 @@ def _read(path: Path) -> dict | None:
         return None
 
 
+def _cache_path() -> Path:
+    from .config import settings  # lazy: modmeta bleibt ohne Konfiguration testbar
+    return Path(settings.instances_dir) / _CACHE_FILE
+
+
+def _load_disk_cache() -> None:
+    """Gespiegelten Cache einmal pro Prozess laden (fehlend/kaputt = leer)."""
+    with _CACHE_LOCK:
+        if _CACHE_STATE["loaded"]:
+            return
+        _CACHE_STATE["loaded"] = True
+    try:
+        data = json.loads(_cache_path().read_text(encoding="utf-8"))
+        entries = data.get("entries") if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return
+    if not isinstance(entries, list):
+        return
+    loaded = {}
+    for item in entries[:_CACHE_MAX]:
+        try:
+            path, size, mtime_ns, meta = item
+            key = (str(path), int(size), int(mtime_ns))
+        except (TypeError, ValueError):
+            continue
+        if meta is None or isinstance(meta, dict):
+            loaded[key] = meta
+    with _CACHE_LOCK:
+        for key, meta in loaded.items():
+            _CACHE.setdefault(key, meta)
+
+
+def save_cache() -> None:
+    """Cache auf Platte schreiben, wenn sich seit dem letzten Mal etwas
+    geändert hat. Einträge gelöschter/ersetzter Dateien fallen dabei weg.
+    Best effort: Schreibfehler werden ignoriert."""
+    with _CACHE_LOCK:
+        if not _CACHE_STATE["dirty"]:
+            return
+        _CACHE_STATE["dirty"] = False
+        items = list(_CACHE.items())
+    entries = []
+    for (path, size, mtime_ns), meta in items:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if st.st_size == size and st.st_mtime_ns == mtime_ns:
+            entries.append([path, size, mtime_ns, meta])
+    target = _cache_path()
+    tmp = target.with_name(target.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+
+
 def read_meta(path: Path) -> dict | None:
     """Metadaten einer Mod-Datei (gecacht über Pfad, Größe und mtime) oder
     None, wenn die Datei keine bekannte Loader-Beschreibung enthält."""
@@ -267,6 +331,7 @@ def read_meta(path: Path) -> dict | None:
         st = path.stat()
     except OSError:
         return None
+    _load_disk_cache()
     key = (str(path), st.st_size, st.st_mtime_ns)
     with _CACHE_LOCK:
         if key in _CACHE:
@@ -276,6 +341,7 @@ def read_meta(path: Path) -> dict | None:
         if len(_CACHE) >= _CACHE_MAX:
             _CACHE.clear()
         _CACHE[key] = meta
+        _CACHE_STATE["dirty"] = True
     return meta
 
 

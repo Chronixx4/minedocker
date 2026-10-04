@@ -110,3 +110,36 @@ def test_welten_liste_und_neue_welt(page, make_instance, data_dir):
     props = (base / "server.properties").read_text()
     assert re.search(r"^level-name=Abenteuer$", props, re.M)
     assert re.search(r"^level-seed=4242$", props, re.M)
+
+
+
+def _detail_ohne_speicher(page, inst):
+    """Detail-Antwort so umschreiben, als liefe die Speicher-Zählung noch."""
+    def detail(route):
+        resp = route.fetch()
+        data = resp.json()
+        data["disk"] = None
+        data["disk_pending"] = True
+        route.fulfill(response=resp, json=data)
+
+    page.route(f"**/api/instances/{inst['id']}", detail)
+
+
+def test_speicher_wird_berechnet(page, make_instance):
+    inst = make_instance("Grosse-Welt")
+    _detail_ohne_speicher(page, inst)
+    page.route(f"**/api/instances/{inst['id']}/disk",
+               lambda route: route.fulfill(status=503, json={"detail": "noch nicht"}))
+    _open(page, inst)
+    expect(page.locator("#detail-info")).to_contain_text("wird berechnet…")
+
+
+def test_speicher_wird_nachgeladen(page, make_instance):
+    inst = make_instance("Grosse-Welt")
+    _detail_ohne_speicher(page, inst)
+    page.route(f"**/api/instances/{inst['id']}/disk", lambda route: route.fulfill(json={
+        "total_bytes": 3 * 1024 ** 3, "mods_bytes": 0, "world_bytes": 3 * 1024 ** 3,
+        "packs_bytes": 0, "rest_bytes": 0, "world_dir": "world", "world_exists": True}))
+    _open(page, inst)
+    expect(page.locator("#detail-info")).to_contain_text("Welt 3")
+    expect(page.locator("#detail-info")).not_to_contain_text("wird berechnet")
