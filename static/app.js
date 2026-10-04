@@ -5896,9 +5896,15 @@
           b.addEventListener("click", (e) => rconAction(action, name, e.target));
           btns.appendChild(b);
         };
-        mkBtn("OP", "op", "small-btn", "Operator-Rechte geben");
-        mkBtn("Kick", "kick", "small-btn", "Spieler kicken");
-        mkBtn("Ban", "ban", "small-btn danger", "Spieler bannen");
+        const invBtn = document.createElement("button");
+        invBtn.className = "btn small-btn";
+        invBtn.textContent = "Inventar";
+        invBtn.title = "Inventar ansehen und bearbeiten";
+        invBtn.addEventListener("click", () => openInventory(name));
+        btns.appendChild(invBtn);
+        mkBtn("OP", "op", "small-btn admin-only", "Operator-Rechte geben");
+        mkBtn("Kick", "kick", "small-btn admin-only", "Spieler kicken");
+        mkBtn("Ban", "ban", "small-btn danger admin-only", "Spieler bannen");
         node.append(info, btns);
         list.appendChild(node);
       }
@@ -5932,6 +5938,474 @@
       if (btn) btn.disabled = false;
     }
   }
+
+  /* ---------- Spieler-Inventar (RCON) ---------- */
+  const INV_SLOT_LABEL = {
+    "armor.head": "Helm", "armor.chest": "Brustpanzer", "armor.legs": "Hose",
+    "armor.feet": "Stiefel", "weapon.offhand": "Offhand",
+  };
+  const INV_GAMEMODE = { survival: "Überleben", creative: "Kreativ", adventure: "Abenteuer", spectator: "Zuschauer" };
+  const inv = { instance: null, player: null, snap: null, tab: "main", selected: null,
+    names: new Map(), iconVer: "", iconTimer: null, giveTimer: null, giveId: null, busy: false };
+
+  function invSlotLabel(slot) {
+    if (INV_SLOT_LABEL[slot]) return INV_SLOT_LABEL[slot];
+    const [kind, num] = slot.split(".");
+    const n = Number(num);
+    if (kind === "enderchest") return `Endertruhe ${n + 1}`;
+    return n < 9 ? `Hotbar ${n + 1}` : `Inventar ${n - 8}`;
+  }
+
+  function invPrettyId(id) {
+    const path = String(id).split(":").pop().split("/").pop();
+    return path.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function invName(item) {
+    return item.custom_name || inv.names.get(item.id) || invPrettyId(item.id);
+  }
+
+  function invIcon(id, size = "") {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = `/api/instances/${encodeURIComponent(inv.instance)}/items/icon?id=${encodeURIComponent(id)}&v=${inv.iconVer}`;
+    img.addEventListener("error", () => {
+      const fb = document.createElement("span");
+      fb.className = "inv-fb";
+      fb.textContent = invPrettyId(id).replace(/[^A-Za-z0-9 ]/g, "").split(" ")
+        .filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+      if (size) fb.style.cssText = `width:${size};height:${size};font-size:10px`;
+      img.replaceWith(fb);
+    }, { once: true });
+    return img;
+  }
+
+  function invCanEdit() {
+    return state.role !== "viewer" && !!inv.snap?.editable;
+  }
+
+  function invSlotEl(slot, item, { movable = true, cls = "" } = {}) {
+    const el = document.createElement("div");
+    el.className = `inv-slot${cls ? ` ${cls}` : ""}`;
+    el.dataset.slot = slot || "";
+    el.title = item ? `${invName(item)} (${item.id})` : (slot ? invSlotLabel(slot) : "");
+    if (item) {
+      el.appendChild(invIcon(item.id));
+      if (item.count > 1) {
+        const n = document.createElement("span");
+        n.className = "inv-n";
+        n.textContent = item.count;
+        el.appendChild(n);
+      }
+      if (item.damage && item.max_damage) {
+        const bar = document.createElement("span");
+        bar.className = "inv-dur";
+        const fill = document.createElement("i");
+        const left = Math.max(0, 1 - item.damage / item.max_damage);
+        fill.style.width = `${Math.round(left * 100)}%`;
+        fill.style.background = `hsl(${Math.round(left * 120)} 90% 45%)`;
+        bar.appendChild(fill);
+        el.appendChild(bar);
+      }
+    } else if (slot && slot.startsWith("armor.")) {
+      el.classList.add("ghost-empty");
+    }
+    if (inv.selected && inv.selected === slot) el.classList.add("sel");
+    if (slot && movable && invCanEdit()) {
+      if (item && item.movable) {
+        el.draggable = true;
+        el.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", slot);
+          e.dataTransfer.effectAllowed = "move";
+        });
+      }
+      el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drop"); });
+      el.addEventListener("dragleave", () => el.classList.remove("drop"));
+      el.addEventListener("drop", (e) => {
+        e.preventDefault();
+        el.classList.remove("drop");
+        const from = e.dataTransfer.getData("text/plain");
+        if (from && from !== slot) invMove(from, slot);
+      });
+      el.addEventListener("contextmenu", (e) => {
+        if (!item) return;
+        e.preventDefault();
+        invClear(slot);
+      });
+    }
+    if (slot) {
+      el.addEventListener("click", () => {
+        inv.selected = slot;
+        invRender();
+      });
+    }
+    return el;
+  }
+
+  function invFill(container, slots, opts) {
+    container.textContent = "";
+    for (const slot of slots) {
+      container.appendChild(invSlotEl(slot, inv.snap.slots[slot] || null, opts));
+    }
+  }
+
+  function invRender() {
+    const snap = inv.snap;
+    if (!snap) return;
+    const range = (prefix, from, to) => Array.from({ length: to - from + 1 }, (_, i) => `${prefix}.${from + i}`);
+    invFill($("#inv-armor"), ["armor.head", "armor.chest", "armor.legs", "armor.feet"]);
+    invFill($("#inv-offhand"), ["weapon.offhand"]);
+    invFill($("#inv-main"), range("container", 9, 35));
+    invFill($("#inv-hotbar"), range("container", 0, 8));
+    const hand = $(`#inv-hotbar .inv-slot[data-slot="container.${snap.selected_slot}"]`);
+    if (hand) hand.classList.add("hand");
+    invFill($("#inv-ender"), range("enderchest", 0, 26));
+
+    const stats = $("#inv-stats");
+    stats.textContent = "";
+    const st = snap.stats || {};
+    for (const line of [
+      `❤ Leben ${st.health ?? "–"} / 20`,
+      `🍗 Hunger ${st.food ?? "–"} / 20`,
+      `✦ Level ${st.level ?? "–"}`,
+      INV_GAMEMODE[st.gamemode] ? `Modus: ${INV_GAMEMODE[st.gamemode]}` : "",
+    ].filter(Boolean)) {
+      const d = document.createElement("div");
+      d.textContent = line;
+      stats.appendChild(d);
+    }
+
+    const mods = $("#inv-mods");
+    mods.textContent = "";
+    const groups = new Map();
+    for (const item of snap.mod_items || []) {
+      if (!groups.has(item.group)) groups.set(item.group, []);
+      groups.get(item.group).push(item);
+    }
+    for (const [group, items] of groups) {
+      const box = document.createElement("div");
+      box.className = "inv-mod-group";
+      const lbl = document.createElement("div");
+      lbl.className = "inv-lbl";
+      lbl.textContent = invPrettyId(group);
+      const grid = document.createElement("div");
+      grid.className = "inv-grid";
+      items.forEach((item, i) => {
+        const key = `mod:${group}:${i}`;
+        const el = invSlotEl(null, item, { movable: false });
+        el.addEventListener("click", () => { inv.selected = key; invRender(); });
+        if (inv.selected === key) el.classList.add("sel");
+        grid.appendChild(el);
+      });
+      box.append(lbl, grid);
+      mods.appendChild(box);
+    }
+    show($("#inv-mods-empty"), groups.size === 0);
+    invRenderDetail();
+  }
+
+  function invSelectedItem() {
+    const key = inv.selected;
+    if (!key || !inv.snap) return null;
+    if (key.startsWith("mod:")) {
+      const [, group, idx] = key.split(":");
+      const items = (inv.snap.mod_items || []).filter((m) => m.group === group);
+      return items[Number(idx)] || null;
+    }
+    return inv.snap.slots[key] || null;
+  }
+
+  function invRenderDetail() {
+    const item = invSelectedItem();
+    show($("#inv-detail-empty"), !item);
+    show($("#inv-detail-body"), !!item);
+    if (!item) {
+      setText($("#inv-detail-empty"), inv.selected && !inv.selected.startsWith("mod:")
+        ? `${invSlotLabel(inv.selected)} ist leer.` : "Slot anklicken, um Details zu sehen.");
+      return;
+    }
+    const isMod = inv.selected.startsWith("mod:");
+    const det = $("#inv-det-slot");
+    det.textContent = "";
+    det.appendChild(invIcon(item.id));
+    setText($("#inv-det-name"), invName(item));
+    setText($("#inv-det-id"), `${item.id} · ${isMod ? `Mod-Slot ${invPrettyId(item.group)}` : invSlotLabel(inv.selected)}`);
+    const kv = $("#inv-det-kv");
+    kv.textContent = "";
+    const add = (k, v, cls = "") => {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      if (v instanceof Node) dd.appendChild(v); else dd.textContent = v;
+      if (cls) dd.className = cls;
+      kv.append(dt, dd);
+    };
+    add("Menge", String(item.count));
+    if (item.damage != null) {
+      add("Haltbarkeit", item.max_damage
+        ? `${(item.max_damage - item.damage).toLocaleString("de-DE")} / ${item.max_damage.toLocaleString("de-DE")}`
+        : `${item.damage} Schaden`);
+    }
+    if (item.enchantments?.length) {
+      add("Verzauberungen", item.enchantments.map((e) => `${inv.names.get(e.id) || invPrettyId(e.id)} ${e.level}`).join(", "), "inv-ench");
+    }
+    if (item.data) {
+      const pre = document.createElement("pre");
+      pre.textContent = item.data;
+      add("Daten", pre);
+    }
+    const editable = invCanEdit() && !isMod;
+    show($("#inv-det-acts"), editable);
+    const note = $("#inv-det-note");
+    const reason = isMod ? "Mod-Slots lassen sich über RCON nicht bearbeiten."
+      : (!item.movable && editable ? "Dieses Item hat zu viele Daten, um es über RCON zu verschieben oder die Menge zu ändern. Löschen geht." : "");
+    setText(note, reason);
+    show(note, !!reason);
+    if (editable) {
+      const count = $("#inv-det-count");
+      count.value = item.count;
+      $("#inv-det-apply").disabled = !item.movable;
+      $("#inv-det-move").disabled = !item.movable;
+      const target = $("#inv-det-target");
+      target.textContent = "";
+      const all = [
+        ...Array.from({ length: 9 }, (_, i) => `container.${i}`),
+        ...Array.from({ length: 27 }, (_, i) => `container.${i + 9}`),
+        "armor.head", "armor.chest", "armor.legs", "armor.feet", "weapon.offhand",
+        ...Array.from({ length: 27 }, (_, i) => `enderchest.${i}`),
+      ];
+      for (const slot of all) {
+        if (slot === inv.selected) continue;
+        const opt = document.createElement("option");
+        opt.value = slot;
+        const other = inv.snap.slots[slot];
+        opt.textContent = `${invSlotLabel(slot)}${other ? ` (${invName(other)})` : ""}`;
+        target.appendChild(opt);
+      }
+      const free = all.find((s) => s.startsWith("container.") && s !== inv.selected && !inv.snap.slots[s]);
+      if (free) target.value = free;
+    }
+  }
+
+  async function invLookupNames() {
+    const ids = new Set();
+    for (const item of [...Object.values(inv.snap?.slots || {}), ...(inv.snap?.mod_items || [])]) {
+      ids.add(item.id);
+      for (const e of item.enchantments || []) ids.add(e.id);
+    }
+    const missing = [...ids].filter((id) => !inv.names.has(id));
+    if (!missing.length) return;
+    try {
+      const inst = inv.instance;
+      const data = await api(`/api/instances/${encodeURIComponent(inst)}/items?ids=${encodeURIComponent(missing.join(","))}`);
+      if (inv.instance !== inst) return;
+      for (const [id, info] of Object.entries(data.items || {})) {
+        if (info.name) inv.names.set(id, info.name);
+      }
+      invRender();
+    } catch (e) { /* Namen sind optional */ }
+  }
+
+  function invApplySnapshot(snap) {
+    inv.snap = snap;
+    inv.iconVer = snap.icons || "";
+    setText($("#inv-title"), `Inventar · ${snap.player}`);
+    const meta = $("#inv-meta");
+    meta.textContent = "";
+    const parts = [
+      ["Version", `${snap.loader ? `${snap.loader} ` : ""}${snap.mc_version || "?"}`],
+      ["Welt", snap.stats?.dimension ? invPrettyId(snap.stats.dimension) : "–"],
+      ["Position", snap.stats?.pos ? snap.stats.pos.join(" / ") : "–"],
+    ];
+    for (const [k, v] of parts) {
+      const span = document.createElement("span");
+      const b = document.createElement("b");
+      b.textContent = v;
+      span.append(`${k} `, b);
+      meta.appendChild(span);
+    }
+    setText($("#inv-stamp"), `Stand ${new Date((snap.fetched_at || Date.now() / 1000) * 1000).toLocaleTimeString("de-DE")}`);
+    const ro = $("#inv-readonly");
+    const roText = state.role === "viewer" ? "Als Viewer kannst du das Inventar nur ansehen."
+      : (!snap.editable ? "Bearbeiten braucht Minecraft 1.17 oder neuer — hier nur ansehen." : "");
+    setText(ro, roText);
+    show(ro, !!roText);
+    if (snap.icons === "failed") {
+      setText($("#inv-stamp"), `${$("#inv-stamp").textContent} · Vanilla-Icons nicht ladbar (Mojang nicht erreichbar)`);
+    }
+    if (snap.icons === "loading") {
+      setText($("#inv-stamp"), `${$("#inv-stamp").textContent} · Vanilla-Icons werden geladen …`);
+      clearTimeout(inv.iconTimer);
+      inv.iconTimer = setTimeout(() => { if ($("#inv-dialog").open) invLoad(true); }, 8000);
+    }
+    invRender();
+    invLookupNames();
+  }
+
+  async function invLoad(quiet = false) {
+    show($("#inv-error"), false);
+    const btn = $("#inv-reload");
+    btn.disabled = true;
+    try {
+      const inst = inv.instance;
+      const snap = await api(`/api/instances/${encodeURIComponent(inst)}/players/${encodeURIComponent(inv.player)}/inventory`);
+      if (inv.instance !== inst) return;
+      invApplySnapshot(snap);
+    } catch (e) {
+      if (!quiet || !inv.snap) {
+        setText($("#inv-error"), e.message);
+        show($("#inv-error"), true);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function invAction(body, okText) {
+    if (inv.busy) return;
+    inv.busy = true;
+    show($("#inv-error"), false);
+    const expect = {};
+    for (const slot of [body.slot, body.to]) {
+      if (slot) expect[slot] = inv.snap.slots[slot]?.sig || "";
+    }
+    try {
+      const snap = await api(`/api/instances/${encodeURIComponent(inv.instance)}/players/${encodeURIComponent(inv.player)}/inventory`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, expect }),
+      });
+      invApplySnapshot(snap);
+      toast(okText, "success");
+    } catch (e) {
+      setText($("#inv-error"), e.message);
+      show($("#inv-error"), true);
+      if (e.status === 409 || e.status === 400) invLoad(true);
+    } finally {
+      inv.busy = false;
+    }
+  }
+
+  function invMove(from, to) {
+    const item = inv.snap.slots[from];
+    if (!item) return;
+    inv.selected = to;
+    invAction({ action: "move", slot: from, to },
+      `${invName(item)} nach ${invSlotLabel(to)} verschoben`);
+  }
+
+  async function invClear(slot) {
+    const item = inv.snap.slots[slot];
+    if (!item) return;
+    const ok = await confirmDialog({
+      title: "Item löschen?",
+      message: `${item.count}× ${invName(item)} aus ${invSlotLabel(slot)} von ${inv.player} entfernen. Das lässt sich nicht rückgängig machen.`,
+      ok: "Löschen", danger: true,
+    });
+    if (ok) invAction({ action: "clear", slot }, `${invName(item)} gelöscht`);
+  }
+
+  function invRenderResults(results) {
+    const ul = $("#inv-give-results");
+    ul.textContent = "";
+    for (const r of results) {
+      const li = document.createElement("li");
+      li.dataset.id = r.id;
+      if (r.id === inv.giveId) li.classList.add("active");
+      const ico = document.createElement("span");
+      ico.className = "inv-ico";
+      ico.appendChild(invIcon(r.id, "22px"));
+      const nm = document.createElement("span");
+      nm.textContent = r.name || invPrettyId(r.id);
+      const id = document.createElement("span");
+      id.className = "inv-mono";
+      id.textContent = r.id;
+      li.append(ico, nm, id);
+      if (r.name) inv.names.set(r.id, r.name);
+      li.addEventListener("click", () => {
+        inv.giveId = r.id;
+        $("#inv-give-q").value = r.id;
+        ul.querySelectorAll("li").forEach((x) => x.classList.toggle("active", x === li));
+      });
+      ul.appendChild(li);
+    }
+  }
+
+  async function invSearch() {
+    const q = $("#inv-give-q").value.trim();
+    if (q.length < 2) { invRenderResults([]); return; }
+    try {
+      const inst = inv.instance;
+      const data = await api(`/api/instances/${encodeURIComponent(inst)}/items?q=${encodeURIComponent(q)}`);
+      if (inv.instance !== inst || $("#inv-give-q").value.trim() !== q) return;
+      const results = data.results || [];
+      if (!inv.giveId || !results.some((r) => r.id === inv.giveId)) inv.giveId = results[0]?.id || null;
+      invRenderResults(results);
+    } catch (e) { invRenderResults([]); }
+  }
+
+  function openInventory(player) {
+    inv.instance = state.detailId;
+    inv.player = player;
+    inv.snap = null;
+    inv.selected = null;
+    inv.tab = "main";
+    inv.giveId = null;
+    $("#inv-face").src = playerFace(player);
+    setText($("#inv-title"), `Inventar · ${player}`);
+    setText($("#inv-meta"), "");
+    setText($("#inv-stamp"), "lädt …");
+    ["#inv-armor", "#inv-offhand", "#inv-main", "#inv-hotbar", "#inv-ender", "#inv-mods", "#inv-stats", "#inv-give-results"]
+      .forEach((sel) => { $(sel).textContent = ""; });
+    $("#inv-give-q").value = "";
+    show($("#inv-detail-body"), false);
+    show($("#inv-detail-empty"), true);
+    invSwitchTab("main");
+    $("#inv-dialog").showModal();
+    invLoad();
+  }
+
+  function invSwitchTab(tab) {
+    inv.tab = tab;
+    document.querySelectorAll(".inv-tab").forEach((b) => b.classList.toggle("active", b.dataset.invTab === tab));
+    show($("#inv-pane-main"), tab === "main");
+    show($("#inv-pane-ender"), tab === "ender");
+    show($("#inv-pane-mods"), tab === "mods");
+  }
+
+  document.querySelectorAll(".inv-tab").forEach((b) => b.addEventListener("click", () => invSwitchTab(b.dataset.invTab)));
+  $("#inv-reload").addEventListener("click", () => invLoad());
+  $("#inv-close").addEventListener("click", () => closeDialog($("#inv-dialog")));
+  $("#inv-dialog").addEventListener("cancel", (e) => { e.preventDefault(); closeDialog($("#inv-dialog")); });
+  $("#inv-dialog").addEventListener("close", () => clearTimeout(inv.iconTimer));
+  $("#inv-det-apply").addEventListener("click", () => {
+    const item = invSelectedItem();
+    const count = Number($("#inv-det-count").value);
+    if (!item || !Number.isInteger(count) || count < 1 || count > 99) {
+      toast("Menge muss zwischen 1 und 99 liegen", "error");
+      return;
+    }
+    invAction({ action: "set_count", slot: inv.selected, count }, `Menge auf ${count} gesetzt`);
+  });
+  $("#inv-det-move").addEventListener("click", () => invMove(inv.selected, $("#inv-det-target").value));
+  $("#inv-det-clear").addEventListener("click", () => invClear(inv.selected));
+  $("#inv-give-q").addEventListener("input", () => {
+    inv.giveId = null;
+    clearTimeout(inv.giveTimer);
+    inv.giveTimer = setTimeout(invSearch, 250);
+  });
+  $("#inv-give-btn").addEventListener("click", () => {
+    const typed = $("#inv-give-q").value.trim();
+    const id = inv.giveId || (/^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(typed) ? typed : "");
+    const count = Number($("#inv-give-count").value);
+    if (!id) { toast("Erst ein Item aus der Liste wählen", "error"); return; }
+    if (!Number.isInteger(count) || count < 1 || count > 6400) {
+      toast("Menge muss zwischen 1 und 6400 liegen", "error");
+      return;
+    }
+    invAction({ action: "give", item_id: id, count }, `${count}× ${inv.names.get(id) || invPrettyId(id)} gegeben`);
+  });
 
   $("#rcon-reload").addEventListener("click", loadRconPlayers);
   for (const [sel, action] of [

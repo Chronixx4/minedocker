@@ -56,6 +56,7 @@ def base_url(data_dir):
         "MC_PORT": "59999",
         "DASHBOARD_API_KEY": "",
         "DOCKER_HOST": "unix:///nonexistent.sock",  # nie einen echten Daemon anfassen
+        "ITEM_ICONS_VANILLA": "false",  # keine Mojang-Downloads
     }
     log = open(data_dir / "uvicorn.log", "wb")  # noqa: SIM115 — lebt bis Sessionende
     proc = subprocess.Popen(

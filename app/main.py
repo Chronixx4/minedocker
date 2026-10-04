@@ -53,6 +53,8 @@ from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
 from . import history as history_mod
 from . import icon as icon_mod
+from . import inventory as inventory_mod
+from . import itemassets as itemassets_mod
 from . import livemap as livemap_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
@@ -1767,6 +1769,146 @@ async def instance_players(instance_id: str):
         return {"online": None, "max": None, "names": [], "raw": output}
     return {"online": parsed["online"], "max": parsed["max"],
             "names": parsed["names"], "raw": output}
+
+
+# ---------------------------------------------------------------------------
+# Spieler-Inventar (RCON: data get entity / item replace / give)
+# ---------------------------------------------------------------------------
+
+class InventoryAction(BaseModel):
+    """Änderung an einem Slot. Item-Daten kommen nie vom Browser — der Server
+    liest den aktuellen Stand und baut die Befehle selbst. 'expect' enthält
+    die Fingerabdrücke der betroffenen Slots aus der Ansicht; weichen sie ab,
+    hat der Spieler inzwischen etwas bewegt (409)."""
+    action: str = Field(pattern=r"^(set_count|clear|move|give)$")
+    slot: str | None = Field(default=None, max_length=24)
+    to: str | None = Field(default=None, max_length=24)
+    count: int | None = Field(default=None, ge=0, le=6400)
+    item_id: str | None = Field(default=None, max_length=128)
+    expect: dict[str, str] = Field(default_factory=dict, max_length=4)
+
+
+def _check_player(name: str) -> str:
+    if not inventory_mod.PLAYER_RE.match(name or ""):
+        raise HTTPException(status_code=400, detail="Ungültiger Spielername")
+    return name
+
+
+async def _rcon_many(instance: dict, cmds: list) -> list:
+    """Wie _rcon_run, aber mehrere Befehle über eine Verbindung."""
+    if not await asyncio.to_thread(runtime.is_running, instance):
+        raise HTTPException(status_code=409,
+                            detail="Instanz läuft nicht — RCON braucht einen gestarteten Server")
+    host, port = runtime.rcon_target(instance)
+    try:
+        return await asyncio.to_thread(
+            rcon_mod.commands, host, port, runtime.rcon_secret(instance), cmds)
+    except rcon_mod.RconError as exc:
+        raise HTTPException(status_code=503, detail=f"RCON nicht erreichbar: {exc}")
+
+
+async def _read_inventory(instance: dict, player: str) -> tuple:
+    loader = (instance.get("loader") or "").lower()
+    outputs = await _rcon_many(instance, inventory_mod.read_commands(player, loader))
+    try:
+        snapshot, slots = inventory_mod.build_snapshot(player, loader, outputs)
+    except inventory_mod.PlayerOffline:
+        raise HTTPException(status_code=404, detail=f"{player} ist nicht online")
+    game_version = instance.get("game_version") or ""
+    snapshot.update(
+        mc_version=game_version,
+        loader=loader,
+        editable=inventory_mod.editing_supported(game_version),
+        fetched_at=int(time.time()),
+        icons=itemassets_mod.ensure_vanilla(game_version),
+    )
+    return snapshot, slots
+
+
+@api.get("/instances/{instance_id}/players/{player}/inventory")
+async def player_inventory(instance_id: str, player: str):
+    """Inventar, Rüstung, Offhand, Endertruhe und Mod-Slots eines Online-Spielers."""
+    instance = instances.get_instance(instance_id)
+    snapshot, _slots = await _read_inventory(instance, _check_player(player))
+    return snapshot
+
+
+@api.post("/instances/{instance_id}/players/{player}/inventory")
+async def player_inventory_action(instance_id: str, player: str, req: InventoryAction,
+                                  request: Request):
+    """Slot setzen/leeren/verschieben oder Item geben (Admin, siehe auth_guard)."""
+    instance = instances.get_instance(instance_id)
+    player = _check_player(player)
+    if not inventory_mod.editing_supported(instance.get("game_version") or ""):
+        raise HTTPException(status_code=409,
+                            detail="Bearbeiten braucht Minecraft 1.17 oder neuer")
+    for name in (req.slot, req.to):
+        if name is not None and not inventory_mod.SLOT_RE.match(name):
+            raise HTTPException(status_code=400, detail=f"Ungültiger Slot: {name}")
+    if req.action in ("set_count", "clear", "move") and not req.slot:
+        raise HTTPException(status_code=400, detail="Slot fehlt")
+    if req.action == "move" and (not req.to or req.to == req.slot):
+        raise HTTPException(status_code=400, detail="Ziel-Slot fehlt")
+    if req.action == "set_count" and not 1 <= (req.count or 0) <= 99:
+        raise HTTPException(status_code=400, detail="Menge muss zwischen 1 und 99 liegen")
+    if req.action == "give":
+        if not inventory_mod.ITEM_ID_RE.match(req.item_id or ""):
+            raise HTTPException(status_code=400, detail="Ungültige Item-ID (z. B. minecraft:stone)")
+        if not 1 <= (req.count or 0) <= 6400:
+            raise HTTPException(status_code=400, detail="Menge muss zwischen 1 und 6400 liegen")
+
+    _snapshot, slots = await _read_inventory(instance, player)
+    for name, sig in req.expect.items():
+        if not inventory_mod.SLOT_RE.match(name):
+            raise HTTPException(status_code=400, detail=f"Ungültiger Slot: {name}")
+        if inventory_mod.signature(slots.get(name)) != sig:
+            raise HTTPException(status_code=409,
+                                detail="Das Inventar hat sich inzwischen geändert — "
+                                       "Ansicht aktualisiert, bitte erneut versuchen")
+    try:
+        cmds = inventory_mod.plan_action(player, req.action, slots, req.slot, req.to,
+                                         req.count, req.item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    outputs = await _rcon_many(instance, cmds)
+    session = auth_mod.current_session(request) or {}
+    who = session.get("u") or ("api-key" if request.headers.get("X-API-Key") else "anonym")
+    for cmd, out in zip(cmds, outputs, strict=True):
+        logger.info("Inventar %s (%s): %s → %s", instance_id, who, cmd[:200], out[:120])
+    failed = [out for out in outputs if not inventory_mod.write_ok(out)]
+    snapshot, _slots = await _read_inventory(instance, player)
+    if failed:
+        raise HTTPException(status_code=400,
+                            detail=f"Minecraft hat abgelehnt: {failed[0] or '(keine Antwort)'}")
+    return snapshot
+
+
+@api.get("/instances/{instance_id}/items")
+async def items_lookup(instance_id: str, ids: str = Query(default="", max_length=8000),
+                       q: str = Query(default="", max_length=64)):
+    """Namen und Icon-Verfügbarkeit für Item-IDs (ids=a,b,c) oder Suche (q=…)."""
+    instance = instances.get_instance(instance_id)
+    index = await asyncio.to_thread(itemassets_mod.index_for, instance)
+    icons = itemassets_mod.vanilla_status(instance.get("game_version") or "")
+    if q:
+        return {"results": index.search(q), "icons": icons}
+    wanted = [i for i in ids.split(",") if inventory_mod.ITEM_ID_RE.match(i)][:300]
+    return {"items": {i: {"name": index.names.get(i) or index.enchantments.get(i)}
+                      for i in wanted}, "icons": icons}
+
+
+@api.get("/instances/{instance_id}/items/icon")
+async def items_icon(instance_id: str, id: str = Query(max_length=128)):
+    """PNG-Textur eines Items (erstes Bild bei Animationen macht das Frontend)."""
+    if not inventory_mod.ITEM_ID_RE.match(id):
+        raise HTTPException(status_code=400, detail="Ungültige Item-ID")
+    instance = instances.get_instance(instance_id)
+    index = await asyncio.to_thread(itemassets_mod.index_for, instance)
+    data = await asyncio.to_thread(index.icon, id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Kein Icon gefunden")
+    return Response(content=data, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @api.post("/instances/{instance_id}/console")

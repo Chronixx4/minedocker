@@ -61,6 +61,10 @@ class Settings:
             for token in os.getenv("RCON_CONSOLE_WHITELIST", "").split(",")
             if token.strip()
         ]
+        # Inventar-Ansicht: Vanilla-Item-Icons einmal pro MC-Version aus der
+        # Mojang-Client-JAR laden (false = nur Mod-Icons aus den Mod-JARs)
+        self.item_icons_vanilla = os.getenv("ITEM_ICONS_VANILLA", "true").strip().lower() \
+            not in ("0", "false", "no", "off")
         # Persistenter Statistik-Verlauf (SQLite): DB-Pfad, Sampling-Intervall
         # und Aufbewahrung. Default: neben INSTANCES_DIR (im Container /data).
         env_history_db = os.getenv("HISTORY_DB", "").strip()
