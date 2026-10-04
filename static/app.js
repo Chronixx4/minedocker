@@ -556,6 +556,8 @@
         document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
         document.querySelectorAll(".panel").forEach((p) =>
           p.classList.toggle("active", p.id === `tab-${state.tab}`));
+        renderInstTabs(state.ovInstances?.instances || []);
+        syncHotbar();
       };
       // Weicher Tab-Wechsel per View Transitions (Fallback: panel-in-Einstieg)
       if (document.startViewTransition && motionOK()) {
@@ -2133,7 +2135,11 @@
     show($("#inst-list-wrap"), false); // Workspace ersetzt die Liste (Tab-Look)
     show($("#inst-create"), false);
     show($("#inst-import-box"), false);
-    activateWsTab(state.wsTab || "mods");
+    activateWsTab(state.wsTab || "uebersicht");
+    const known = (state.ovInstances?.instances || []).find((i) => i.id === id);
+    $("#detail-icon").src = serverBlockIcon(known?.name || id);
+    syncHotbar();
+    renderInstTabs(state.ovInstances?.instances || []);
     updateWsControls();
     updateWsPerf();
     updateInstSelection(); // Karte im Server-Tab hervorheben
@@ -2248,6 +2254,8 @@
     closeDetailLogStream();
     showSoft($("#inst-detail"), false);
     show($("#inst-list-wrap"), true); // Liste wieder einblenden
+    syncHotbar();
+    renderInstTabs(state.ovInstances?.instances || []);
   }
   $("#detail-close").addEventListener("click", closeDetail);
 
@@ -2266,6 +2274,8 @@
       state.detailData = detail;
       renderDetailInfo(detail);
       renderDetailMods(detail.mods || []);
+      if (!$("#detail-icon").src.startsWith("blob:")) $("#detail-icon").src = serverBlockIcon(detail.name);
+      updateHotbarCounts();
       state.detailRunning = !!detail.container?.running;
       setText($("#pack-target"),
         `Ziel: ${detail.loader} ${detail.game_version}${detail.loader_version ? ` (${detail.loader_version})` : ""}`);
@@ -3723,17 +3733,23 @@
     try {
       const headers = {};
       if (state.apiKey) headers["X-API-Key"] = state.apiKey;
-      const res = await fetch(`/api/instances/${state.detailId}/icon`, { headers });
+      const id = state.detailId;
+      const res = await fetch(`/api/instances/${id}/icon`, { headers });
+      if (state.detailId !== id) return; // inzwischen andere Instanz geöffnet
       if (res.status === 401) showAuthOverlay();
       if (res.status === 404) {
         setText($("#icon-info"), "Kein Icon vorhanden (64×64-PNG hochladen).");
+        const name = state.detailData?.name || currentDetailInst()?.name || state.detailId;
+        $("#detail-icon").src = serverBlockIcon(name);
         return;
       }
       if (!res.ok) throw Object.assign(new Error(`HTTP-Fehler ${res.status}`),
                                        { status: res.status });
       const blob = await res.blob();
+      if (state.detailId !== id) return;
       const url = URL.createObjectURL(blob);
       img.src = url;
+      $("#detail-icon").src = url; // echtes server-icon.png auch im Kopf zeigen
       img.classList.remove("hidden");
       del.classList.remove("hidden");
       setText($("#icon-info"), `64×64 PNG · ${fmtBytes(blob.size)}`);
@@ -5111,25 +5127,95 @@
      - Bereichs-Tabs: bestehende Detail-Boxen werden bei Init in Panels
        einsortiert (DOM bleibt sonst unverändert — keine Backend-Änderung)
      ===================================================================== */
+  /* Hotbar-Slots: [Schlüssel, Name, Pixel-Icon]. Reihenfolge = Taste 1–9. */
   const WS_TABS = [
-    ["mods", "Mods & Packs"],
-    ["welt", "Welt"],
-    ["dateien", "Dateien"],
-    ["spieler", "Spieler"],
-    ["konsole", "Konsole"],
-    ["einstellungen", "Einstellungen"],
-    ["zeitplan", "Zeitplan"],
-    ["backups", "Backups"],
-    ["logs", "Logs"],
+    ["uebersicht", "Übersicht", "compass"],
+    ["konsole", "Konsole", "cmd"],
+    ["spieler", "Spieler", "head"],
+    ["mods", "Mods & Packs", "book"],
+    ["welt", "Welt", "globe"],
+    ["dateien", "Dateien", "folder"],
+    ["backups", "Backups", "chest"],
+    ["zeitplan", "Zeitplan", "clock"],
+    ["einstellungen", "Einstellungen", "anvil"],
   ];
 
-  function activateWsTab(key) {
+  /* 8×8-Pixel-Icons als SVG-Data-URI (ein Zeichen = ein Pixel, "." = leer) */
+  const PIXEL_COLORS = {
+    g: "#5ccf4a", G: "#3e9a32", d: "#7a5434", D: "#5a3c24", s: "#a0a0a0", S: "#6b6b6b",
+    k: "#1b1b1b", w: "#f2f2f2", y: "#f6c544", Y: "#c8961e", b: "#5fd8e6", r: "#ff5b4f",
+    R: "#a8281e", t: "#c8a26a", o: "#e88a3a",
+  };
+  function pixelIcon(rows) {
+    let rects = "";
+    rows.forEach((row, y) => [...row].forEach((c, x) => {
+      if (c !== ".") rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${PIXEL_COLORS[c]}"/>`;
+    }));
+    return "data:image/svg+xml;utf8," + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges">${rects}</svg>`);
+  }
+  const SLOT_ICONS = {
+    compass: pixelIcon(["..ssss..", ".sYYYYs.", "sYyrryYs", "sYyrRyYs", "sYybbyYs", "sYybbyYs", ".sYYYYs.", "..ssss.."]),
+    cmd: pixelIcon(["oooooooo", "oSSSSSSo", "oSwSSSSo", "oSSwSSSo", "oSwSSSSo", "oSSSwwSo", "oSSSSSSo", "oooooooo"]),
+    head: pixelIcon(["kkkkkkkk", "kkkkkkkk", "kttttttk", "twkttkwt", "tttttttt", "tttttttt", "ttRRRRtt", "tttttttt"]),
+    book: pixelIcon([".RRRRRR.", ".RwwwwR.", ".RwkkwR.", ".RwwwwR.", ".RwkkwR.", ".RwwwwR.", ".RRRRRR.", "..YYYY.."]),
+    globe: pixelIcon(["..bbbb..", ".bgbbgb.", "bggbbbgb", "bbggbbbb", "bbbgggbb", "bgbbggbb", ".bbbbgb.", "..bbbb.."]),
+    folder: pixelIcon(["........", "YYY.....", "YyyYYYYY", "YyyyyyyY", "YyyyyyyY", "YyyyyyyY", "YYYYYYYY", "........"]),
+    chest: pixelIcon(["DddddddD", "dYYYYYYd", "dYddddYd", "kkkyykkk", "dYdyydYd", "dYddddYd", "dYYYYYYd", "DddddddD"]),
+    clock: pixelIcon(["..yyyy..", ".yYYYYy.", "yYwwwwYy", "yYwkwwYy", "yYwkkwYy", "yYwwwwYy", ".yYYYYy.", "..yyyy.."]),
+    anvil: pixelIcon(["........", "SSSSSSSs", ".SSSSSs.", "...Ss...", "...Ss...", "..SSSs..", ".SSSSSs.", "........"]),
+  };
+
+  /* Server-Icon-Ersatz: Pixel-Block in einer stabilen Farbe je Name */
+  function serverBlockIcon(name) {
+    let h = 0;
+    for (const c of String(name || "")) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    const base = `hsl(${h % 360} 45% 42%)`;
+    return "data:image/svg+xml;utf8," + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges">` +
+      `<rect width="8" height="8" fill="${base}"/><rect y="3" width="8" height="5" fill="#00000040"/>` +
+      `<rect x="1" y="1" width="2" height="1" fill="#ffffff55"/><rect x="5" y="0" width="1" height="2" fill="#ffffff33"/>` +
+      `<rect x="2" y="5" width="1" height="1" fill="#ffffff22"/><rect x="5" y="6" width="2" height="1" fill="#00000033"/></svg>`);
+  }
+
+  let slotNameTimer = null;
+  function activateWsTab(key, announce = false) {
     state.wsTab = key;
     try { localStorage.setItem("md_ws_tab", key); } catch (e) { /* optional */ }
-    document.querySelectorAll("#ws-tabs .ws-tab").forEach((b) =>
-      b.classList.toggle("active", b.dataset.wsTab === key));
+    document.querySelectorAll("#ws-tabs .slot").forEach((b) => {
+      const on = b.dataset.wsTab === key;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-current", on ? "page" : "false");
+    });
     document.querySelectorAll("#ws-panels .ws-panel").forEach((p) =>
       show(p, p.dataset.wsPanel === key));
+    if (announce) {
+      // Name des Slots kurz über der Hotbar einblenden (wie im Spiel)
+      const label = WS_TABS.find(([k]) => k === key)?.[1] || "";
+      const el = $("#slot-name");
+      el.textContent = label;
+      el.classList.add("show");
+      clearTimeout(slotNameTimer);
+      slotNameTimer = setTimeout(() => el.classList.remove("show"), 1300);
+    }
+  }
+
+  /* Hotbar nur zeigen, wenn im Server-Tab eine Instanz geöffnet ist */
+  function syncHotbar() {
+    const visible = state.tab === "servers" && !!state.detailId;
+    show($("#hotbar-wrap"), visible);
+    document.body.classList.toggle("has-hotbar", visible);
+  }
+
+  /* Zähler in den Slots: Spieler online, installierte Mods */
+  function updateHotbarCounts() {
+    const set = (key, n) => {
+      const el = document.querySelector(`#ws-tabs .slot[data-ws-tab="${key}"] .slot-count`);
+      if (el) el.textContent = n > 0 ? String(n) : "";
+    };
+    const inst = state.detailId ? currentDetailInst() : null;
+    set("spieler", inst ? liveEntry(inst)?.ping?.players?.online || 0 : 0);
+    set("mods", state.detailData?.mods?.length || 0);
   }
 
   /* Sortiert die Detail-Boxen einmalig in die Workspace-Panels um.
@@ -5168,25 +5254,52 @@
       modsPanel.appendChild(modsBox);
     }
     const logsBox = document.querySelector(".ws-logcol");
-    const logsPanel = document.querySelector('.ws-panel[data-ws-panel="logs"]');
+    const logsPanel = document.querySelector('.ws-panel[data-ws-panel="uebersicht"]');
     if (logsBox && logsPanel) logsPanel.appendChild(logsBox);
     document.querySelector("#inst-detail .detail-grid")?.remove();
 
-    // Bereichs-Tabs aufbauen
+    // Hotbar-Slots aufbauen
     const nav = $("#ws-tabs");
     nav.textContent = "";
-    for (const [key, label] of WS_TABS) {
+    WS_TABS.forEach(([key, label, icon], i) => {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "ws-tab";
+      b.className = "slot";
       b.dataset.wsTab = key;
-      b.textContent = label;
-      b.addEventListener("click", () => activateWsTab(key));
+      b.title = `${label} (Taste ${i + 1})`;
+      b.setAttribute("aria-label", label);
+      const num = document.createElement("span");
+      num.className = "slot-num";
+      num.textContent = String(i + 1);
+      const img = document.createElement("img");
+      img.src = SLOT_ICONS[icon];
+      img.alt = "";
+      const count = document.createElement("span");
+      count.className = "slot-count";
+      b.append(num, img, count);
+      b.addEventListener("click", () => activateWsTab(key, true));
       nav.appendChild(b);
-    }
+    });
+    // Tasten 1–9 wechseln den Slot (nicht beim Tippen oder in Dialogen)
+    document.addEventListener("keydown", (e) => {
+      if (!/^[1-9]$/.test(e.key) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if ($("#hotbar-wrap").classList.contains("hidden")) return;
+      const t = e.target;
+      if (t.closest?.("input, textarea, select, [contenteditable], dialog")) return;
+      if (document.querySelector("dialog[open]")) return;
+      activateWsTab(WS_TABS[+e.key - 1][0], true);
+    });
+    // Mausrad über der Hotbar blättert durch die Slots
+    nav.addEventListener("wheel", (e) => {
+      if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      const i = WS_TABS.findIndex(([k]) => k === state.wsTab);
+      const next = (i + (e.deltaY > 0 ? 1 : WS_TABS.length - 1)) % WS_TABS.length;
+      activateWsTab(WS_TABS[next][0], true);
+    }, { passive: false });
     let saved = null;
     try { saved = localStorage.getItem("md_ws_tab"); } catch (e) { /* optional */ }
-    activateWsTab(saved && WS_TABS.some(([k]) => k === saved) ? saved : "mods");
+    activateWsTab(saved && WS_TABS.some(([k]) => k === saved) ? saved : "uebersicht");
   }
 
   /* ---------- Instanz-Tab-Leiste oben ---------- */
@@ -5196,25 +5309,32 @@
     nav.textContent = "";
     const all = document.createElement("button");
     all.type = "button";
-    all.className = "inst-tab" + (state.detailId ? "" : " active");
+    const onServers = state.tab === "servers";
+    all.className = "inst-tab" + (onServers && !state.detailId ? " active" : "");
     all.textContent = "Alle Server";
-    all.addEventListener("click", () => { if (state.detailId) closeDetail(); });
+    all.addEventListener("click", () => {
+      if (state.detailId) closeDetail();
+      activateTab("servers");
+    });
     nav.appendChild(all);
     const instances = (list || []).slice()
       .sort((a, b) => a.name.localeCompare(b.name, "de"));
     for (const inst of instances) {
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "inst-tab" + (inst.id === state.detailId ? " active" : "");
+      b.className = "inst-tab" + (onServers && inst.id === state.detailId ? " active" : "");
+      const icon = document.createElement("img");
+      icon.className = "inst-tab-icon";
+      icon.src = serverBlockIcon(inst.name);
+      icon.alt = "";
       const dot = document.createElement("span");
       dot.className = `inst-tab-dot ${instStateKey(inst)}`;
-      b.appendChild(dot);
-      b.appendChild(document.createTextNode(inst.name));
+      dot.title = OV_STATE_LABELS[instStateKey(inst)];
+      b.append(icon, document.createTextNode(inst.name), dot);
       b.title = `${inst.loader} · MC ${inst.game_version} · Port ${inst.port}`;
       b.addEventListener("click", () => {
-        if (inst.id === state.detailId) return;
         activateTab("servers");
-        openDetail(inst.id);
+        if (inst.id !== state.detailId) openDetail(inst.id);
       });
       nav.appendChild(b);
     }
@@ -5228,6 +5348,7 @@
       openCreate();
     });
     nav.appendChild(add);
+    updateHotbarCounts();
   }
 
   /* ---------- Workspace-Steuerung ---------- */
@@ -5252,7 +5373,7 @@
     setText($("#detail-state-text"), OV_STATE_LABELS[key]);
     const up = running && inst.container?.started_at
       ? fmtUptime(inst.container.started_at) : null;
-    setText($("#ws-uptime"), up ? `Läuft seit ${up}` : OV_STATE_LABELS[key]);
+    setText($("#ws-uptime"), up ? `Läuft seit ${up}` : ""); // Status steht schon im Badge
   }
 
   function updateWsPerf() {
