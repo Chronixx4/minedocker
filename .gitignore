@@ -9,3 +9,6 @@ backups/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Oberflächen-Tests (Screenshots/Logs)
+ui-artifacts/

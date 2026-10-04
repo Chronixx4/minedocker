@@ -588,8 +588,11 @@ kommen aus .env — Vorlage .env.example; ZimaOS-Einrichtung: SERVER-SETUP.md §
 
 ## Tests
 python -m pytest tests/   # 613 Tests (Windows: 2 Skips — Symlink-Tests, CI/Linux: alle grün)
-CI: .github/workflows/ci.yml — ruff check app tests, mypy (app/, Regeln in
-pyproject.toml inkl. dokumentierter Ausnahmen), pytest; Dev-Abhängigkeiten
+python -m pytest tests_ui/   # Oberflächen-Tests (Playwright/Chromium, echtes Dashboard
+                            # im Unterprozess; laufende Server per page.route simuliert)
+CI: .github/workflows/ci.yml — ruff check app tests tests_ui, mypy (app/, Regeln in
+pyproject.toml inkl. dokumentierter Ausnahmen), pytest, Job "ui" (tests_ui,
+Screenshots + Server-Log als Artefakt bei Fehlern); Dev-Abhängigkeiten
 in requirements-dev.txt. Docker-Image: .github/workflows/docker-publish.yml
 — bei Push auf main/tags nach ghcr.io/chronixx4/minedocker:latest
 (Grundlage für die ZimaOS-UI-Installation, Vorlage INSTALL-ZIMAOS.md).

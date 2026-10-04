@@ -183,10 +183,18 @@ angelegte Benutzer wird automatisch Admin. Danach schützt das Login alle
 python -m venv .venv
 .venv/bin/pip install --require-hashes -r requirements.txt -r requirements-dev.txt
 
-python -m ruff check app tests   # Lint
+python -m ruff check app tests tests_ui   # Lint
 python -m mypy                   # Typen (app/)
-python -m pytest tests/          # Test-Suite (~500 Tests, Fake-Docker, keine echten Container nötig)
+python -m pytest tests/          # Test-Suite (~600 Tests, Fake-Docker, keine echten Container nötig)
+
+python -m playwright install chromium     # einmalig
+python -m pytest tests_ui/       # Oberflächen-Tests: echtes Dashboard + Chromium
 ```
+
+Die Oberflächen-Tests starten das Dashboard mit leerem Datenordner und
+steuern es im Browser (Startseite, Hotbar, Strg+K, Aktivität, Welten,
+Benachrichtigungen, Handy-Layout). Jeder JavaScript-Fehler lässt einen Test
+scheitern; Screenshots fehlgeschlagener Tests landen in `ui-artifacts/`.
 
 Abhängigkeiten: Quelle sind `requirements.in` / `requirements-dev.in`, die
 gehashten Locks `requirements*.txt` entstehen per
@@ -194,7 +202,7 @@ gehashten Locks `requirements*.txt` entstehen per
 (analog für `-dev`); Dependabot schlägt wöchentlich Updates vor.
 
 CI ([ci.yml](.github/workflows/ci.yml)) läuft bei jedem Push/PR mit Lock-Check,
-pip-audit, ruff, mypy, pytest und einem Trivy-Scan des Docker-Images; das Docker-Image baut
+pip-audit, ruff, mypy, pytest, Oberflächen-Tests (Playwright) und einem Trivy-Scan des Docker-Images; das Docker-Image baut
 [docker-publish.yml](.github/workflows/docker-publish.yml) bei jedem Push auf
 `main` und bei jedem Release. Issues und Pull Requests sind willkommen.
 

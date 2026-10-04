@@ -1,4 +1,5 @@
-# CI: Lint (ruff), Typen (mypy) und Testsuite (pytest) bei jedem Push/PR.
+# CI: Lint (ruff), Typen (mypy), Testsuite (pytest) und Oberflächen-Tests
+# (Playwright/Chromium gegen das echte Dashboard) bei jedem Push/PR.
 name: CI
 
 on:
@@ -37,13 +38,42 @@ jobs:
           pip-audit -r requirements.txt --no-deps --disable-pip
 
       - name: ruff (Lint)
-        run: python -m ruff check app tests
+        run: python -m ruff check app tests tests_ui
 
       - name: mypy (Typen, app/)
         run: python -m mypy
 
       - name: pytest (Testsuite)
         run: python -m pytest tests/
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements.txt -r requirements-dev.txt
+
+      - name: Chromium installieren
+        run: python -m playwright install --with-deps chromium
+
+      - name: Oberflächen-Tests (tests_ui)
+        run: python -m pytest tests_ui
+
+      - name: Screenshots + Server-Log bei Fehlern
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-artifacts
+          path: ui-artifacts/
+          if-no-files-found: ignore
 
   docker:
     runs-on: ubuntu-latest
