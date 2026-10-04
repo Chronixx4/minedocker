@@ -156,6 +156,7 @@ Dashboard auch bei Crash-Loops automatisch weiter.
 | 19132 | UDP | Bedrock/Geyser (optional) | ja |
 | 25575 | TCP | RCON (optional, **nicht** öffnen) | nein |
 | 8080 | TCP | Dashboard | **nein** — nur LAN/VPN |
+| Spiel-Port + 2000 (z. B. 27570) | TCP | Live-Karte (BlueMap), nur wenn aktiviert | **nein** — ohne Login, nur LAN/VPN |
 
 - **Heimnetz:** feste interne IP für den Server-Host (DHCP-Reservierung) →
   Router-Portweiterleitung 25565/tcp auf diese IP → Host-Firewall:
@@ -170,12 +171,22 @@ Dashboard auch bei Crash-Loops automatisch weiter.
   Host veröffentlicht. Port-Weiterleitung am NAS-Router wie oben.
 - **Dashboard niemals direkt ins Internet** — nur VPN (WireGuard/Tailscale)
   oder Reverse-Proxy mit Auth; optional `DASHBOARD_API_KEY` setzen.
+- **Live-Karte:** Der BlueMap-Webserver hat **keine eigene Anmeldung** — jeder,
+  der den Port erreicht, sieht die ganze Welt (Basen, Koordinaten). Den Port
+  nicht am Router weiterleiten; wer die Karte öffentlich zeigen will, stellt
+  sie hinter einen Reverse-Proxy mit Auth.
 
 ---
 
 ## 5. Backups (automatisch)
 
 Kern: `world*/`, `configs/`, `mods/`, `server.properties`, `eula.txt`.
+
+Dashboard-Backups (manuell oder per Zeitplan) schalten bei laufendem Server per
+RCON vorher das Auto-Speichern ab (`save-off`, `save-all flush`) und danach
+wieder an (`save-on`) — so landen keine halb geschriebenen Regionen im
+Archiv. Die Renderdaten der Live-Karte (`bluemap/`) werden nicht gesichert;
+BlueMap rendert sie nach einem Restore neu.
 3-2-1-Regel: 3 Kopien, 2 Medien, 1 extern.
 
 **Docker/Volume (dieses Projekt):**

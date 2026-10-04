@@ -30,10 +30,14 @@ _TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$")
 _META_FILE = "instance.json"
 _MAX_TAGS = 8
 _LOCK = threading.Lock()
+# Schützt das Lesen-Ändern-Schreiben von instance.json (z. B. set_status aus
+# Watchdog/Zeitplaner parallel zu Dashboard-Aktionen). RLock + nur innerhalb
+# von _LOCK genommen (nie umgekehrt) → keine Verklemmung.
+_META_LOCK = threading.RLock()
 _MAX_JVM_OPTS = 2000
 # Beim Klonen übersprungene Einträge: Metadaten (neu erzeugt) und
 # Modpack-Archive (nur Installations-Quellen, spart doppelten Platz)
-_CLONE_SKIP = shutil.ignore_patterns(_META_FILE, _META_FILE + ".tmp", "packs")
+_CLONE_SKIP = shutil.ignore_patterns(_META_FILE, _META_FILE + ".tmp", _META_FILE + ".*.tmp", "packs")
 
 # Container-Konfiguration wird von runtime.py gelesen
 SERVER_PROPERTIES_TEMPLATE = """# Erstellt vom Minecraft-Dashboard
@@ -80,11 +84,15 @@ def _load_meta(instance_id: str) -> dict:
 def _save_meta(instance: dict) -> None:
     directory = instance_dir(instance["id"])
     directory.mkdir(parents=True, exist_ok=True)
-    tmp = directory / (_META_FILE + ".tmp")
+    # eigene Temp-Datei je Schreibvorgang: zwei gleichzeitige Saves dürfen
+    # sich nicht gegenseitig die halb geschriebene Datei wegnehmen
+    tmp = directory / f"{_META_FILE}.{threading.get_ident()}.tmp"
     try:
-        tmp.write_text(json.dumps(instance, indent=2), encoding="utf-8")
-        os.replace(tmp, directory / _META_FILE)
+        with _META_LOCK:
+            tmp.write_text(json.dumps(instance, indent=2), encoding="utf-8")
+            os.replace(tmp, directory / _META_FILE)
     except OSError as exc:
+        tmp.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=f"Instanz-Metadaten nicht schreibbar: {exc}")
 
 
@@ -316,10 +324,11 @@ def set_status(instance_id: str, status: str, error: str | None = None) -> None:
     """Setzt den Verwaltungsstatus einer Instanz (stopped/starting/running/error)."""
     if status not in ("stopped", "starting", "running", "error"):
         raise ValueError(f"Unbekannter Status: {status}")
-    instance = _load_meta(instance_id)
-    instance["status"] = status
-    instance["error"] = error
-    _save_meta(instance)
+    with _META_LOCK:
+        instance = _load_meta(instance_id)
+        instance["status"] = status
+        instance["error"] = error
+        _save_meta(instance)
 
 
 def update_settings(instance_id: str, *, name=None, memory=None,

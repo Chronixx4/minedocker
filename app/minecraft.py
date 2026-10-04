@@ -1,7 +1,6 @@
-"""Server-Status via Minecraft Server List Ping und Prozessstatistik via psutil.
+"""Server-Status via Minecraft Server List Ping (nur Standardbibliothek).
 
-Beides ohne schwergewichtige Abhängigkeiten: SLP nutzt nur die Standardbibliothek,
-psutil ist die einzige externe Abhängigkeit (im Docker-Image enthalten).
+CPU/RAM der Server liefert runtime.py über den Docker-Socket.
 """
 import json
 import socket
@@ -113,39 +112,4 @@ def server_status(host: str, port: int, timeout: float = _SLP_TIMEOUT) -> dict:
             "sample": sample,
         },
         "error": None,
-    }
-
-
-def process_stats() -> dict:
-    """CPU/RAM aller sichtbaren Java-Prozesse. Voraussetzung: Dashboard-Container
-    teilt den PID-Namespace mit dem Minecraft-Container (pid: service:minecraft)."""
-    try:
-        import psutil
-    except ImportError:
-        return {"found": False, "reason": "psutil nicht installiert",
-                "cpu_percent": 0.0, "ram_mb": 0.0, "processes": 0}
-
-    java_procs = []
-    for proc in psutil.process_iter(["pid", "name"]):
-        name = (proc.info.get("name") or "").lower()
-        if name.startswith("java"):
-            java_procs.append(proc)
-    if not java_procs:
-        return {"found": False, "reason": "Kein Java-Prozess sichtbar (PID-Namespace?)",
-                "cpu_percent": 0.0, "ram_mb": 0.0, "processes": 0}
-
-    cpu_total = 0.0
-    rss_total = 0
-    for proc in java_procs:
-        try:
-            cpu_total += proc.cpu_percent(None)  # seit letztem Aufruf
-            rss_total += proc.memory_info().rss
-        except Exception:
-            continue
-    cores = psutil.cpu_count(logical=True) or 1
-    return {
-        "found": True,
-        "cpu_percent": round(min(cpu_total / cores, 100.0), 1),
-        "ram_mb": round(rss_total / (1024 * 1024), 1),
-        "processes": len(java_procs),
     }
