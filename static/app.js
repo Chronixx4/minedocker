@@ -102,10 +102,45 @@
   }
 
   /* ---------- UI-Helfer ---------- */
+  /* 8×8-Pixel-Icons als SVG-Data-URI (ein Zeichen = ein Pixel, "." = leer) */
+  const PIXEL_COLORS = {
+    g: "#5ccf4a", G: "#3e9a32", d: "#7a5434", D: "#5a3c24", s: "#a0a0a0", S: "#6b6b6b",
+    k: "#1b1b1b", w: "#f2f2f2", y: "#f6c544", Y: "#c8961e", b: "#5fd8e6", r: "#ff5b4f",
+    R: "#a8281e", t: "#c8a26a", o: "#e88a3a", e: "#3fd47a",
+  };
+  function pixelIcon(rows) {
+    let rects = "";
+    rows.forEach((row, y) => [...row].forEach((c, x) => {
+      if (c !== ".") rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${PIXEL_COLORS[c]}"/>`;
+    }));
+    return "data:image/svg+xml;utf8," + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges">${rects}</svg>`);
+  }
+
+  // Hinweise im Stil von „Fortschritt erzielt!“: Pixel-Icon, Titel, Text
+  const TOAST_STYLE = {
+    success: ["Erledigt!", ["...e....", "..eee...", ".eewee..", "eeweeee.", ".eeeee..", "..eee...", "...e....", "........"]],
+    error: ["Fehler", ["........", "..rr....", ".rRRr...", "rRRRRr..", ".rRRrr..", "..rr.rr.", "......r.", "........"]],
+    info: ["Hinweis", [".RRRRRR.", ".RwwwwR.", ".RwkkwR.", ".RwwwwR.", ".RwkkwR.", ".RwwwwR.", ".RRRRRR.", "..YYYY.."]],
+  };
+  const toastIcons = {};
   function toast(message, type = "info") {
+    const [title, rows] = TOAST_STYLE[type] || TOAST_STYLE.info;
     const el = document.createElement("div");
     el.className = `toast ${type}`;
-    el.textContent = message; // textContent schützt vor XSS
+    el.setAttribute("role", type === "error" ? "alert" : "status");
+    const icon = document.createElement("img");
+    icon.className = "toast-icon";
+    icon.alt = "";
+    icon.src = toastIcons[type] ||= pixelIcon(rows);
+    const body = document.createElement("div");
+    const head = document.createElement("b");
+    head.className = "toast-title";
+    head.textContent = title;
+    const text = document.createElement("span");
+    text.textContent = message; // textContent schützt vor XSS
+    body.append(head, text);
+    el.append(icon, body);
     $("#toasts").appendChild(el);
     setTimeout(() => el.remove(), 4500);
   }
@@ -2518,6 +2553,7 @@
         toast(`${data.updatable} Mod-Update(s) verfügbar.`, "success");
       }
       applyModFilter(); // Update-Chips in der Mod-Liste auffrischen
+      updateHotbarCounts();
     } catch (e) {
       modUpdateSetError(`Update-Check fehlgeschlagen: ${e.message}`);
     } finally {
@@ -4346,9 +4382,9 @@
   async function loadRconPlayers() {
     show($("#rcon-error"), false);
     const hint = $("#rcon-hint");
+    const list = $("#rcon-players");
     try {
       const data = await api(`/api/instances/${state.detailId}/players`);
-      const list = $("#rcon-players");
       list.textContent = "";
       const names = data.names || [];
       setText(hint, data.online != null
@@ -4356,16 +4392,19 @@
       show($("#rcon-players-empty"), names.length === 0);
       for (const name of names) {
         const node = document.createElement("li");
-        node.className = "mod-row";
+        node.className = "player-card";
         const info = document.createElement("div");
-        info.className = "mod-info";
+        info.className = "player-card-head";
+        const face = document.createElement("img");
+        face.src = playerFace(name);
+        face.alt = "";
         const nm = document.createElement("span");
-        nm.className = "mod-name";
+        nm.className = "player-card-name";
         nm.textContent = name;
         nm.title = name;
-        info.appendChild(nm);
+        info.append(face, nm);
         const btns = document.createElement("div");
-        btns.className = "row";
+        btns.className = "player-card-actions";
         const mkBtn = (label, action, cls = "", title = "") => {
           const b = document.createElement("button");
           b.className = `btn${cls ? ` ${cls}` : ""}`.trim();
@@ -4374,9 +4413,9 @@
           b.addEventListener("click", (e) => rconAction(action, name, e.target));
           btns.appendChild(b);
         };
-        mkBtn("OP", "op", "", "Operator-Rechte geben");
-        mkBtn("Kick", "kick", "", "Spieler kicken");
-        mkBtn("Ban", "ban", "danger", "Spieler bannen");
+        mkBtn("OP", "op", "small-btn", "Operator-Rechte geben");
+        mkBtn("Kick", "kick", "small-btn", "Spieler kicken");
+        mkBtn("Ban", "ban", "small-btn danger", "Spieler bannen");
         node.append(info, btns);
         list.appendChild(node);
       }
@@ -5144,20 +5183,6 @@
     ["einstellungen", "Einstellungen", "anvil"],
   ];
 
-  /* 8×8-Pixel-Icons als SVG-Data-URI (ein Zeichen = ein Pixel, "." = leer) */
-  const PIXEL_COLORS = {
-    g: "#5ccf4a", G: "#3e9a32", d: "#7a5434", D: "#5a3c24", s: "#a0a0a0", S: "#6b6b6b",
-    k: "#1b1b1b", w: "#f2f2f2", y: "#f6c544", Y: "#c8961e", b: "#5fd8e6", r: "#ff5b4f",
-    R: "#a8281e", t: "#c8a26a", o: "#e88a3a",
-  };
-  function pixelIcon(rows) {
-    let rects = "";
-    rows.forEach((row, y) => [...row].forEach((c, x) => {
-      if (c !== ".") rects += `<rect x="${x}" y="${y}" width="1" height="1" fill="${PIXEL_COLORS[c]}"/>`;
-    }));
-    return "data:image/svg+xml;utf8," + encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges">${rects}</svg>`);
-  }
   const SLOT_ICONS = {
     compass: pixelIcon(["..ssss..", ".sYYYYs.", "sYyrryYs", "sYyrRyYs", "sYybbyYs", "sYybbyYs", ".sYYYYs.", "..ssss.."]),
     cmd: pixelIcon(["oooooooo", "oSSSSSSo", "oSwSSSSo", "oSSwSSSo", "oSwSSSSo", "oSSSwwSo", "oSSSSSSo", "oooooooo"]),
@@ -5257,6 +5282,18 @@
     });
     document.querySelectorAll("#ws-panels .ws-panel").forEach((p) =>
       show(p, p.dataset.wsPanel === key));
+    // Das Live-Log gibt es nur einmal: in der Konsole groß über den
+    // Befehlen, sonst in der Übersicht über dem Chat
+    const logs = document.querySelector(".ws-logcol");
+    if (logs) {
+      if (key === "konsole") document.querySelector('.ws-panel[data-ws-panel="konsole"]')?.prepend(logs);
+      else if (logs.parentElement?.id !== "ws-ov-main") $("#ws-ov-main")?.prepend(logs);
+    }
+    // Spieler-Slot: Liste direkt laden, wenn der Server läuft
+    if (key === "spieler" && state.detailId
+        && instStateKey(currentDetailInst() || state.detailData || {}) === "running") {
+      loadRconPlayers();
+    }
     if (announce) {
       // Name des Slots kurz über der Hotbar einblenden (wie im Spiel)
       const label = WS_TABS.find(([k]) => k === key)?.[1] || "";
@@ -5284,6 +5321,13 @@
     const inst = state.detailId ? currentDetailInst() : null;
     set("spieler", inst ? liveEntry(inst)?.ping?.players?.online || 0 : 0);
     set("mods", state.detailData?.mods?.length || 0);
+    const updates = Object.values(state.detailUpdates || {})
+      .filter((u) => u?.status === "update_available").length;
+    const modsSlot = document.querySelector('#ws-tabs .slot[data-ws-tab="mods"]');
+    if (modsSlot) {
+      modsSlot.classList.toggle("has-update", updates > 0);
+      modsSlot.title = `Mods & Packs (Taste 4)${updates ? ` · ${updates} Update(s) verfügbar` : ""}`;
+    }
   }
 
   /* Sortiert die Detail-Boxen einmalig in die Workspace-Panels um.
@@ -5319,7 +5363,7 @@
     const modsPanel = document.querySelector('.ws-panel[data-ws-panel="mods"]');
     if (modsBox && modsPanel) {
       modsBox.classList.add("ws-modsbox");
-      modsPanel.appendChild(modsBox);
+      modsPanel.prepend(modsBox); // installierte Mods vor Modpack-Kästen
     }
     const logsBox = document.querySelector(".ws-logcol");
     const logsTarget = $("#ws-ov-main"); // Live-Log über dem Chat

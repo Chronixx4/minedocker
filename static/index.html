@@ -650,11 +650,11 @@
 
           <!-- Spieler verwalten (RCON: OP/Kick/Ban) -->
           <div class="upload-box">
-            <h3>Spieler verwalten <span class="muted small">(RCON)</span>
+            <h3>Spieler online <span class="muted small">(RCON)</span>
               <button id="rcon-reload" class="btn small-btn" title="Online-Spieler laden">Spieler laden</button>
             </h3>
             <p class="muted small" id="rcon-hint">Funktioniert nur bei laufendem Server. Bestehende Server müssen einmal neu gestartet werden, damit RCON aktiv ist.</p>
-            <ul id="rcon-players" class="mod-list compact"></ul>
+            <ul id="rcon-players" class="player-grid"></ul>
             <p id="rcon-players-empty" class="muted small hidden">Niemand online.</p>
             <div class="rcon-actions admin-only">
               <input id="rcon-target" class="search-input" type="text"
@@ -674,7 +674,7 @@
 
           <!-- Freie RCON-Konsole -->
           <div class="upload-box">
-            <h3>Konsole <span class="muted small" id="console-mode"></span></h3>
+            <h3>Befehle <span class="muted small" id="console-mode"></span></h3>
             <p class="muted small" id="console-hint">Führt einen Befehl über RCON aus
               (nur bei laufendem Server).</p>
             <div class="rcon-actions admin-only">
