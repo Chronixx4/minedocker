@@ -349,43 +349,65 @@
       <div id="detail-error" class="err hidden"></div>
       <div id="ws-panels" class="ws-panels">
         <div class="ws-panel hidden" data-ws-panel="uebersicht">
-          <div class="ws-top">
-            <div class="ws-box">
-              <h3>Server-Informationen</h3>
-              <div id="detail-info" class="detail-info"></div>
-              <div class="ws-metrics">
-                <div class="metric">
-                  <div class="metric-head"><span>CPU</span><span id="ws-cpu-val" class="muted small">–</span></div>
-                  <div class="bar"><div id="ws-cpu-bar" class="bar-fill" style="width:0%"></div></div>
-                </div>
-                <div class="metric">
-                  <div class="metric-head"><span>RAM</span><span id="ws-ram-val" class="muted small">–</span></div>
-                  <div class="bar"><div id="ws-ram-bar" class="bar-fill ram" style="width:0%"></div></div>
-                </div>
-              </div>
+          <!-- Live-Werte als XP-Leisten -->
+          <div class="ws-meters">
+            <div class="ws-meter">
+              <div class="ws-meter-head"><span class="ws-meter-k">CPU</span><span id="ws-cpu-val" class="ws-meter-v">–</span></div>
+              <div class="bar"><div id="ws-cpu-bar" class="bar-fill" style="width:0%"></div></div>
+              <div class="spark" id="ws-cpu-spark" title="CPU-Verlauf"></div>
             </div>
-            <div class="ws-box">
-              <h3>Chat &amp; Autostart</h3>
+            <div class="ws-meter">
+              <div class="ws-meter-head"><span class="ws-meter-k">RAM</span><span id="ws-ram-val" class="ws-meter-v">–</span></div>
+              <div class="bar"><div id="ws-ram-bar" class="bar-fill ram" style="width:0%"></div></div>
+              <div class="spark ram" id="ws-ram-spark" title="RAM-Verlauf"></div>
+            </div>
+            <div class="ws-meter">
+              <div class="ws-meter-head"><span class="ws-meter-k">Spieler</span><span id="ws-players-val" class="ws-meter-v">–</span></div>
+              <div class="bar"><div id="ws-players-bar" class="bar-fill" style="width:0%"></div></div>
+              <p class="muted small ws-meter-sub" id="ws-version">–</p>
+            </div>
+            <div class="ws-meter">
+              <div class="ws-meter-head"><span class="ws-meter-k">Adresse</span></div>
+              <button id="ws-addr" class="ws-addr" type="button" title="Adresse kopieren">–</button>
+              <p class="muted small ws-meter-sub">Zum Kopieren anklicken</p>
+            </div>
+          </div>
+
+          <div class="ws-ov-grid">
+            <!-- Live-Log (wird beim Start hier einsortiert) + Chat -->
+            <div class="ws-ov-main" id="ws-ov-main">
               <div class="ws-chat">
                 <input id="ws-chat-input" class="search-input" type="text" maxlength="256"
                        placeholder="Nachricht an alle Spieler (say …)" autocomplete="off" spellcheck="false">
                 <button id="ws-chat-send" class="btn admin-only">Senden</button>
               </div>
-              <label class="check" for="ws-autostart">
-                <input type="checkbox" id="ws-autostart">
-                Beim Dashboard-Start automatisch starten
-              </label>
               <div id="ws-controls-error" class="err hidden"></div>
             </div>
-            <div class="ws-box">
-              <h3>Backups
-                <button id="ws-backups-open" class="btn small-btn" title="Backup-Verwaltung öffnen">Alle anzeigen</button>
-              </h3>
-              <p class="muted small" id="bk-mini-summary">–</p>
-              <div class="row">
-                <button id="ws-backup-now" class="btn primary admin-only">Backup erstellen</button>
+            <div class="ws-ov-side">
+              <div class="ws-box">
+                <h3>Online <span id="ws-online-count" class="muted small"></span></h3>
+                <ul id="ws-online-list" class="ws-online"></ul>
               </div>
-              <ul id="bk-mini-list" class="mod-list compact"></ul>
+              <div class="ws-box">
+                <h3>Backups
+                  <button id="ws-backups-open" class="btn small-btn" title="Backup-Verwaltung öffnen">Alle anzeigen</button>
+                </h3>
+                <p class="muted small" id="bk-mini-summary">–</p>
+                <div class="row">
+                  <button id="ws-backup-now" class="btn primary admin-only">Backup erstellen</button>
+                </div>
+                <ul id="bk-mini-list" class="mod-list compact"></ul>
+              </div>
+              <div class="ws-box">
+                <label class="check" for="ws-autostart">
+                  <input type="checkbox" id="ws-autostart">
+                  Beim Dashboard-Start automatisch starten
+                </label>
+                <details class="ws-details">
+                  <summary>Server-Details</summary>
+                  <div id="detail-info" class="detail-info"></div>
+                </details>
+              </div>
             </div>
           </div>
         </div>
@@ -762,7 +784,7 @@
           <p id="detail-mods-empty" class="empty muted hidden">Keine Mods/Modpacks installiert.</p>
         </div>
         <div class="ws-logcol">
-          <h3>Logs
+          <h3>Live-Log
             <button id="detail-logs-reload" class="btn small-btn">Aktualisieren</button>
           </h3>
           <pre id="detail-logs" class="logs">–</pre>

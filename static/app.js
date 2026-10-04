@@ -1122,6 +1122,8 @@
     renderOverviewStats(list);
     renderOverviewCards();
     renderResources();
+    updateWsOverview();
+    updateHotbarCounts();
   }
 
   async function refreshOverview() {
@@ -2140,6 +2142,7 @@
     $("#detail-icon").src = serverBlockIcon(known?.name || id);
     syncHotbar();
     renderInstTabs(state.ovInstances?.instances || []);
+    updateWsOverview();
     updateWsControls();
     updateWsPerf();
     updateInstSelection(); // Karte im Server-Tab hervorheben
@@ -2276,6 +2279,7 @@
       renderDetailMods(detail.mods || []);
       if (!$("#detail-icon").src.startsWith("blob:")) $("#detail-icon").src = serverBlockIcon(detail.name);
       updateHotbarCounts();
+      updateWsOverview();
       state.detailRunning = !!detail.container?.running;
       setText($("#pack-target"),
         `Ziel: ${detail.loader} ${detail.game_version}${detail.loader_version ? ` (${detail.loader_version})` : ""}`);
@@ -5178,6 +5182,70 @@
       `<rect x="2" y="5" width="1" height="1" fill="#ffffff22"/><rect x="5" y="6" width="2" height="1" fill="#00000033"/></svg>`);
   }
 
+  /* Pixel-Kopf je Spielername (stabil, ohne externe Skin-Dienste) */
+  function playerFace(name) {
+    let h = 0;
+    for (const c of String(name || "")) h = (h * 33 + c.charCodeAt(0)) >>> 0;
+    const skin = ["#c58c6a", "#e2b28c", "#8d5a3b", "#f0caa6"][h % 4];
+    const hair = ["#2d1e12", "#141414", "#b5651d", "#dcc27a", "#5b3a8c", "#3c6e3a"][(h >> 3) % 6];
+    const eye = ["#3b6fd4", "#2e8b57", "#5a3c24"][(h >> 6) % 3];
+    const r = (x, y, w, hh, f) => `<rect x="${x}" y="${y}" width="${w}" height="${hh}" fill="${f}"/>`;
+    return "data:image/svg+xml;utf8," + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges">` +
+      r(0, 0, 8, 8, skin) + r(0, 0, 8, 2, hair) + r(0, 2, 1, 1, hair) + r(7, 2, 1, 1, hair) +
+      r(1, 4, 2, 1, "#fff") + r(5, 4, 2, 1, "#fff") + r(2, 4, 1, 1, eye) + r(5, 4, 1, 1, eye) +
+      r(2, 6, 4, 1, "#7a4a3a") + "</svg>");
+  }
+
+  /* Übersicht-Slot: Spieler-Leiste, Version, Adresse, Online-Liste */
+  function updateWsOverview() {
+    if (!state.detailId) return;
+    const inst = currentDetailInst() || state.detailData;
+    if (!inst) return;
+    const running = instStateKey(inst) === "running";
+    const ping = (running && (liveEntry(inst)?.ping || state.detailData?.ping)) || null;
+    const online = ping?.online ? ping.players?.online || 0 : 0;
+    const max = ping?.online ? ping.players?.max || 0 : 0;
+    setText($("#ws-players-val"), ping?.online ? `${online} / ${max}` : "–");
+    $("#ws-players-bar").style.width = max ? `${Math.min(100, (online / max) * 100)}%` : "0%";
+    setText($("#ws-version"), ping?.online
+      ? (ping.version || `Minecraft ${inst.game_version}`)
+      : (running ? "Server antwortet noch nicht" : "Server ist offline"));
+    setText($("#ws-addr"), hostFor(inst));
+
+    const list = $("#ws-online-list");
+    list.textContent = "";
+    setText($("#ws-online-count"), ping?.online ? `${online}/${max}` : "");
+    const names = (ping?.players?.sample || []).map((p) => p.name).filter(Boolean);
+    if (!ping?.online || !online) {
+      const li = document.createElement("li");
+      li.className = "ws-online-empty muted small";
+      li.textContent = !running ? "Server ist offline."
+        : !ping?.online ? "Warte auf Antwort vom Server …"
+          : "Gerade ist niemand online.";
+      list.appendChild(li);
+      return;
+    }
+    for (const name of names) {
+      const li = document.createElement("li");
+      const img = document.createElement("img");
+      img.src = playerFace(name);
+      img.alt = "";
+      const span = document.createElement("span");
+      span.textContent = name;
+      li.append(img, span);
+      list.appendChild(li);
+    }
+    if (online > names.length) {
+      const li = document.createElement("li");
+      li.className = "ws-online-empty muted small";
+      li.textContent = names.length
+        ? `+ ${online - names.length} weitere`
+        : `${online} Spieler online (Namen verbirgt der Server)`;
+      list.appendChild(li);
+    }
+  }
+
   let slotNameTimer = null;
   function activateWsTab(key, announce = false) {
     state.wsTab = key;
@@ -5254,8 +5322,8 @@
       modsPanel.appendChild(modsBox);
     }
     const logsBox = document.querySelector(".ws-logcol");
-    const logsPanel = document.querySelector('.ws-panel[data-ws-panel="uebersicht"]');
-    if (logsBox && logsPanel) logsPanel.appendChild(logsBox);
+    const logsTarget = $("#ws-ov-main"); // Live-Log über dem Chat
+    if (logsBox && logsTarget) logsTarget.prepend(logsBox);
     document.querySelector("#inst-detail .detail-grid")?.remove();
 
     // Hotbar-Slots aufbauen
@@ -5396,6 +5464,9 @@
       setText($("#ws-ram-val"), "–");
       $("#ws-ram-bar").style.width = "0%";
     }
+    const hist = state.ovHistory.cont[`mc-inst-${state.detailId}`];
+    setSpark("#ws-cpu-spark", hist?.cpu || [], "", 100);
+    setSpark("#ws-ram-spark", hist?.ram || [], "", res?.ram_limit_mb || null);
   }
 
   for (const [sel, action] of [
@@ -5435,6 +5506,10 @@
     }
   }
   $("#ws-chat-send").addEventListener("click", sendWsChat);
+  $("#ws-addr").addEventListener("click", () => {
+    const inst = currentDetailInst() || state.detailData;
+    if (inst) copyAddress(inst);
+  });
   $("#ws-chat-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
