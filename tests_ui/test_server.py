@@ -143,3 +143,34 @@ def test_speicher_wird_nachgeladen(page, make_instance):
     _open(page, inst)
     expect(page.locator("#detail-info")).to_contain_text("Welt 3")
     expect(page.locator("#detail-info")).not_to_contain_text("wird berechnet")
+
+
+def test_server_loeschen_aus_einstellungen(page, make_instance):
+    inst = make_instance("Wegwerf-Welt")
+    _open(page, inst)
+    page.keyboard.press("9")  # Einstellungen
+    page.locator("#inst-delete-btn").click()
+    dlg = page.locator("#confirm-dialog")
+    expect(dlg).to_be_visible()
+    expect(page.locator("#cd-title")).to_contain_text("Wegwerf-Welt")
+    ok = page.locator("#cd-ok")
+    expect(ok).to_be_disabled()
+    page.locator("#cd-type").fill("Wegwerf")
+    expect(ok).to_be_disabled()
+    page.locator("#cd-type").fill("Wegwerf-Welt")
+    expect(ok).to_be_enabled()
+    ok.click()
+    expect(page.locator("#toasts")).to_contain_text('Server "Wegwerf-Welt" gelöscht.')
+    expect(page.locator(f'#inst-tabs .inst-tab[data-id="{inst["id"]}"]')).to_have_count(0)
+    expect(page.locator("#inst-detail")).to_be_hidden()
+
+
+def test_server_loeschen_abbrechen(page, make_instance):
+    inst = make_instance("Bleibt-Da")
+    _open(page, inst)
+    page.keyboard.press("9")
+    page.locator("#inst-delete-btn").click()
+    page.locator("#cd-cancel").click()
+    expect(page.locator("#confirm-dialog")).to_be_hidden()
+    expect(page.locator("#detail-title")).to_have_text("Bleibt-Da")
+    expect(page.locator(f'#inst-tabs .inst-tab[data-id="{inst["id"]}"]')).to_have_count(1)
