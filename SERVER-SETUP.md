@@ -80,8 +80,11 @@ Installationsskript. **Kein Vanilla-Server vorher aufsetzen.**
 - **Tab „Modpacks"** → Ziel-Instanz + Quelle (Modrinth/CurseForge) → Pack
   suchen → **Installieren**. Kompatibilität (Loader + MC-Version) wird
   vorab geprüft;parallele Mod-Downloads mit SHA1-Prüfung, Fortschrittsbalken.
-- **Eigener Server-Pack-Upload:** `.mrpack` (Modrinth) oder `.zip` mit
-  `manifest.json` (CurseForge) direkt im Tab.
+- **Eigener Pack-Upload (Tab „Upload“):** `.mrpack` (Modrinth), CurseForge-
+  Client-Export (`.zip` mit `manifest.json`) oder CurseForge-**Server Files**
+  (`.zip` mit `mods/`-Ordner, z. B. ATM10 `ServerFiles-x.y.zip`) einfach in die
+  Ablagefläche ziehen. Vor der Installation zeigt eine Vorschau Minecraft-
+  Version, Loader, Java, Anzahl Mods und einen RAM-Vorschlag.
 - **Keine Vanilla-Vorbereitung, keine Java-/Loader-Handarbeit:** Die Instanz
   startet direkt mit gewähltem Loader; Java wählt das itzg-Image passend.
   Loader nur als **Beta** verfügbar → Dialog wählt automatisch die neueste
@@ -102,12 +105,18 @@ im UI gibt es dazu einen Hinweis). Zwei Wege funktionieren trotzdem ohne Key:
     passende Datei → **Download** (Client-Zip mit `manifest.json`), oder
   - auf derselben Datei-Seite unter *Additional Files* → **Server Pack**
     (.zip) — meist mit weniger Client-only-Mods.
-  Beide Varianten laufen durch denselben Installer: Der Upload-Pfad akzeptiert
-  beides und lädt die im `manifest.json` gelisteten Mods selbst nach
-  (öffentlicher Website-Redirect, **kein API-Key nötig**). Alternativ: Export
-  aus dem CurseForge-Launcher.
-  Hochladen im Tab „Modpacks" (bestehende Instanz) oder über
-  **„Neuer Server aus Upload"** (neue Instanz).
+  Beide Varianten laufen durch denselben Installer. **Server Files sind der
+  bessere Weg:** Sie werden direkt entpackt (Loader/MC-Version aus
+  `variables.txt`, dem Installer-Namen, `libraries/` oder den Mods), es gibt
+  keine Einzeldownloads und keine Client-Mods. Beim Client-Export lädt das
+  Dashboard die im `manifest.json` gelisteten Mods selbst nach (öffentlicher
+  Website-Redirect, **kein API-Key nötig**); schlagen einzelne Downloads fehl,
+  wird der Rest trotzdem installiert und „Nur fehlende Mods erneut laden“
+  holt den Rest nach. Alternativ: Export aus dem CurseForge-Launcher.
+  Hochladen im Tab „Upload“: Ziel „Neuen Server aus dem Pack erstellen“ oder
+  eine bestehende Instanz. Ohne RAM-Angabe bekommt ein neuer Server die
+  Empfehlung nach Mod-Anzahl (unter 60 Mods 4G, unter 150 6G, unter 250 8G,
+  sonst 12G).
 - **Einzel-Mods von CurseForge:** Datei auf der Website herunterladen →
   Datei-Browser der Instanz → `mods/` hochladen.
 
