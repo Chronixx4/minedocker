@@ -17,7 +17,8 @@
 #   begrenzt, damit sie Instanzen nie verhungern lassen (siehe SERVER-SETUP.md §1)
 # - Log-Rotation (json-file, max-size/max-file) gegen unbegrenzte Logfiles
 # - Backup-Daemon: alle 6 h automatisch, 14 Tage Retention,
-#   Volume nur lesend gemountet (:ro) (siehe SERVER-SETUP.md §5)
+#   Volume nur lesend gemountet (:ro) (siehe SERVER-SETUP.md §5);
+#   laufende Welten sichert er ohne save-off — dafür Dashboard-Backups nutzen
 # - Security: nur der Spielport + 8080 werden gemappt; Dashboard niemals direkt
 #   ins Internet (VPN/Reverse-Proxy), DASHBOARD_API_KEY setzen!
 #
@@ -140,10 +141,15 @@ services:
 
   backup:
     # Wartungsfreier Backup-Daemon: tar't das gesamte mcdata-Volume (alle
-    # Instanzen + Mods) im 6-h-Takt, behält 14 Tage, legt latest.tgz-Symlink.
-    # Bewusst ohne itzg/mc-backup: jenes blockiert ohne erreichbares RCON —
-    # Instanz-Container laufen hier mit ENABLE_RCON=FALSE. Hinweis §5:
-    # Für 100 % konsistente Weltschnappschüsse Instanz vorher stoppen.
+    # Instanzen, Mods, Benutzer, Einstellungen) im 6-h-Takt, behält 14 Tage,
+    # legt latest.tgz-Symlink. Die Dashboard-eigenen Backups (/data/backups)
+    # werden ausgelassen.
+    # Achtung: Der Daemon kennt die RCON-Passwörter der Instanzen nicht und
+    # sichert laufende Welten daher OHNE save-off/save-all — Regionen, die
+    # gerade geschrieben werden, können im Archiv halb fertig sein. Für
+    # konsistente Welt-Backups die Dashboard-Backups nutzen (Server → Zeitplan
+    # → Backups; schalten vorher per RCON das Auto-Speichern ab, §5). Dieser
+    # Daemon ist die zweite Ebene für Konfiguration und Notfälle.
     image: alpine:3.20
     container_name: mc-backup
     restart: unless-stopped

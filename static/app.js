@@ -2355,6 +2355,7 @@
       setText($("#detail-title"), cached.name);
       $("#jvm-opts").value = cached.jvm_opts || "";
       $("#jvm-aikar").checked = !!cached.use_aikar;
+      $("#jvm-java").value = cached.java || "auto";
       setRamFields(cached.memory);
       state.detailMemory = (cached.memory || "2G").toUpperCase();
       loadSchedule(cached);
@@ -2415,6 +2416,7 @@
       // JVM-Optionen + RAM der Instanz in den Editor laden
       $("#jvm-opts").value = detail.jvm_opts || "";
       $("#jvm-aikar").checked = !!detail.use_aikar;
+      $("#jvm-java").value = detail.java || "auto";
       setRamFields(detail.memory);
       state.detailMemory = (detail.memory || "2G").toUpperCase();
       show($("#jvm-error"), false);
@@ -4042,8 +4044,9 @@
     show($("#map-error"), !!msg);
   }
 
-  function mapUrl(port) {
-    return `http://${location.hostname || "localhost"}:${port}/`;
+  // Karte kommt über den Proxy des Dashboards (nur mit Login erreichbar)
+  function mapUrl(id) {
+    return `/api/instances/${encodeURIComponent(id)}/map/view/`;
   }
 
   function resetMapFrame() {
@@ -4071,35 +4074,30 @@
     show($("#map-restart"), false);
     const open = $("#map-open");
     show(open, !!(st.enabled && st.reachable));
-    if (st.port) open.href = mapUrl(st.port);
+    open.href = mapUrl(id);
     if (!st.supported) {
       setText(info, "Für diesen Server-Typ nicht verfügbar (braucht Fabric, Quilt, Forge, NeoForge, Paper, Spigot oder Bukkit).");
     } else if (!st.enabled) {
       setText(info, "Zeigt die Welt als 3D-Karte im Browser — mit Spielern in Echtzeit. BlueMap wird als "
         + (st.kind === "plugin" ? "Plugin" : "Mod") + " installiert und rendert im Hintergrund (kostet etwas CPU).");
     } else if (!st.server_running) {
-      setText(info, `Aktiv — startet mit dem Server auf Port ${st.port}.`);
+      setText(info, "Aktiv — startet mit dem Server.");
     } else if (!st.reachable) {
-      setText(info, `Server läuft, aber die Karte antwortet noch nicht (Port ${st.port}). `
+      setText(info, "Server läuft, aber die Karte antwortet noch nicht. "
         + "Nach dem Aktivieren einmal neu starten — beim ersten Start lädt BlueMap außerdem die Texturen, das dauert kurz.");
       show($("#map-restart"), true);
     } else {
-      setText(info, `Läuft auf Port ${st.port}. Das erste Rendern dauert je nach Weltgröße eine Weile — die Karte füllt sich nach und nach.`);
+      setText(info, "Läuft. Das erste Rendern dauert je nach Weltgröße eine Weile — die Karte füllt sich nach und nach.");
     }
-    // Einbetten nur, wenn erreichbar, der Welt-Slot sichtbar ist und kein
-    // HTTPS-Dashboard eine HTTP-Karte blockieren würde (Mixed Content)
-    const embed = st.enabled && st.reachable && state.wsTab === "welt"
-      && location.protocol !== "https:";
+    // Einbetten nur, wenn erreichbar und der Welt-Slot sichtbar ist
+    const embed = st.enabled && st.reachable && state.wsTab === "welt";
     if (embed) {
       const frame = $("#map-frame");
-      const url = mapUrl(st.port);
+      const url = mapUrl(id);
       if (frame.getAttribute("src") !== url) frame.setAttribute("src", url);
       show($("#map-frame-wrap"), true);
     } else {
       resetMapFrame();
-      if (st.enabled && st.reachable && location.protocol === "https:") {
-        setText(info, `${info.textContent} Über HTTPS lässt sich die Karte nicht einbetten — „In neuem Tab öffnen“ nutzen.`);
-      }
     }
   }
   $("#map-reload").addEventListener("click", loadMapStatus);
@@ -4670,6 +4668,7 @@
     const body = {
       jvm_opts: $("#jvm-opts").value || "",
       use_aikar: $("#jvm-aikar").checked,
+      java: $("#jvm-java").value || "auto",
     };
     if (memory && memory !== state.detailMemory) body.memory = memory;
     try {

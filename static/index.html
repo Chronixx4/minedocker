@@ -659,6 +659,19 @@
             <p class="muted small">Ram-Limit der Instanz (Container + JVM-Heap).
               Änderungen greifen beim nächsten Start/Neustart; ein laufender Server
               behält sein aktuelles Limit bis dahin.</p>
+            <div class="row">
+              <label class="muted small" for="jvm-java">Java</label>
+              <select id="jvm-java">
+                <option value="auto">Automatisch (passend zur Minecraft-Version)</option>
+                <option value="8">Java 8</option>
+                <option value="11">Java 11</option>
+                <option value="17">Java 17</option>
+                <option value="21">Java 21</option>
+                <option value="25">Java 25</option>
+              </select>
+            </div>
+            <p class="muted small">Automatisch: bis 1.16 Java 8, 1.17 bis 1.20.4 Java 17,
+              ab 1.20.5 Java 21, neuere Versionen das aktuelle Java. Gilt für den nächsten (Neu-)Start.</p>
             <label class="check">
               <input type="checkbox" id="jvm-aikar">
               Aikar-Flags (optimierte GC-Einstellungen für Server)
