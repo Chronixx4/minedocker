@@ -581,3 +581,43 @@ __all__ = [
     "sampler_loop",
     "update_sessions",
 ]
+
+
+def player_sessions(instance: str, player: str, limit: int = 50,
+                    db_path: Path | None = None, now: int | None = None) -> dict:
+    """Sitzungen eines Spielers auf einer Instanz (neueste zuerst), inkl.
+    laufender Sitzung, plus Kennzahlen (Anzahl, längste, Durchschnitt,
+    erste Sicht). Ältere Sitzungen fallen der Aufbewahrungsfrist zum Opfer."""
+    now = int(now or time.time())
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT start_ts, end_ts, seconds FROM player_sessions "
+            "WHERE instance = ? AND player = ? ORDER BY start_ts DESC",
+            (instance, player)).fetchall()
+    sessions: list[dict] = [
+        {"start": int(s), "end": int(e) if e is not None else None,
+         "seconds": int(sec or 0), "open": False} for s, e, sec in rows]
+    with _sessions_lock:
+        current = _OPEN_SESSIONS.get((str(instance), player))
+        if current:
+            sessions.insert(0, {"start": int(current["start"]), "end": None,
+                                "seconds": max(0, now - int(current["start"])),
+                                "open": True})
+    longest = max(sessions, key=lambda s: s["seconds"], default=None)
+    total = sum(s["seconds"] for s in sessions)
+    return {
+        "sessions": sessions[:max(1, limit)],
+        "count": len(sessions),
+        "total_seconds": total,
+        "avg_seconds": total // len(sessions) if sessions else 0,
+        "longest": longest,
+        "first_seen": min((s["start"] for s in sessions), default=None),
+        "current_start": sessions[0]["start"] if sessions and sessions[0]["open"] else None,
+    }
+
+
+def open_session_starts(instance: str) -> dict:
+    """{Spieler: Start der laufenden Sitzung} für eine Instanz."""
+    with _sessions_lock:
+        return {k[1]: int(v["start"]) for k, v in _OPEN_SESSIONS.items()
+                if k[0] == str(instance)}

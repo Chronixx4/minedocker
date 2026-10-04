@@ -836,6 +836,53 @@
             <div id="sched-error" class="err hidden"></div>
           </div>
 
+          <!-- Verbundene Spieler (Live-Tabelle per RCON) -->
+          <div class="upload-box plive-box">
+            <h3>Verbundene Spieler
+              <span class="plive-world muted small">
+                <span id="plive-time" title="Uhrzeit in der Welt">–</span>
+                <span id="plive-weather" title="Wetter (Stand des letzten Speicherns)">–</span>
+              </span>
+              <span id="plive-count" class="muted small"></span>
+              <button id="plive-reload" class="btn small-btn" title="Jetzt aktualisieren">Aktualisieren</button>
+            </h3>
+            <p id="plive-hint" class="muted small">Aktualisiert sich alle 10 Sekunden, solange
+              dieser Bereich offen ist und der Server läuft.</p>
+            <div class="plive-wrap">
+              <table id="plive-table" class="plive-table hidden">
+                <thead>
+                  <tr>
+                    <th>Spieler</th><th>Sitzung</th><th>Position</th><th>Bett</th>
+                    <th title="Leben">Leben</th><th title="Hunger">Hunger</th><th>Level</th>
+                  </tr>
+                </thead>
+                <tbody id="plive-body"></tbody>
+              </table>
+            </div>
+            <p id="plive-empty" class="muted small hidden">Niemand online.</p>
+            <div id="plive-error" class="err hidden"></div>
+          </div>
+
+          <!-- Spieler-Übersicht: alle Spieler, Profil, Statistiken -->
+          <div class="upload-box pl-box">
+            <h3>Spieler <span class="muted small">(alle, die je auf dem Server waren)</span>
+              <button id="pl-reload" class="btn small-btn" title="Liste neu laden">Aktualisieren</button>
+            </h3>
+            <div class="pl-layout">
+              <div class="pl-side">
+                <input id="pl-filter" class="search-input" type="search"
+                       placeholder="Name suchen…" autocomplete="off">
+                <div id="pl-chips" class="pl-chips" role="group" aria-label="Filter"></div>
+                <ul id="pl-list" class="pl-list"></ul>
+                <p id="pl-empty" class="muted small hidden">Noch keine Spieler gefunden.</p>
+              </div>
+              <div id="pl-profile" class="pl-profile">
+                <p class="muted small pl-placeholder">Spieler links auswählen.</p>
+              </div>
+            </div>
+            <div id="pl-error" class="err hidden"></div>
+          </div>
+
           <!-- Spieler verwalten (RCON: OP/Kick/Ban) -->
           <div class="upload-box">
             <h3>Spieler online <span class="muted small">(RCON)</span>

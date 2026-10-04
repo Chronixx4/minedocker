@@ -2992,6 +2992,8 @@
     $("#icon-upload-btn").disabled = true;
     // Datei-Browser zurücksetzen (Wurzel der neuen Instanz laden)
     state.fb = { path: "", entries: [] };
+    // Spieler-Übersicht und Live-Tabelle zurücksetzen
+    plReset();
     // Gamerules zurücksetzen (werden per „Laden" geholt — nur laufend)
     state.grRules = [];
     $("#gr-filter").value = "";
@@ -3038,7 +3040,7 @@
     state.wsLoaded.add(key);
     if (key === "welt") { wsetLoad(); loadWorldInfo(); dpReload(); loadIconPreview(); }
     else if (key === "dateien") fbReload();
-    else if (key === "spieler") loadWhitelist();
+    else if (key === "spieler") { loadWhitelist(); plLoad(); }
     else if (key === "backups") loadBackups();
     else if (key === "mods") { checkPackUpdate(true); loadModTrash(); }
     else if (key === "einstellungen") loadVersionForm();
@@ -6921,6 +6923,447 @@
   document.querySelectorAll("[data-wset-weather]").forEach((btn) =>
     btn.addEventListener("click", () => wsetTimeWeather({ weather: btn.dataset.wsetWeather })));
 
+  /* ---------- Spieler-Übersicht + Live-Tabelle ---------- */
+  function plEl(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  const DIMENSIONS = {
+    "minecraft:overworld": "Oberwelt", "minecraft:the_nether": "Nether",
+    "minecraft:the_end": "End",
+  };
+  const MODES = { survival: "Überleben", creative: "Kreativ", adventure: "Abenteuer", spectator: "Zuschauer" };
+  const WEATHER = { klar: "☀ Klar", regen: "🌧 Regen", gewitter: "⛈ Gewitter" };
+
+  function plPos(pos, dim) {
+    const wrap = plEl("span", "pl-pos");
+    if (!pos) { wrap.textContent = "–"; return wrap; }
+    const d = plEl("span", `pl-dim pl-dim-${(dim || "minecraft:overworld").split(":").pop()}`);
+    d.title = DIMENSIONS[dim] || dim || "Oberwelt";
+    wrap.append(d, ` ${pos.join(", ")}`);
+    return wrap;
+  }
+
+  function plAgo(ts) {
+    if (!ts) return "";
+    const diff = Math.max(0, Date.now() / 1000 - ts);
+    if (diff < 3600) return `vor ${Math.max(1, Math.round(diff / 60))} min`;
+    if (diff < 86400) return `vor ${Math.round(diff / 3600)} h`;
+    if (diff < 86400 * 7) return `vor ${Math.round(diff / 86400)} d`;
+    return new Date(ts * 1000).toLocaleDateString("de-DE");
+  }
+
+  function plKm(m) {
+    if (typeof m !== "number") return "–";
+    return m >= 1000 ? `${(m / 1000).toFixed(1).replace(".", ",")} km` : `${m} m`;
+  }
+
+  state.pl = { players: [], filter: "all", selected: null, profile: null, tab: "profil", running: false };
+  state.plive = { timer: null, busy: false, id: null };
+
+  function plReset() {
+    state.pl = { players: [], filter: "all", selected: null, profile: null, tab: "profil", running: false };
+    $("#pl-filter").value = "";
+    $("#pl-list").textContent = "";
+    $("#pl-chips").textContent = "";
+    const pane = $("#pl-profile");
+    pane.textContent = "";
+    pane.append(plEl("p", "muted small pl-placeholder", "Spieler links auswählen."));
+    authError("#pl-error", "");
+  }
+
+  async function plLoad() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    authError("#pl-error", "");
+    try {
+      const data = await api(`/api/instances/${id}/known-players`);
+      if (state.detailId !== id) return;
+      state.pl.players = data.players || [];
+      state.pl.running = !!data.running;
+      renderPlList();
+      const keep = state.pl.selected
+        && state.pl.players.find((p) => plKey(p) === state.pl.selected);
+      const first = keep || state.pl.players[0];
+      if (first) plSelect(first, false);
+    } catch (e) {
+      authError("#pl-error", `Spieler nicht ladbar: ${e.message}`);
+    }
+  }
+
+  function plKey(p) { return p.uuid || p.name; }
+
+  const PL_FILTERS = [
+    ["all", "Alle", () => true],
+    ["online", "Online", (p) => p.online],
+    ["offline", "Offline", (p) => !p.online],
+    ["whitelist", "Whitelist", (p) => p.whitelisted],
+    ["op", "Operator", (p) => p.op_level > 0],
+    ["banned", "Gebannt", (p) => p.banned],
+  ];
+
+  function renderPlList() {
+    const chips = $("#pl-chips");
+    chips.textContent = "";
+    for (const [key, label, test] of PL_FILTERS) {
+      const count = state.pl.players.filter(test).length;
+      const btn = plEl("button", `pl-chip${state.pl.filter === key ? " active" : ""}`, `${label} (${count})`);
+      btn.type = "button";
+      btn.dataset.plFilter = key;
+      btn.disabled = count === 0 && key !== "all";
+      btn.addEventListener("click", () => { state.pl.filter = key; renderPlList(); });
+      chips.appendChild(btn);
+    }
+    const query = ($("#pl-filter").value || "").trim().toLowerCase();
+    const test = PL_FILTERS.find(([k]) => k === state.pl.filter)?.[2] || (() => true);
+    const list = $("#pl-list");
+    list.textContent = "";
+    const matches = state.pl.players.filter((p) => test(p)
+      && (!query || (p.name || p.uuid || "").toLowerCase().includes(query)));
+    show($("#pl-empty"), matches.length === 0);
+    for (const p of matches) {
+      const li = plEl("li", `pl-item${plKey(p) === state.pl.selected ? " active" : ""}`);
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      const face = plEl("img", "pl-face");
+      face.src = playerFace(p.name || p.uuid);
+      face.alt = "";
+      if (p.online) li.classList.add("is-online");
+      const text = plEl("div", "pl-item-text");
+      const top = plEl("div", "pl-item-top");
+      top.append(plEl("span", "pl-item-name", p.name || `${p.uuid.slice(0, 8)}…`));
+      if (p.op_level > 0) top.append(plEl("span", "pl-badge op", "OP"));
+      if (p.banned) top.append(plEl("span", "pl-badge ban", "Gebannt"));
+      const parts = [p.online ? "online" : plAgo(p.last_seen),
+        p.play_seconds ? `${fmtDuration(p.play_seconds)} gespielt` : "",
+        p.advancements ? `${p.advancements} Fortschritte` : "",
+        p.player_kills ? `${p.player_kills} PvP-Kills` : ""].filter(Boolean);
+      text.append(top, plEl("div", "pl-item-meta muted small", parts.join(" · ")));
+      li.append(face, text);
+      const pick = () => plSelect(p, true);
+      li.addEventListener("click", pick);
+      li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      list.appendChild(li);
+    }
+  }
+
+  async function plSelect(p, scroll) {
+    state.pl.selected = plKey(p);
+    renderPlList();
+    const id = state.detailId;
+    const pane = $("#pl-profile");
+    pane.classList.add("loading");
+    try {
+      const data = await api(`/api/instances/${id}/known-players/${encodeURIComponent(plKey(p))}`);
+      if (state.detailId !== id || state.pl.selected !== plKey(p)) return;
+      state.pl.profile = data;
+      renderPlProfile();
+      if (scroll && window.matchMedia("(max-width: 760px)").matches) {
+        pane.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } catch (e) {
+      authError("#pl-error", `Profil nicht ladbar: ${e.message}`);
+    } finally {
+      pane.classList.remove("loading");
+    }
+  }
+
+  function plBar(label, value, max, cls) {
+    const row = plEl("div", "pl-bar-row");
+    const bar = plEl("div", `pl-bar ${cls}`);
+    const fill = plEl("span");
+    fill.style.width = `${Math.max(0, Math.min(100, ((value ?? 0) / max) * 100))}%`;
+    bar.append(fill);
+    row.append(plEl("span", "pl-bar-label muted small", label), bar,
+      plEl("span", "pl-bar-val", value == null ? "–" : `${value}/${max}`));
+    return row;
+  }
+
+  function plKv(label, value, extra) {
+    const box = plEl("div", "pl-kv");
+    box.append(plEl("span", "muted small", label));
+    const v = plEl("strong", "", null);
+    if (value instanceof Node) v.append(value); else v.textContent = value ?? "–";
+    box.append(v);
+    if (extra) box.append(plEl("span", "muted small", extra));
+    return box;
+  }
+
+  function plTile(label, value, sub, highlight) {
+    const tile = plEl("div", `pl-tile${highlight ? " hl" : ""}`);
+    tile.append(plEl("span", "pl-tile-label muted small", label),
+      plEl("strong", "pl-tile-val", value), plEl("span", "muted small", sub || ""));
+    return tile;
+  }
+
+  function renderPlProfile() {
+    const p = state.pl.profile;
+    const pane = $("#pl-profile");
+    pane.textContent = "";
+    if (!p) return;
+    const v = p.live || p.saved;
+    const s = p.stats || {};
+    const sess = p.sessions || {};
+    // Kopf
+    const head = plEl("div", "pl-head");
+    const face = plEl("img", "pl-head-face");
+    face.src = playerFace(p.name || p.uuid);
+    face.alt = "";
+    const title = plEl("div", "pl-head-text");
+    const nameRow = plEl("div", "pl-head-name");
+    nameRow.append(plEl("h4", "", p.name || "Unbekannt"));
+    nameRow.append(plEl("span", `pl-badge ${p.online ? "on" : "off"}`, p.online ? "Online" : "Offline"));
+    if (p.op_level > 0) nameRow.append(plEl("span", "pl-badge op", `Operator ${p.op_level}`));
+    if (p.whitelisted) nameRow.append(plEl("span", "pl-badge", "Whitelist"));
+    if (p.banned) nameRow.append(plEl("span", "pl-badge ban", "Gebannt"));
+    const sub = [];
+    if (sess.current_start) sub.push(`Sitzung ${fmtDuration(Date.now() / 1000 - sess.current_start)}`);
+    if (sess.first_seen) sub.push(`zuerst gesehen ${new Date(sess.first_seen * 1000).toLocaleDateString("de-DE")}`);
+    if (s.play_seconds) sub.push(`${fmtDuration(s.play_seconds)} gespielt`);
+    title.append(nameRow, plEl("div", "muted small", sub.join(" · ")));
+    if (p.uuid) {
+      const uid = plEl("code", "pl-uuid", p.uuid);
+      uid.title = "UUID";
+      title.append(uid);
+    }
+    head.append(face, title);
+    if (p.online && p.name) {
+      const inv = plEl("button", "btn small-btn", "Inventar");
+      inv.type = "button";
+      inv.addEventListener("click", () => openInventory(p.name));
+      head.append(inv);
+    }
+    pane.append(head);
+    // Tabs
+    const tabs = plEl("div", "pl-tabs");
+    tabs.setAttribute("role", "tablist");
+    const TABS = [["profil", "Profil"], ["sitzungen", "Sitzungen"], ["statistiken", "Statistiken"],
+      ["fortschritte", `Fortschritte (${(p.advancements || []).length})`]];
+    for (const [key, label] of TABS) {
+      const b = plEl("button", `pl-tab${state.pl.tab === key ? " active" : ""}`, label);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.dataset.plTab = key;
+      b.addEventListener("click", () => { state.pl.tab = key; renderPlProfile(); });
+      tabs.append(b);
+    }
+    pane.append(tabs);
+    const body = plEl("div", "pl-tab-body");
+    pane.append(body);
+
+    if (state.pl.tab === "profil") {
+      const vit = plEl("div", "pl-vitals");
+      if (v) {
+        const left = plEl("div", "pl-vitals-bars");
+        left.append(plBar("Leben", v.health, 20, "hp"), plBar("Hunger", v.food, 20, "food"));
+        if (v.saturation != null) left.append(plEl("span", "muted small", `Sättigung ${v.saturation}`));
+        const right = plEl("div", "pl-vitals-grid");
+        right.append(
+          plKv("Level", v.level ?? "–"),
+          plKv("Modus", MODES[v.gamemode] || v.gamemode || "–"),
+          plKv("Blickrichtung", v.facing || "–"),
+          plKv("Position", plPos(v.pos, v.dimension), DIMENSIONS[v.dimension] || ""),
+          plKv("Bett / Spawn", v.bed ? plPos(v.bed.pos, v.bed.dimension) : "keins",
+            v.bed ? DIMENSIONS[v.bed.dimension] || "" : ""),
+        );
+        vit.append(left, right);
+      } else {
+        vit.append(plEl("p", "muted small", "Noch keine gespeicherten Spielerdaten."));
+      }
+      body.append(vit);
+      body.append(plEl("p", "muted small pl-source", p.live
+        ? "Live-Werte vom laufenden Server."
+        : p.saved_at ? `Stand der letzten Speicherung (${fmtDate(p.saved_at)}).` : ""));
+      body.append(plEl("h5", "pl-sub", "Persönliche Rekorde"));
+      const rec = plEl("div", "pl-tiles");
+      rec.append(
+        plTile("Längste Sitzung", sess.longest ? fmtDuration(sess.longest.seconds) : "–",
+          sess.longest ? new Date(sess.longest.start * 1000).toLocaleDateString("de-DE") : "", false),
+        plTile("Mob-Kills", (s.mob_kills ?? 0).toLocaleString("de-DE"), "insgesamt", false),
+        plTile("Diamanten abgebaut", String(s.diamonds ?? 0), "insgesamt", (s.diamonds || 0) >= 100),
+        plTile("Überlebt seit", s.since_death_seconds ? fmtDuration(s.since_death_seconds) : "–",
+          "ohne zu sterben", (s.since_death_seconds || 0) >= 86400),
+        plTile("Strecke", plKm(s.distance_m ?? 0), "insgesamt", (s.distance_m || 0) >= 100000),
+        plTile("Tode", String(s.deaths ?? 0),
+          sess.count ? `${(s.deaths / sess.count || 0).toFixed(1).replace(".", ",")} je Sitzung` : "", false),
+      );
+      body.append(rec);
+      body.append(plEl("h5", "pl-sub", "Auf einen Blick"));
+      const glance = plEl("div", "pl-tiles");
+      const kd = s.deaths ? (s.mob_kills + s.player_kills) / s.deaths : null;
+      const total = p.advancements_total;
+      glance.append(
+        plTile("Sitzungen", `${sess.count || 0}`, sess.count ? `Ø ${fmtDuration(sess.avg_seconds)}` : "", false),
+        plTile("Kampf", (s.mob_kills ?? 0).toLocaleString("de-DE"),
+          `Kills · ${s.player_kills ?? 0} PvP · K/D ${kd == null ? "–" : kd.toFixed(1).replace(".", ",")}`, false),
+        plTile("Erkundung", plKm(s.distance_m ?? 0), `${fmtNumber(s.jumps ?? 0)} Sprünge`, false),
+        plTile("Fortschritte", total ? `${(p.advancements || []).length} / ${total}` : String((p.advancements || []).length),
+          total ? `${Math.round(((p.advancements || []).length / total) * 100)} % geschafft` : "", false),
+      );
+      body.append(glance);
+    } else if (state.pl.tab === "sitzungen") {
+      const list = sess.sessions || [];
+      if (!list.length) {
+        body.append(plEl("p", "muted small", "Noch keine Sitzungen aufgezeichnet. Das Dashboard zeichnet Sitzungen auf, während es läuft."));
+      } else {
+        const table = plEl("table", "pl-table");
+        const thead = plEl("thead");
+        const hr = plEl("tr");
+        for (const h of ["Beginn", "Ende", "Dauer"]) hr.append(plEl("th", "", h));
+        thead.append(hr);
+        const tbody = plEl("tbody");
+        for (const x of list) {
+          const tr = plEl("tr");
+          tr.append(plEl("td", "", fmtDate(x.start)),
+            plEl("td", "", x.open ? "läuft" : fmtDate(x.end)),
+            plEl("td", "", fmtDuration(x.seconds)));
+          tbody.append(tr);
+        }
+        table.append(thead, tbody);
+        body.append(table);
+        if (sess.count > list.length) body.append(plEl("p", "muted small", `Die letzten ${list.length} von ${sess.count} Sitzungen.`));
+      }
+    } else if (state.pl.tab === "statistiken") {
+      if (!Object.keys(s).length) {
+        body.append(plEl("p", "muted small", "Keine Statistik-Datei gefunden."));
+      } else {
+        const grid = plEl("div", "pl-stats");
+        const rows = [
+          ["Spielzeit", fmtDuration(s.play_seconds)], ["Tode", s.deaths],
+          ["Mob-Kills", s.mob_kills], ["PvP-Kills", s.player_kills],
+          ["Schaden ausgeteilt", `${fmtNumber(s.damage_dealt)} ♥`], ["Schaden erlitten", `${fmtNumber(s.damage_taken)} ♥`],
+          ["Blöcke abgebaut", fmtNumber(s.blocks_mined)], ["Diamanten", s.diamonds],
+          ["Sprünge", fmtNumber(s.jumps)], ["Geschlafen", s.sleeps], ["Fische gefangen", s.fish],
+          ["Strecke gesamt", plKm(s.distance_m)],
+        ];
+        for (const [k, val] of rows) grid.append(plKv(k, String(val ?? 0)));
+        body.append(grid);
+        const TRAVEL = { walk: "Gehen", sprint: "Rennen", crouch: "Schleichen", swim: "Schwimmen",
+          walk_on_water: "Auf Wasser", walk_under_water: "Unter Wasser", climb: "Klettern",
+          fall: "Fallen", fly: "Fliegen", aviate: "Elytra", boat: "Boot", horse: "Pferd",
+          minecart: "Lore", pig: "Schwein", strider: "Schreiter", happy_ghast: "Glücklicher Ghast" };
+        const travel = Object.entries(s.travel_m || {}).sort((a, b) => b[1] - a[1]);
+        if (travel.length) {
+          body.append(plEl("h5", "pl-sub", "Unterwegs"));
+          const tg = plEl("div", "pl-stats");
+          for (const [k, m] of travel) tg.append(plKv(TRAVEL[k] || k, plKm(m)));
+          body.append(tg);
+        }
+        if ((s.top_kills || []).length) {
+          body.append(plEl("h5", "pl-sub", "Meiste Kills"));
+          const kg = plEl("div", "pl-stats");
+          for (const k of s.top_kills) kg.append(plKv(k.mob.replace(/_/g, " "), fmtNumber(k.count)));
+          body.append(kg);
+        }
+      }
+    } else {
+      const list = p.advancements || [];
+      if (!list.length) {
+        body.append(plEl("p", "muted small", "Noch keine Fortschritte."));
+      } else {
+        const ul = plEl("ul", "pl-adv");
+        for (const a of list) {
+          const li = plEl("li", "pl-adv-item");
+          li.append(plEl("span", `pl-adv-group g-${a.group}`, a.group),
+            plEl("span", "pl-adv-title", a.title || a.path.split("/").pop().replace(/_/g, " ")),
+            plEl("span", "muted small", a.at ? a.at.slice(0, 10) : ""));
+          ul.append(li);
+        }
+        body.append(ul);
+        if (!p.advancements_total) {
+          body.append(plEl("p", "muted small", "Deutsche Namen erscheinen, sobald einmal die Inventar-Ansicht geöffnet wurde (lädt die Spieldaten)."));
+        }
+      }
+    }
+  }
+
+  /* Live-Tabelle */
+  async function pliveLoad() {
+    if (!state.detailId || state.plive.busy) return;
+    const id = state.detailId;
+    if (state.plive.id !== id) { // anderer Server: alte Zeilen weg
+      state.plive.id = id;
+      authError("#plive-error", "");
+      $("#plive-body").textContent = "";
+      show($("#plive-table"), false);
+      show($("#plive-empty"), false);
+      setText($("#plive-count"), "");
+      setText($("#plive-time"), "–");
+      setText($("#plive-weather"), "–");
+    }
+    if (instStateKey(currentDetailInst() || state.detailData || {}) !== "running") {
+      show($("#plive-table"), false);
+      show($("#plive-empty"), false);
+      setText($("#plive-hint"), "Server läuft nicht — die Tabelle erscheint, sobald er gestartet ist.");
+      return;
+    }
+    state.plive.busy = true;
+    try {
+      const data = await api(`/api/instances/${id}/players-live`);
+      if (state.detailId !== id) return;
+      authError("#plive-error", "");
+      setText($("#plive-hint"), "Aktualisiert sich alle 10 Sekunden, solange dieser Bereich offen ist.");
+      setText($("#plive-time"), `🕒 ${wsetClock(data.daytime)}`);
+      setText($("#plive-weather"), WEATHER[data.weather] || "–");
+      setText($("#plive-count"), data.online != null ? `${data.online} / ${data.max}` : "");
+      const rows = data.players || [];
+      show($("#plive-table"), rows.length > 0);
+      show($("#plive-empty"), rows.length === 0);
+      const tbody = $("#plive-body");
+      tbody.textContent = "";
+      for (const r of rows) {
+        const tr = plEl("tr");
+        const who = plEl("td", "plive-who");
+        const face = plEl("img", "pl-face");
+        face.src = playerFace(r.name);
+        face.alt = "";
+        const link = plEl("button", "plive-name", r.name);
+        link.type = "button";
+        link.title = "Profil öffnen";
+        link.addEventListener("click", () => {
+          const known = state.pl.players.find((p) => (p.name || "").toLowerCase() === r.name.toLowerCase());
+          plSelect(known || { name: r.name }, true);
+        });
+        who.append(face, link);
+        const hp = plEl("td", `plive-num${r.health != null && r.health < 10 ? " warn" : ""}`, r.health ?? "–");
+        const food = plEl("td", `plive-num${r.food != null && r.food < 10 ? " warn" : ""}`, r.food ?? "–");
+        const pos = plEl("td");
+        pos.append(plPos(r.pos, r.dimension));
+        const bed = plEl("td");
+        bed.append(r.bed ? plPos(r.bed.pos, r.bed.dimension) : plEl("span", "muted", "–"));
+        tr.append(who, plEl("td", "", r.session_seconds != null ? fmtDuration(r.session_seconds) : "–"),
+          pos, bed, hp, food, plEl("td", "plive-num", r.level ?? "–"));
+        tbody.append(tr);
+      }
+    } catch (e) {
+      authError("#plive-error", `Live-Daten nicht ladbar: ${e.message}`);
+    } finally {
+      state.plive.busy = false;
+    }
+  }
+
+  function pliveSync() {
+    const want = state.tab === "servers" && state.wsTab === "spieler" && !!state.detailId
+      && !document.hidden;
+    if (want && !state.plive.timer) {
+      pliveLoad();
+      state.plive.timer = setInterval(pliveLoad, 10000);
+    } else if (want && state.plive.id !== state.detailId) {
+      pliveLoad(); // Server gewechselt: nicht auf den nächsten Takt warten
+    } else if (!want && state.plive.timer) {
+      clearInterval(state.plive.timer);
+      state.plive.timer = null;
+    }
+  }
+
+  document.addEventListener("visibilitychange", pliveSync);
+  $("#plive-reload").addEventListener("click", pliveLoad);
+  $("#pl-reload").addEventListener("click", plLoad);
+  $("#pl-filter").addEventListener("input", renderPlList);
+
   /* ---------- Whitelist (whitelist.json) ---------- */
   function wlSetError(msg) {
     const box = $("#wl-error");
@@ -7582,6 +8025,7 @@
     if (key === "welt" && state.detailId && state.wsLoaded?.has("welt")) loadWorldInfo();
     else if (key !== "welt" && typeof resetMapFrame === "function") resetMapFrame();
     loadWsTabData(key);
+    pliveSync();
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
         && instStateKey(currentDetailInst() || state.detailData || {}) === "running") {
@@ -7603,6 +8047,7 @@
     const visible = state.tab === "servers" && !!state.detailId;
     show($("#hotbar-wrap"), visible);
     document.body.classList.toggle("has-hotbar", visible);
+    if (state.plive) pliveSync(); // Live-Tabelle nur im offenen Spieler-Bereich
   }
 
   /* Zähler in den Slots: Spieler online, installierte Mods */
@@ -7689,6 +8134,8 @@
       ["#icon-reload", "welt"],           // Server-Icon
       ["#dp-reload", "welt"],             // Datapacks
       ["#fb-reload", "dateien"],          // Datei-Browser
+      ["#plive-reload", "spieler"],       // Verbundene Spieler (live)
+      ["#pl-reload", "spieler"],          // Spieler-Übersicht
       ["#rcon-reload", "spieler"],        // Spieler verwalten (RCON)
       ["#wl-reload-file", "spieler"],     // Whitelist
       ["#gr-reload", "welt"],             // Alle Gamerules
