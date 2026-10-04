@@ -60,6 +60,7 @@
       </button>
       <div id="user-menu-drop" class="user-drop hidden">
         <div id="user-menu-info" class="user-drop-info muted small"></div>
+        <button id="menu-notify" class="user-item" role="menuitemcheckbox" aria-checked="false">Benachrichtigungen: aus</button>
         <button id="menu-change-password" class="user-item hidden">Passwort ändern</button>
         <button id="menu-users" class="user-item hidden">Benutzer verwalten</button>
         <button id="menu-setup" class="user-item hidden">Zugang einrichten…</button>
@@ -390,8 +391,13 @@
           </div>
 
           <div class="ws-ov-grid">
-            <!-- Live-Log (wird beim Start hier einsortiert) + Chat -->
+            <!-- Aktivität und Chat, darunter das Live-Log (wird beim Start einsortiert) -->
             <div class="ws-ov-main" id="ws-ov-main">
+              <div class="ws-box ws-activity-box">
+                <h3>Aktivität &amp; Chat</h3>
+                <ul id="ws-activity" class="ws-activity" aria-live="polite"></ul>
+                <p id="ws-activity-empty" class="muted small">Noch nichts los — Beitritte, Chat, Tode und Erfolge erscheinen hier, sobald der Server läuft.</p>
+              </div>
               <div class="ws-chat">
                 <input id="ws-chat-input" class="search-input" type="text" maxlength="256"
                        placeholder="Nachricht an alle Spieler (say …)" autocomplete="off" spellcheck="false">
