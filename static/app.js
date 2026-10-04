@@ -6612,6 +6612,9 @@
       desc: "Phantome greifen Spieler an, die drei Nächte nicht geschlafen haben." },
     { name: "doFireTick", label: "Feuer breitet sich aus",
       desc: "Feuer springt auf brennbare Blöcke über. Aus verhindert Waldbrände und abgebrannte Holzhäuser." },
+    // Ab 1.21.11 ersetzt der Radius den Schalter oben (der Server meldet nur eins von beiden)
+    { name: "fireSpreadRadius", label: "Feuer breitet sich aus", number: true,
+      desc: "Radius in Blöcken um Spieler, in dem sich Feuer ausbreitet. 0 schaltet die Ausbreitung ab, -1 erlaubt sie überall." },
   ];
 
   const WSET_GENERAL = [
@@ -6730,11 +6733,24 @@
           out.textContent = `${value} %`;
         }));
         control.append(range, out);
+      } else if (def.number) {
+        control = document.createElement("input");
+        control.type = "number";
+        control.className = "cfg-input wset-num";
+        control.min = String(rule.min ?? 0);
+        control.value = String(value);
+        control.disabled = state.role === "viewer";
+        control.setAttribute("aria-label", def.label);
+        const input = control;
+        input.addEventListener("change", () => wsetSetRule(def, Number(input.value), () => {
+          input.value = String(value);
+        }));
       } else {
         control = wsetSwitch(value === true, (input) =>
           wsetSetRule(def, input.checked, () => { input.checked = !input.checked; }));
       }
-      const shownDefault = def.slider ? `${rule.default} %` : (rule.default ? "an" : "aus");
+      const shownDefault = def.slider ? `${rule.default} %`
+        : def.number ? String(rule.default) : (rule.default ? "an" : "aus");
       list.appendChild(wsetRow(def.label, def.desc, shownDefault, control));
     }
   }
@@ -6750,7 +6766,8 @@
       if (rule) rule.value = data.value;
       const grRule = state.grRules.find((g) => g.name === def.name);
       if (grRule) { grRule.value = data.value; renderGamerules(); }
-      const shown = typeof data.value === "boolean" ? (data.value ? "an" : "aus") : `${data.value} %`;
+      const shown = typeof data.value === "boolean" ? (data.value ? "an" : "aus")
+        : def.slider ? `${data.value} %` : String(data.value);
       toast(`${def.label}: ${shown}`, "success");
     } catch (e) {
       revert();

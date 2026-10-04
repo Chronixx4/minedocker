@@ -8,6 +8,11 @@
   im Bereich) — das verhindert Injektion über den RCON-String.
 - Regeln, die der Server nicht meldet (z. B. auf älteren 1.21-Patchständen
   fehlende), liefern value=None; das Frontend zeigt dann den Default.
+- Ab 1.21.11 (Snapshot 25w44a) heißen die Regeln anders (snake_case, z. B.
+  doDaylightCycle → advance_time, disableRaids → raids mit umgekehrter
+  Bedeutung). Die API bleibt bei den alten Namen; übersetzt wird hier beim
+  Lesen und Setzen (NEW_NAMES, INVERTED). Quelle: Befehlsbaum der Versionen
+  1.21.10 und 1.21.11 (misode/mcmeta).
 - 'pvp' ist bewusst NICHT enthalten: Bedrock-only, in Java Edition gibt es
   keine pvp-Gamerule. showCoordinates ebenfalls weggelassen (Bedrock-only).
 """
@@ -50,6 +55,9 @@ GAMERULES: list = [
     _g("doDaylightCycle", "bool", True, "Tag-/Nacht-Zyklus"),
     _g("doEntityDrops", "bool", True, "Entitäten hinterlegen Items (Boots, Loren…)"),
     _g("doFireTick", "bool", True, "Feuer breitet sich aus und erlischt"),
+    _g("fireSpreadRadius", "int", 128,
+       "Radius um Spieler, in dem sich Feuer ausbreitet (0 = aus, -1 = überall; "
+       "ab 1.21.11)", lo=-1, hi=_INT_MAX),
     _g("doImmediateRespawn", "bool", False, "Respawn ohne Todes-Bildschirm"),
     _g("doInsomnia", "bool", True, "Phantome spawnen bei Schlafmangel"),
     _g("doLimitedCrafting", "bool", False,
@@ -120,6 +128,61 @@ GAMERULES: list = [
 
 _BY_NAME = {g["name"]: g for g in GAMERULES}
 
+# Namen ab 1.21.11. Fehlt eine Regel hier, gibt es sie dort nicht mehr.
+NEW_NAMES = {
+    "announceAdvancements": "show_advancement_messages",
+    "blockExplosionDropDecay": "block_explosion_drop_decay",
+    "commandBlockOutput": "command_block_output",
+    "commandModificationBlockLimit": "max_block_modifications",
+    "disableElytraMovementCheck": "elytra_movement_check",
+    "disableRaids": "raids",
+    "doDaylightCycle": "advance_time",
+    "doEntityDrops": "entity_drops",
+    "doImmediateRespawn": "immediate_respawn",
+    "doInsomnia": "spawn_phantoms",
+    "doLimitedCrafting": "limited_crafting",
+    "doMobSpawning": "spawn_mobs",
+    "doPatrolSpawning": "spawn_patrols",
+    "doTraderSpawning": "spawn_wandering_traders",
+    "doVinesSpread": "spread_vines",
+    "doWardenSpawning": "spawn_wardens",
+    "doWeatherCycle": "advance_weather",
+    "enderPearlsVanishOnDeath": "ender_pearls_vanish_on_death",
+    "fallDamage": "fall_damage",
+    "fireDamage": "fire_damage",
+    "fireSpreadRadius": "fire_spread_radius_around_player",
+    "forgiveDeadPlayers": "forgive_dead_players",
+    "freezeDamage": "freeze_damage",
+    "globalSoundEvents": "global_sound_events",
+    "keepInventory": "keep_inventory",
+    "lavaSourceConversion": "lava_source_conversion",
+    "locatorBar": "locator_bar",
+    "logAdminCommands": "log_admin_commands",
+    "maxCommandChainLength": "max_command_sequence_length",
+    "maxCommandForkCount": "max_command_forks",
+    "maxEntityCramming": "max_entity_cramming",
+    "minecartMaxSpeed": "max_minecart_speed",
+    "mobExplosionDropDecay": "mob_explosion_drop_decay",
+    "mobGriefing": "mob_griefing",
+    "naturalRegeneration": "natural_health_regeneration",
+    "playersNetherPortalCreativeDelay": "players_nether_portal_creative_delay",
+    "playersNetherPortalDefaultDelay": "players_nether_portal_default_delay",
+    "playersSleepingPercentage": "players_sleeping_percentage",
+    "randomTickSpeed": "random_tick_speed",
+    "reducedDebugInfo": "reduced_debug_info",
+    "sendCommandFeedback": "send_command_feedback",
+    "showDeathMessages": "show_death_messages",
+    "snowAccumulationHeight": "max_snow_accumulation_height",
+    "spawnRadius": "respawn_radius",
+    "tntExplosionDropDecay": "tnt_explosion_drop_decay",
+    "universalAnger": "universal_anger",
+    "waterSourceConversion": "water_source_conversion",
+}
+# Neue Regel bedeutet das Gegenteil der alten (disableRaids=true ⇔ raids=false).
+INVERTED = frozenset({"disableElytraMovementCheck", "disableRaids"})
+# Nur in neuen Versionen vorhanden
+_NEW_ONLY = frozenset({"fireSpreadRadius"})
+
 
 def known(name: str) -> dict | None:
     return _BY_NAME.get((name or "").strip())
@@ -130,12 +193,41 @@ def _version_tuple(version: str) -> tuple:
     return tuple(int(n) for n in nums[:3]) or (0,)
 
 
+def new_names(game_version: str) -> bool:
+    """Gamerule-Namen in snake_case: ab 1.21.11 bzw. Snapshot 25w44a."""
+    snap = re.match(r"^(\d{2})w(\d{2})", game_version or "")
+    if snap:
+        return (int(snap.group(1)), int(snap.group(2))) >= (25, 44)
+    return _version_tuple(game_version) >= (1, 21, 11)
+
+
 def available(entry: dict, game_version: str) -> bool:
     """Gibt es die Regel in dieser MC-Version? Snapshots gelten als neu."""
+    if new_names(game_version):
+        return entry["name"] in NEW_NAMES
+    if entry["name"] in _NEW_ONLY:
+        return False
     since = entry.get("since")
     if not since or re.match(r"^\d{2}w\d{2}", game_version or ""):
         return True
     return _version_tuple(game_version) >= since
+
+
+def rcon_name(entry: dict, game_version: str) -> str:
+    """Name, unter dem der Server die Regel kennt."""
+    if new_names(game_version):
+        return NEW_NAMES[entry["name"]]
+    return entry["name"]
+
+
+def _invert(entry: dict, game_version: str) -> bool:
+    return new_names(game_version) and entry["name"] in INVERTED
+
+
+def parse_query_value(output: str) -> str | None:
+    """'Gamerule <name> is currently set to: <value>' → value."""
+    match = re.search(r"(?i)is currently set to:\s*(\S+)", output or "")
+    return match.group(1).strip() if match else None
 
 
 # Uhrzeit-/Wetter-Knöpfe der Welt-Einstellungen: feste Befehle, kein
@@ -245,20 +337,22 @@ def read_gamerules(instance_id: str) -> dict:
         raise HTTPException(status_code=409,
                             detail="Gamerules sind nur bei laufender Instanz "
                                    "lesbar — Server starten")
-    rules_here = [e for e in GAMERULES
-                  if available(e, instance.get("game_version") or "")]
+    version = instance.get("game_version") or ""
+    rules_here = [e for e in GAMERULES if available(e, version)]
     # Vanilla kennt kein 'gamerule' ohne Argumente — jede Regel einzeln
     # abfragen, alles über eine RCON-Verbindung.
-    cmds = [f"gamerule {e['name']}" for e in rules_here]
+    cmds = [f"gamerule {rcon_name(e, version)}" for e in rules_here]
     outputs = _rcon_many(instance, [*cmds, "time query daytime"])
-    live = parse_gamerules_output("\n".join(outputs[:-1]))
     rules = []
-    for entry in rules_here:
-        raw = live.get(entry["name"])
+    for entry, output in zip(rules_here, outputs, strict=False):
+        raw = parse_query_value(output)
+        value = _typed_value(entry, raw)
+        if value is not None and _invert(entry, version):
+            value = not value
         rules.append({
             "name": entry["name"],
             "type": entry["type"],
-            "value": _typed_value(entry, raw),
+            "value": value,
             "default": entry["default"],
             "min": entry.get("min"),
             "max": entry.get("max"),
@@ -287,7 +381,11 @@ def set_gamerule(instance_id: str, name: str, value) -> dict:
                             detail="Gamerules sind nur bei laufender Instanz "
                                    "setzbar — Server starten")
     canonical = validate_value(entry, value)
-    output = _rcon(instance, f"gamerule {entry['name']} {canonical}")
+    version = instance.get("game_version") or ""
+    sent = canonical
+    if _invert(entry, version):
+        sent = "false" if canonical == "true" else "true"
+    output = _rcon(instance, f"gamerule {rcon_name(entry, version)} {sent}")
     typed = _typed_value(entry, canonical)
     logger.info("Gamerule gesetzt: %s = %s (%s)", entry["name"], canonical,
                 instance_id)
