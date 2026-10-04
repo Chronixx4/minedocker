@@ -43,6 +43,11 @@ Dashboard.
 - **RCON-Konsole & Spielerverwaltung** — freie Befehle (Whitelist- oder
   Free-Modus), Whitelist-Editor mit UUID-Auflösung, op/kick/ban direkt aus der
   Übersicht
+- **Spieler-Inventar** — Inventar, Rüstung, Offhand, Endertruhe und Mod-Slots
+  (Curios/Trinkets, nur ansehen) von Online-Spielern; Admins können Mengen
+  ändern, Items verschieben/löschen und Items geben (Vanilla, Paper, Fabric,
+  Forge, NeoForge; Bearbeiten ab MC 1.17). Icons/Namen aus den Mod-JARs,
+  Vanilla-Icons einmalig aus der Mojang-Client-JAR
 - **Gamerule-Quick-Editor** — kuratierte Vanilla-1.21.x-Gamerules mit Toggles
   und Zahlenfeldern, sofort per RCON gesetzt (nur bei laufender Instanz)
 - **Datapacks** — hochladen (nur gestoppt), aktivieren/deaktivieren (bei
@@ -133,6 +138,7 @@ ZimaOS-Import-Dialogs):
 | `INSTANCES_MEMORY` | `2G` | Default-Heap pro Instanz |
 | `INSTANCES_HOST_DIR` | *(auto)* | Host-Pfad der Instanzen (leer = automatische Erkennung) |
 | `ALERT_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `ALERT_EVENTS` | *(leer)* | Crash-Watchdog-Alerts; leer = aus |
+| `ITEM_ICONS_VANILLA` | `true` | Inventar-Ansicht: Vanilla-Item-Icons einmal pro MC-Version aus der Mojang-Client-JAR laden (Cache unter `INSTANCES_DIR/.itemcache`); `false` = nur Mod-Icons |
 | `TZ` | UTC | Container-Lokalzeit für Scheduler-Zeiten (z. B. `Europe/Berlin`) |
 
 ## Login & Rollen

@@ -24,7 +24,10 @@ Checkliste, Dashboard-Schnellstart).
     (eigene Session); neue Instanz-Routen: /files (Datei-Browser:
     Liste/content GET+PUT/download/upload/mkdir/rename/DELETE),
     /datapacks (Liste/upload/enable/disable/DELETE), /gamerules
-    (GET/POST), /players/playtime (Spielzeit-Leaderboard)
+    (GET/POST), /players/playtime (Spielzeit-Leaderboard),
+    /players/{name}/inventory (GET Inventar, POST set_count/clear/move/give
+    mit Fingerabdruck-Prüfung → 409), /items (Namen per ids= oder Suche q=),
+    /items/icon (PNG)
   - config.py – Settings aus Env + MC-Version-Autoerkennung; Multi-Server:
     INSTANCES_DIR, INSTANCES_PORT_BASE (25570), INSTANCES_MEMORY, INSTANCES_HOST_DIR,
     FILEBROWSER_MAX_UPLOAD_MB (300)
@@ -64,7 +67,22 @@ Checkliste, Dashboard-Schnellstart).
      Ping nur bei laufendem Container; Server-Timing-Header mit Teilzeiten,
      Anfragen ab 1 s werden geloggt)
   - rcon.py – minimaler RCON-Client (Source-RCON-Protokoll, stdlib-only):
-    command(host, port, password, cmd) + parse_list_output() für 'list'
+    command(host, port, password, cmd) + parse_list_output() für 'list';
+    commands() schickt mehrere Befehle über eine Verbindung (Antwortende per
+    Marker-Paket Typ 0 → "Unknown request", mehrteilige Antworten werden
+    zusammengesetzt)
+  - inventory.py – Spieler-Inventar: SNBT-Parser/-Serializer (Zahlen behalten
+    Typ-Suffix), Slot-Zuordnung für alle Formate (bis 1.20.4 Count/tag +
+    Slot 100-103/-106, ab 1.20.5 count/components, ab 1.21.5 equipment),
+    Endertruhe, Mod-Slots (Curios/Trinkets) aus neoforge:attachments/ForgeCaps/
+    cardinal_components (nur Anzeige), Befehlsbau 'item replace'/'give'
+    (Server liest Item selbst, Browser schickt nur Slots + Fingerabdruck;
+    max. ~1400 Byte pro RCON-Befehl), Bearbeiten ab 1.17
+  - itemassets.py – Item-Icons/-Namen: Index über Mod-JARs (+ Vanilla-ZIP)
+    je Instanz (neu bei geänderten JARs), Icon-Auflösung items/ → models/item
+    → Eltern-Modelle → Textur; Vanilla-Teilmenge der Mojang-Client-JAR +
+    de_de.json aus dem Asset-Index unter {INSTANCES_DIR}/.itemcache/
+    (Hintergrund-Download, 10 min Pause nach Fehler, ITEM_ICONS_VANILLA)
   - runtime.py – Docker-Runtime pro Instanz (docker SDK): Container itzg/minecraft-server
     (mc-inst-{id}), Env je Loader (FABRIC/FORGE/NEOFORGE/QUILT/PAPER/BUKKIT) +
     RCON aktiv (ENABLE_RCON=TRUE, RCON_PASSWORD = deterministisch aus Salt-Datei
@@ -606,7 +624,8 @@ Whitelist-Modus), HISTORY_DB (SQLite-Verlauf, Default /data/history.db),
 HISTORY_INTERVAL (Sampling-Sekunden, Default 30, min 10),
 HISTORY_RETENTION_DAYS (Default 30),
 FILEBROWSER_MAX_UPLOAD_MB (Default 300 — Upload-Limit je Datei im
-Datei-Browser).
+Datei-Browser), ITEM_ICONS_VANILLA (Default true — Vanilla-Item-Icons aus
+der Mojang-Client-JAR für die Inventar-Ansicht).
 Login & Rollen (keine Pflicht-Env): Benutzer in /data/users.json
 (geschwisterlich zu scheduler_state.json), Session-Secret in
 /data/.auth_secret (0600, einmalig generiert); ohne DASHBOARD_API_KEY und

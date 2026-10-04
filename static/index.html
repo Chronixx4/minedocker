@@ -1478,6 +1478,93 @@
 </dialog>
 
 <!-- Rückfragen im Dashboard-Stil (statt window.confirm) -->
+<!-- Spieler-Inventar (RCON: data get entity / item replace / give) -->
+<dialog id="inv-dialog" class="modal inv-modal" aria-labelledby="inv-title">
+  <div class="modal-body">
+    <div class="modal-head inv-head">
+      <img id="inv-face" class="inv-face" alt="">
+      <h2 id="inv-title">Inventar</h2>
+      <span class="badge on"><span class="dot"></span>online</span>
+      <span class="inv-spacer"></span>
+      <span id="inv-stamp" class="muted small"></span>
+      <button id="inv-reload" type="button" class="btn">Aktualisieren</button>
+      <button id="inv-close" type="button" class="btn">Schließen</button>
+    </div>
+    <div id="inv-meta" class="inv-meta"></div>
+    <div class="inv-tabs" role="tablist">
+      <button type="button" class="inv-tab active" data-inv-tab="main" role="tab">Inventar</button>
+      <button type="button" class="inv-tab" data-inv-tab="ender" role="tab">Endertruhe</button>
+      <button type="button" class="inv-tab" data-inv-tab="mods" role="tab">Mod-Slots <span class="muted small">(nur ansehen)</span></button>
+    </div>
+    <div id="inv-error" class="err hidden"></div>
+    <div class="inv-cols">
+      <div>
+        <div class="inv-mc">
+          <div id="inv-pane-main">
+            <div class="inv-top">
+              <div class="inv-armor" id="inv-armor"></div>
+              <div class="inv-stats" id="inv-stats"></div>
+              <div class="inv-off">
+                <div class="inv-lbl">Offhand</div>
+                <div id="inv-offhand"></div>
+              </div>
+            </div>
+            <div class="inv-lbl">Inventar</div>
+            <div class="inv-grid" id="inv-main"></div>
+            <div class="inv-gap"></div>
+            <div class="inv-grid" id="inv-hotbar"></div>
+          </div>
+          <div id="inv-pane-ender" class="hidden">
+            <div class="inv-lbl">Endertruhe</div>
+            <div class="inv-grid" id="inv-ender"></div>
+          </div>
+          <div id="inv-pane-mods" class="hidden">
+            <div id="inv-mods"></div>
+            <p id="inv-mods-empty" class="inv-lbl hidden">Keine Mod-Slots gefunden (z. B. Curios, Trinkets).</p>
+          </div>
+        </div>
+        <p class="muted small inv-hint admin-only">Ziehen verschiebt ein Item · Klick zeigt Details · Rechtsklick leert den Slot</p>
+      </div>
+      <div class="inv-side">
+        <div class="inv-card" id="inv-detail">
+          <p class="muted small" id="inv-detail-empty">Slot anklicken, um Details zu sehen.</p>
+          <div id="inv-detail-body" class="hidden">
+            <div class="inv-det-head">
+              <div class="inv-slot" id="inv-det-slot"></div>
+              <div class="inv-det-title">
+                <h3 id="inv-det-name"></h3>
+                <div class="inv-mono" id="inv-det-id"></div>
+              </div>
+            </div>
+            <dl class="inv-kv" id="inv-det-kv"></dl>
+            <div class="inv-acts admin-only" id="inv-det-acts">
+              <label class="muted small" for="inv-det-count">Menge</label>
+              <input id="inv-det-count" class="inv-qty" type="number" min="1" max="99">
+              <button id="inv-det-apply" type="button" class="btn">Übernehmen</button>
+              <select id="inv-det-target" class="cfg-input" title="Ziel-Slot"></select>
+              <button id="inv-det-move" type="button" class="btn">Verschieben</button>
+              <button id="inv-det-clear" type="button" class="btn danger">Löschen</button>
+            </div>
+            <p class="muted small hidden" id="inv-det-note"></p>
+          </div>
+        </div>
+        <div class="inv-card admin-only" id="inv-give">
+          <h3>Item geben</h3>
+          <div class="inv-acts inv-give-row">
+            <input id="inv-give-q" class="search-input" type="text" placeholder="Name oder ID, z. B. osmium" maxlength="64" autocomplete="off" spellcheck="false">
+            <input id="inv-give-count" class="inv-qty" type="number" min="1" max="6400" value="1">
+            <button id="inv-give-btn" type="button" class="btn primary">Geben</button>
+          </div>
+          <ul id="inv-give-results" class="inv-results"></ul>
+        </div>
+        <p class="inv-warn admin-only">Änderungen gehen sofort an den Spieler. Vor jedem Schreiben prüft das Dashboard,
+          ob der Slot noch gleich ist. Jede Änderung steht im Dashboard-Log.</p>
+        <p id="inv-readonly" class="inv-warn hidden"></p>
+      </div>
+    </div>
+  </div>
+</dialog>
+
 <dialog id="confirm-dialog" class="modal confirm-dialog" aria-labelledby="cd-title">
   <form method="dialog" class="modal-body">
     <h2 id="cd-title"></h2>
