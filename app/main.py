@@ -56,6 +56,7 @@ from . import icon as icon_mod
 from . import inventory as inventory_mod
 from . import itemassets as itemassets_mod
 from . import livemap as livemap_mod
+from . import players as players_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
 from . import updates as updates_mod
@@ -418,6 +419,12 @@ class GameruleSetRequest(BaseModel):
     """Gamerule setzen (name aus kuratierter Liste, value bool/int)."""
     name: str = Field(min_length=1, max_length=64)
     value: bool | int | str | None = None
+
+
+class TimeWeatherRequest(BaseModel):
+    """Uhrzeit/Wetter der Welt über feste Voreinstellungen setzen."""
+    time: str | None = Field(default=None, max_length=16)
+    weather: str | None = Field(default=None, max_length=16)
 
 
 @app.get("/api/health")
@@ -1772,6 +1779,77 @@ async def instance_players(instance_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Spieler-Übersicht: alle bekannten Spieler, Profil, Live-Tabelle
+# ---------------------------------------------------------------------------
+
+async def _online_names(instance: dict) -> list | None:
+    """Namen laut RCON 'list'; None, wenn der Server nicht läuft oder RCON
+    nicht antwortet (die Liste kommt dann nur aus den Dateien)."""
+    if not await asyncio.to_thread(runtime.is_running, instance):
+        return None
+    try:
+        output = await _rcon_run(instance, "list")
+    except HTTPException:
+        return None
+    parsed = rcon_mod.parse_list_output(output)
+    return parsed["names"] if parsed else None
+
+
+@api.get("/instances/{instance_id}/known-players")
+async def known_players(instance_id: str):
+    """Alle Spieler, die je auf der Instanz waren (auch offline)."""
+    instance = instances.get_instance(instance_id)
+    online = await _online_names(instance)
+    data = await asyncio.to_thread(players_mod.list_players, instance_id, online or [])
+    data["running"] = online is not None
+    return data
+
+
+@api.get("/instances/{instance_id}/known-players/{key}")
+async def known_player_profile(instance_id: str, key: str):
+    """Profil eines Spielers (Name oder UUID); online zusätzlich Live-Werte."""
+    instance = instances.get_instance(instance_id)
+    if not (players_mod.UUID_RE.match(key) or inventory_mod.PLAYER_RE.match(key)):
+        raise HTTPException(status_code=400, detail="Ungültiger Spieler")
+    profile = await asyncio.to_thread(players_mod.player_profile, instance_id, key)
+    profile["live"] = None
+    name = profile.get("name")
+    online = await _online_names(instance) if name else None
+    if name and online and name.lower() in {n.lower() for n in online}:
+        try:
+            outputs = await _rcon_many(instance, players_mod.live_commands([name]))
+            rows = players_mod.parse_live([name], outputs)
+            profile["live"] = rows[0] if rows else None
+        except HTTPException:
+            profile["live"] = None
+    profile["online"] = profile["live"] is not None
+    return profile
+
+
+@api.get("/instances/{instance_id}/players-live")
+async def players_live(instance_id: str):
+    """Tabelle der verbundenen Spieler: Leben, Hunger, Level, Position, Bett,
+    Sitzungsdauer, dazu Uhrzeit und Wetter der Welt."""
+    instance = instances.get_instance(instance_id)
+    output = await _rcon_run(instance, "list")
+    parsed = rcon_mod.parse_list_output(output) or {"names": [], "online": None, "max": None}
+    names = [n for n in parsed["names"] if inventory_mod.PLAYER_RE.match(n)][:100]
+    outputs = await _rcon_many(
+        instance, [*players_mod.live_commands(names), "time query daytime"])
+    rows = players_mod.parse_live(names, outputs[:-1])
+    starts = history_mod.open_session_starts(instance_id)
+    now = int(time.time())
+    for row in rows:
+        start = starts.get(row["name"])
+        row["session_seconds"] = now - start if start else None
+    weather = await asyncio.to_thread(
+        players_mod.world_weather, instances.world_dir(instance_id))
+    return {"players": rows, "online": parsed.get("online"), "max": parsed.get("max"),
+            "daytime": gamerules_mod.parse_daytime(outputs[-1]),
+            "weather": weather, "fetched_at": now}
+
+
+# ---------------------------------------------------------------------------
 # Spieler-Inventar (RCON: data get entity / item replace / give)
 # ---------------------------------------------------------------------------
 
@@ -2464,6 +2542,13 @@ async def instance_gamerules_set(instance_id: str, req: GameruleSetRequest):
     instances.get_instance(instance_id)
     return await asyncio.to_thread(gamerules_mod.set_gamerule,
                                    instance_id, req.name, req.value)
+
+
+@api.post("/instances/{instance_id}/world/time-weather")
+async def instance_time_weather(instance_id: str, req: TimeWeatherRequest):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(gamerules_mod.set_time_weather,
+                                   instance_id, req.time, req.weather)
 
 
 # ---------------------------------------------------------------------------

@@ -836,6 +836,53 @@
             <div id="sched-error" class="err hidden"></div>
           </div>
 
+          <!-- Verbundene Spieler (Live-Tabelle per RCON) -->
+          <div class="upload-box plive-box">
+            <h3>Verbundene Spieler
+              <span class="plive-world muted small">
+                <span id="plive-time" title="Uhrzeit in der Welt">–</span>
+                <span id="plive-weather" title="Wetter (Stand des letzten Speicherns)">–</span>
+              </span>
+              <span id="plive-count" class="muted small"></span>
+              <button id="plive-reload" class="btn small-btn" title="Jetzt aktualisieren">Aktualisieren</button>
+            </h3>
+            <p id="plive-hint" class="muted small">Aktualisiert sich alle 10 Sekunden, solange
+              dieser Bereich offen ist und der Server läuft.</p>
+            <div class="plive-wrap">
+              <table id="plive-table" class="plive-table hidden">
+                <thead>
+                  <tr>
+                    <th>Spieler</th><th>Sitzung</th><th>Position</th><th>Bett</th>
+                    <th title="Leben">Leben</th><th title="Hunger">Hunger</th><th>Level</th>
+                  </tr>
+                </thead>
+                <tbody id="plive-body"></tbody>
+              </table>
+            </div>
+            <p id="plive-empty" class="muted small hidden">Niemand online.</p>
+            <div id="plive-error" class="err hidden"></div>
+          </div>
+
+          <!-- Spieler-Übersicht: alle Spieler, Profil, Statistiken -->
+          <div class="upload-box pl-box">
+            <h3>Spieler <span class="muted small">(alle, die je auf dem Server waren)</span>
+              <button id="pl-reload" class="btn small-btn" title="Liste neu laden">Aktualisieren</button>
+            </h3>
+            <div class="pl-layout">
+              <div class="pl-side">
+                <input id="pl-filter" class="search-input" type="search"
+                       placeholder="Name suchen…" autocomplete="off">
+                <div id="pl-chips" class="pl-chips" role="group" aria-label="Filter"></div>
+                <ul id="pl-list" class="pl-list"></ul>
+                <p id="pl-empty" class="muted small hidden">Noch keine Spieler gefunden.</p>
+              </div>
+              <div id="pl-profile" class="pl-profile">
+                <p class="muted small pl-placeholder">Spieler links auswählen.</p>
+              </div>
+            </div>
+            <div id="pl-error" class="err hidden"></div>
+          </div>
+
           <!-- Spieler verwalten (RCON: OP/Kick/Ban) -->
           <div class="upload-box">
             <h3>Spieler online <span class="muted small">(RCON)</span>
@@ -878,9 +925,62 @@
             <div id="console-error" class="err hidden"></div>
           </div>
 
+          <!-- Welt-Einstellungen (Spielregeln sofort, Allgemein beim Neustart) -->
+          <div class="upload-box wset-box">
+            <h3>Welt-Einstellungen
+              <button id="wset-reload" class="btn small-btn" title="Werte neu laden">Aktualisieren</button>
+            </h3>
+            <div class="wset-section">
+              <div class="wset-head">
+                <h4>Spielregeln</h4>
+                <span class="muted small">Sofort wirksam, kein Neustart nötig.</span>
+              </div>
+              <div id="wset-clock" class="wset-clock hidden">
+                <div class="wset-clock-now">
+                  <span class="muted small">Uhrzeit in der Welt</span>
+                  <strong id="wset-time">–</strong>
+                </div>
+                <div class="wset-clock-actions admin-only">
+                  <div class="seg" role="group" aria-label="Uhrzeit setzen">
+                    <button type="button" class="seg-btn" data-wset-time="morgen">Morgen</button>
+                    <button type="button" class="seg-btn" data-wset-time="mittag">Mittag</button>
+                    <button type="button" class="seg-btn" data-wset-time="abend">Abend</button>
+                    <button type="button" class="seg-btn" data-wset-time="nacht">Nacht</button>
+                  </div>
+                  <div class="seg" role="group" aria-label="Wetter setzen">
+                    <button type="button" class="seg-btn" data-wset-weather="klar">Klar</button>
+                    <button type="button" class="seg-btn" data-wset-weather="regen">Regen</button>
+                    <button type="button" class="seg-btn" data-wset-weather="gewitter">Gewitter</button>
+                  </div>
+                </div>
+              </div>
+              <div id="wset-rules" class="wset-list"></div>
+              <p id="wset-rules-off" class="muted small hidden">Server starten, um die Spielregeln
+                zu sehen und zu ändern.</p>
+            </div>
+            <div class="wset-section">
+              <div class="wset-head">
+                <h4>Allgemein</h4>
+                <span class="muted small">Wirksam beim nächsten (Neu-)Start.</span>
+                <label class="check wset-adv" for="wset-advanced">
+                  <input type="checkbox" id="wset-advanced"> Erweitert
+                </label>
+              </div>
+              <div id="wset-general" class="wset-list"></div>
+              <div class="row admin-only" style="margin-top: 0.6rem;">
+                <button id="wset-save" class="btn primary" disabled>Speichern</button>
+                <span id="wset-restart-row" class="row hidden">
+                  <span class="muted small">Neustart nötig, damit es wirkt.</span>
+                  <button id="wset-restart" class="btn">Jetzt neu starten</button>
+                </span>
+              </div>
+            </div>
+            <div id="wset-error" class="err hidden"></div>
+          </div>
+
           <!-- Gamerule-Quick-Editor (nur bei laufender Instanz) -->
           <div class="upload-box">
-            <h3>Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
+            <h3>Alle Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
               <button id="gr-reload" class="btn small-btn" title="Aktuelle Werte laden">Laden</button>
             </h3>
             <p class="muted small" id="gr-hint">Werte werden sofort per RCON gesetzt

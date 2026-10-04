@@ -2992,6 +2992,8 @@
     $("#icon-upload-btn").disabled = true;
     // Datei-Browser zurücksetzen (Wurzel der neuen Instanz laden)
     state.fb = { path: "", entries: [] };
+    // Spieler-Übersicht und Live-Tabelle zurücksetzen
+    plReset();
     // Gamerules zurücksetzen (werden per „Laden" geholt — nur laufend)
     state.grRules = [];
     $("#gr-filter").value = "";
@@ -3036,9 +3038,9 @@
   function loadWsTabData(key) {
     if (!state.detailId || !state.wsLoaded || state.wsLoaded.has(key)) return;
     state.wsLoaded.add(key);
-    if (key === "welt") { loadWorldInfo(); dpReload(); loadIconPreview(); }
+    if (key === "welt") { wsetLoad(); loadWorldInfo(); dpReload(); loadIconPreview(); }
     else if (key === "dateien") fbReload();
-    else if (key === "spieler") loadWhitelist();
+    else if (key === "spieler") { loadWhitelist(); plLoad(); }
     else if (key === "backups") loadBackups();
     else if (key === "mods") { checkPackUpdate(true); loadModTrash(); }
     else if (key === "einstellungen") loadVersionForm();
@@ -6592,6 +6594,776 @@
   $("#gr-reload").addEventListener("click", grReload);
   $("#gr-filter").addEventListener("input", renderGamerules);
 
+  /* ---------- Welt-Einstellungen (Spielregeln + Allgemein) ---------- */
+  // Kuratierte Auswahl mit verständlichen Erklärungen; alle übrigen Regeln
+  // bleiben im Gamerule-Editor, alle Properties im server.properties-Editor.
+  const WSET_RULES = [
+    { name: "playersSleepingPercentage", label: "Schlaf-Schwelle", slider: true,
+      desc: "Wie viel Prozent der Spieler schlafen müssen, damit die Nacht übersprungen wird. Bei 0 reicht ein einzelner schlafender Spieler." },
+    { name: "doDaylightCycle", label: "Tageszyklus",
+      desc: "Wenn aus, bleiben Sonne und Mond stehen. Die Uhrzeit setzt du oben mit den Knöpfen." },
+    { name: "doWeatherCycle", label: "Wetterwechsel",
+      desc: "Wenn aus, bleibt das aktuelle Wetter dauerhaft. Das Wetter setzt du oben mit den Knöpfen." },
+    { name: "locatorBar", label: "Spieler-Ortungsleiste",
+      desc: "Zeigt jedem Spieler eine Leiste mit der Richtung zu den anderen. Wer seine Basis geheim halten will, schaltet sie aus. Schleichen oder ein Mob-Kopf verstecken einen Spieler kurzzeitig." },
+    { name: "keepInventory", label: "Inventar behalten",
+      desc: "Spieler behalten beim Tod ihre Items und ihre Erfahrung." },
+    { name: "mobGriefing", label: "Mobs verändern Blöcke",
+      desc: "Creeper sprengen Löcher, Endermen tragen Blöcke weg. Aus schützt Bauten, stoppt aber auch Dorfbewohner beim Ernten." },
+    { name: "doInsomnia", label: "Phantome",
+      desc: "Phantome greifen Spieler an, die drei Nächte nicht geschlafen haben." },
+    { name: "doFireTick", label: "Feuer breitet sich aus",
+      desc: "Feuer springt auf brennbare Blöcke über. Aus verhindert Waldbrände und abgebrannte Holzhäuser." },
+    // Ab 1.21.11 ersetzt der Radius den Schalter oben (der Server meldet nur eins von beiden)
+    { name: "fireSpreadRadius", label: "Feuer breitet sich aus", number: true,
+      desc: "Radius in Blöcken um Spieler, in dem sich Feuer ausbreitet. 0 schaltet die Ausbreitung ab, -1 erlaubt sie überall." },
+  ];
+
+  const WSET_GENERAL = [
+    { key: "level-name", label: "Weltname", readonly: true, def: "world",
+      desc: "Ordner der aktiven Welt. Welten wechseln und neu anlegen geht weiter unten unter „Welten“." },
+    { key: "level-seed", label: "Welt-Seed", readonly: true, def: "", empty: "zufällig",
+      desc: "Bestimmt, wie die Welt erzeugt wird. Gilt nur beim Erzeugen; eine neue Welt mit eigenem Seed legst du unter „Welten“ an." },
+    { key: "gamemode", label: "Spielmodus", def: "survival",
+      choices: [["survival", "Überleben"], ["creative", "Kreativ"], ["adventure", "Abenteuer"], ["spectator", "Zuschauer"]],
+      desc: "Modus für neue Spieler. Überleben ist das klassische Spiel, Kreativ gibt unbegrenzt Blöcke und Fliegen, Abenteuer ist für eigene Karten, Zuschauer nur zum Zusehen." },
+    { key: "difficulty", label: "Schwierigkeit", def: "easy",
+      choices: [["peaceful", "Friedlich"], ["easy", "Einfach"], ["normal", "Normal"], ["hard", "Schwer"]],
+      desc: "Friedlich entfernt alle Monster, Einfach macht sie schwächer, Normal ist das Standard-Spiel, bei Schwer kann man verhungern." },
+    { key: "hardcore", label: "Hardcore", bool: true, def: "false",
+      desc: "Nur ein Leben: Wer stirbt, kann nur noch zuschauen. Die Schwierigkeit ist dann fest auf Schwer." },
+    { key: "pvp", label: "PvP", bool: true, def: "true",
+      desc: "Spieler können sich gegenseitig Schaden zufügen." },
+    { key: "max-players", label: "Maximale Spieler", int: [1, 1000], def: "20",
+      desc: "So viele Spieler können gleichzeitig verbunden sein." },
+    { key: "allow-flight", label: "Fliegen erlauben", bool: true, def: "false", adv: true,
+      desc: "Verhindert Kicks wegen Fliegens. Nötig für manche Mods und Plugins mit Flug." },
+    { key: "allow-nether", label: "Nether erlauben", bool: true, def: "true", adv: true,
+      desc: "Wenn aus, funktionieren Netherportale nicht." },
+    { key: "force-gamemode", label: "Spielmodus erzwingen", bool: true, def: "false", adv: true,
+      desc: "Setzt jeden Spieler beim Betreten auf den Standard-Spielmodus zurück." },
+    { key: "spawn-protection", label: "Spawn-Schutz", int: [0, 256], def: "16", adv: true,
+      desc: "Radius in Blöcken um den Spawn, in dem nur Operatoren bauen dürfen. 0 schaltet den Schutz ab." },
+    { key: "view-distance", label: "Sichtweite", int: [3, 32], def: "10", adv: true,
+      desc: "Wie viele Chunks Spieler sehen. Der größte Hebel für RAM und Leistung." },
+    { key: "simulation-distance", label: "Simulationsweite", int: [3, 32], def: "10", adv: true,
+      desc: "In wie vielen Chunks um Spieler Pflanzen wachsen und Mobs sich bewegen." },
+  ];
+
+  state.wset = { props: [], rules: [], edits: {} };
+
+  function wsetSetError(msg) { authError("#wset-error", msg); }
+
+  function wsetRunning() {
+    return instStateKey(currentDetailInst() || state.detailData || {}) === "running";
+  }
+
+  // Minecraft-Ticks → Uhrzeit (Tick 0 = 6:00 Uhr)
+  function wsetClock(ticks) {
+    if (ticks == null) return "–";
+    const hour = (Math.floor(ticks / 1000) + 6) % 24;
+    const minute = Math.floor((ticks % 1000) * 60 / 1000);
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  function wsetRow(label, desc, def, control) {
+    const row = document.createElement("div");
+    row.className = "wset-row";
+    const text = document.createElement("div");
+    text.className = "wset-text";
+    const title = document.createElement("div");
+    title.className = "wset-label";
+    title.textContent = label;
+    const info = document.createElement("div");
+    info.className = "wset-desc muted small";
+    info.textContent = desc;
+    text.append(title, info);
+    if (def !== null) {
+      const d = document.createElement("div");
+      d.className = "wset-default muted small";
+      const code = document.createElement("code");
+      code.textContent = def;
+      d.append("Standard: ", code);
+      text.append(d);
+    }
+    const ctl = document.createElement("div");
+    ctl.className = "wset-control";
+    ctl.append(control);
+    row.append(text, ctl);
+    return row;
+  }
+
+  function wsetSwitch(checked, onChange) {
+    const label = document.createElement("label");
+    label.className = "wset-switch";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = checked;
+    input.disabled = state.role === "viewer";
+    input.addEventListener("change", () => onChange(input));
+    const knob = document.createElement("span");
+    knob.className = "wset-knob";
+    label.append(input, knob);
+    return label;
+  }
+
+  function renderWsetRules() {
+    const list = $("#wset-rules");
+    list.textContent = "";
+    const byName = new Map(state.wset.rules.map((g) => [g.name, g]));
+    for (const def of WSET_RULES) {
+      const rule = byName.get(def.name);
+      if (!rule) continue; // in dieser Version nicht vorhanden
+      const value = rule.value == null ? rule.default : rule.value;
+      let control;
+      if (def.slider) {
+        control = document.createElement("div");
+        control.className = "wset-slider";
+        const range = document.createElement("input");
+        range.type = "range";
+        range.min = String(rule.min ?? 0);
+        range.max = String(rule.max ?? 100);
+        range.value = String(value);
+        range.disabled = state.role === "viewer";
+        range.setAttribute("aria-label", def.label);
+        const out = document.createElement("span");
+        out.className = "wset-slider-val";
+        out.textContent = `${value} %`;
+        range.addEventListener("input", () => { out.textContent = `${range.value} %`; });
+        range.addEventListener("change", () => wsetSetRule(def, Number(range.value), () => {
+          range.value = String(value);
+          out.textContent = `${value} %`;
+        }));
+        control.append(range, out);
+      } else if (def.number) {
+        control = document.createElement("input");
+        control.type = "number";
+        control.className = "cfg-input wset-num";
+        control.min = String(rule.min ?? 0);
+        control.value = String(value);
+        control.disabled = state.role === "viewer";
+        control.setAttribute("aria-label", def.label);
+        const input = control;
+        input.addEventListener("change", () => wsetSetRule(def, Number(input.value), () => {
+          input.value = String(value);
+        }));
+      } else {
+        control = wsetSwitch(value === true, (input) =>
+          wsetSetRule(def, input.checked, () => { input.checked = !input.checked; }));
+      }
+      const shownDefault = def.slider ? `${rule.default} %`
+        : def.number ? String(rule.default) : (rule.default ? "an" : "aus");
+      list.appendChild(wsetRow(def.label, def.desc, shownDefault, control));
+    }
+  }
+
+  async function wsetSetRule(def, value, revert) {
+    try {
+      const data = await api(`/api/instances/${state.detailId}/gamerules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: def.name, value }),
+      });
+      const rule = state.wset.rules.find((g) => g.name === def.name);
+      if (rule) rule.value = data.value;
+      const grRule = state.grRules.find((g) => g.name === def.name);
+      if (grRule) { grRule.value = data.value; renderGamerules(); }
+      const shown = typeof data.value === "boolean" ? (data.value ? "an" : "aus")
+        : def.slider ? `${data.value} %` : String(data.value);
+      toast(`${def.label}: ${shown}`, "success");
+    } catch (e) {
+      revert();
+      toast(`${def.label} nicht geändert: ${e.message}`, "error");
+    }
+  }
+
+  async function wsetTimeWeather(body) {
+    try {
+      const data = await api(`/api/instances/${state.detailId}/world/time-weather`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setText($("#wset-time"), wsetClock(data.daytime));
+      toast(body.time ? `Uhrzeit: ${wsetClock(data.daytime)}` : "Wetter geändert", "success");
+    } catch (e) {
+      toast(`Nicht geändert: ${e.message}`, "error");
+    }
+  }
+
+  function wsetPropValue(key) {
+    if (key in state.wset.edits) return state.wset.edits[key];
+    return state.wset.props.find((p) => p.key === key)?.value;
+  }
+
+  function wsetEdit(key, value) {
+    state.wset.edits[key] = value;
+    $("#wset-save").disabled = false;
+  }
+
+  function renderWsetGeneral() {
+    const list = $("#wset-general");
+    list.textContent = "";
+    const advanced = $("#wset-advanced").checked;
+    const viewer = state.role === "viewer";
+    for (const def of WSET_GENERAL) {
+      if (def.adv && !advanced) continue;
+      const raw = wsetPropValue(def.key);
+      const value = raw == null ? def.def : String(raw);
+      let control;
+      if (def.readonly) {
+        control = document.createElement("code");
+        control.className = "wset-readonly";
+        control.textContent = value || def.empty || "–";
+      } else if (def.bool) {
+        control = wsetSwitch(value.trim().toLowerCase() === "true",
+          (input) => wsetEdit(def.key, input.checked ? "true" : "false"));
+      } else if (def.choices) {
+        control = document.createElement("select");
+        control.className = "cfg-input";
+        for (const [v, text] of def.choices) {
+          const opt = document.createElement("option");
+          opt.value = v;
+          opt.textContent = text;
+          control.appendChild(opt);
+        }
+        control.value = value.trim().toLowerCase();
+        control.disabled = viewer;
+        control.addEventListener("change", (e) => wsetEdit(def.key, e.target.value));
+      } else {
+        control = document.createElement("input");
+        control.type = "number";
+        control.className = "cfg-input wset-num";
+        control.min = String(def.int[0]);
+        control.max = String(def.int[1]);
+        control.value = value;
+        control.disabled = viewer;
+        control.addEventListener("input", (e) => wsetEdit(def.key, e.target.value));
+      }
+      if (!def.readonly && !def.bool) control.setAttribute("aria-label", def.label);
+      const shownDefault = def.readonly ? null
+        : def.choices ? def.choices.find(([v]) => v === def.def)?.[1]
+          : def.bool ? (def.def === "true" ? "an" : "aus") : def.def;
+      list.appendChild(wsetRow(def.label, def.desc, shownDefault, control));
+    }
+  }
+
+  async function wsetLoad() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    wsetSetError("");
+    state.wset.edits = {};
+    $("#wset-save").disabled = true;
+    show($("#wset-restart-row"), false);
+    try {
+      const cfg = await api(`/api/instances/${id}/config`);
+      if (state.detailId !== id) return;
+      state.wset.props = cfg.properties || [];
+    } catch (e) {
+      state.wset.props = [];
+      wsetSetError(`Einstellungen nicht ladbar: ${e.message}`);
+    }
+    renderWsetGeneral();
+    const running = wsetRunning();
+    state.wset.rules = [];
+    show($("#wset-rules-off"), !running);
+    show($("#wset-clock"), false);
+    if (running) {
+      try {
+        const data = await api(`/api/instances/${id}/gamerules`);
+        if (state.detailId !== id) return;
+        state.wset.rules = data.gamerules || [];
+        setText($("#wset-time"), wsetClock(data.daytime));
+        show($("#wset-clock"), true);
+      } catch (e) {
+        show($("#wset-rules-off"), e.status === 409);
+        if (e.status !== 409) wsetSetError(`Spielregeln nicht ladbar: ${e.message}`);
+      }
+    }
+    renderWsetRules();
+  }
+
+  async function wsetSave() {
+    const btn = $("#wset-save");
+    btn.disabled = true;
+    wsetSetError("");
+    try {
+      const edits = { ...state.wset.edits };
+      const properties = state.wset.props.map((p) =>
+        ({ key: p.key, value: p.key in edits ? edits[p.key] : p.value }));
+      for (const [key, value] of Object.entries(edits)) {
+        if (!state.wset.props.some((p) => p.key === key)) properties.push({ key, value });
+      }
+      const data = await api(`/api/instances/${state.detailId}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties }),
+      });
+      state.wset.props = properties;
+      state.wset.edits = {};
+      toast("Welt-Einstellungen gespeichert.", "success");
+      show($("#wset-restart-row"), !!data.restart_required);
+      if (state.cfgOpen) loadCfg();
+    } catch (e) {
+      btn.disabled = false;
+      wsetSetError(`Speichern fehlgeschlagen: ${e.message}`);
+    }
+  }
+
+  $("#wset-reload").addEventListener("click", wsetLoad);
+  $("#wset-save").addEventListener("click", wsetSave);
+  $("#wset-advanced").addEventListener("change", renderWsetGeneral);
+  $("#wset-restart").addEventListener("click", () => {
+    if (!state.detailId) return;
+    show($("#wset-restart-row"), false);
+    instAction({ id: state.detailId }, "restart");
+  });
+  document.querySelectorAll("[data-wset-time]").forEach((btn) =>
+    btn.addEventListener("click", () => wsetTimeWeather({ time: btn.dataset.wsetTime })));
+  document.querySelectorAll("[data-wset-weather]").forEach((btn) =>
+    btn.addEventListener("click", () => wsetTimeWeather({ weather: btn.dataset.wsetWeather })));
+
+  /* ---------- Spieler-Übersicht + Live-Tabelle ---------- */
+  function plEl(tag, cls, text) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  const DIMENSIONS = {
+    "minecraft:overworld": "Oberwelt", "minecraft:the_nether": "Nether",
+    "minecraft:the_end": "End",
+  };
+  const MODES = { survival: "Überleben", creative: "Kreativ", adventure: "Abenteuer", spectator: "Zuschauer" };
+  const WEATHER = { klar: "☀ Klar", regen: "🌧 Regen", gewitter: "⛈ Gewitter" };
+
+  function plPos(pos, dim) {
+    const wrap = plEl("span", "pl-pos");
+    if (!pos) { wrap.textContent = "–"; return wrap; }
+    const d = plEl("span", `pl-dim pl-dim-${(dim || "minecraft:overworld").split(":").pop()}`);
+    d.title = DIMENSIONS[dim] || dim || "Oberwelt";
+    wrap.append(d, ` ${pos.join(", ")}`);
+    return wrap;
+  }
+
+  function plAgo(ts) {
+    if (!ts) return "";
+    const diff = Math.max(0, Date.now() / 1000 - ts);
+    if (diff < 3600) return `vor ${Math.max(1, Math.round(diff / 60))} min`;
+    if (diff < 86400) return `vor ${Math.round(diff / 3600)} h`;
+    if (diff < 86400 * 7) return `vor ${Math.round(diff / 86400)} d`;
+    return new Date(ts * 1000).toLocaleDateString("de-DE");
+  }
+
+  function plKm(m) {
+    if (typeof m !== "number") return "–";
+    return m >= 1000 ? `${(m / 1000).toFixed(1).replace(".", ",")} km` : `${m} m`;
+  }
+
+  state.pl = { players: [], filter: "all", selected: null, profile: null, tab: "profil", running: false };
+  state.plive = { timer: null, busy: false, id: null };
+
+  function plReset() {
+    state.pl = { players: [], filter: "all", selected: null, profile: null, tab: "profil", running: false };
+    $("#pl-filter").value = "";
+    $("#pl-list").textContent = "";
+    $("#pl-chips").textContent = "";
+    const pane = $("#pl-profile");
+    pane.textContent = "";
+    pane.append(plEl("p", "muted small pl-placeholder", "Spieler links auswählen."));
+    authError("#pl-error", "");
+  }
+
+  async function plLoad() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    authError("#pl-error", "");
+    try {
+      const data = await api(`/api/instances/${id}/known-players`);
+      if (state.detailId !== id) return;
+      state.pl.players = data.players || [];
+      state.pl.running = !!data.running;
+      renderPlList();
+      const keep = state.pl.selected
+        && state.pl.players.find((p) => plKey(p) === state.pl.selected);
+      const first = keep || state.pl.players[0];
+      if (first) plSelect(first, false);
+    } catch (e) {
+      authError("#pl-error", `Spieler nicht ladbar: ${e.message}`);
+    }
+  }
+
+  function plKey(p) { return p.uuid || p.name; }
+
+  const PL_FILTERS = [
+    ["all", "Alle", () => true],
+    ["online", "Online", (p) => p.online],
+    ["offline", "Offline", (p) => !p.online],
+    ["whitelist", "Whitelist", (p) => p.whitelisted],
+    ["op", "Operator", (p) => p.op_level > 0],
+    ["banned", "Gebannt", (p) => p.banned],
+  ];
+
+  function renderPlList() {
+    const chips = $("#pl-chips");
+    chips.textContent = "";
+    for (const [key, label, test] of PL_FILTERS) {
+      const count = state.pl.players.filter(test).length;
+      const btn = plEl("button", `pl-chip${state.pl.filter === key ? " active" : ""}`, `${label} (${count})`);
+      btn.type = "button";
+      btn.dataset.plFilter = key;
+      btn.disabled = count === 0 && key !== "all";
+      btn.addEventListener("click", () => { state.pl.filter = key; renderPlList(); });
+      chips.appendChild(btn);
+    }
+    const query = ($("#pl-filter").value || "").trim().toLowerCase();
+    const test = PL_FILTERS.find(([k]) => k === state.pl.filter)?.[2] || (() => true);
+    const list = $("#pl-list");
+    list.textContent = "";
+    const matches = state.pl.players.filter((p) => test(p)
+      && (!query || (p.name || p.uuid || "").toLowerCase().includes(query)));
+    show($("#pl-empty"), matches.length === 0);
+    for (const p of matches) {
+      const li = plEl("li", `pl-item${plKey(p) === state.pl.selected ? " active" : ""}`);
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      const face = plEl("img", "pl-face");
+      face.src = playerFace(p.name || p.uuid);
+      face.alt = "";
+      if (p.online) li.classList.add("is-online");
+      const text = plEl("div", "pl-item-text");
+      const top = plEl("div", "pl-item-top");
+      top.append(plEl("span", "pl-item-name", p.name || `${p.uuid.slice(0, 8)}…`));
+      if (p.op_level > 0) top.append(plEl("span", "pl-badge op", "OP"));
+      if (p.banned) top.append(plEl("span", "pl-badge ban", "Gebannt"));
+      const parts = [p.online ? "online" : plAgo(p.last_seen),
+        p.play_seconds ? `${fmtDuration(p.play_seconds)} gespielt` : "",
+        p.advancements ? `${p.advancements} Fortschritte` : "",
+        p.player_kills ? `${p.player_kills} PvP-Kills` : ""].filter(Boolean);
+      text.append(top, plEl("div", "pl-item-meta muted small", parts.join(" · ")));
+      li.append(face, text);
+      const pick = () => plSelect(p, true);
+      li.addEventListener("click", pick);
+      li.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      list.appendChild(li);
+    }
+  }
+
+  async function plSelect(p, scroll) {
+    state.pl.selected = plKey(p);
+    renderPlList();
+    const id = state.detailId;
+    const pane = $("#pl-profile");
+    pane.classList.add("loading");
+    try {
+      const data = await api(`/api/instances/${id}/known-players/${encodeURIComponent(plKey(p))}`);
+      if (state.detailId !== id || state.pl.selected !== plKey(p)) return;
+      state.pl.profile = data;
+      renderPlProfile();
+      if (scroll && window.matchMedia("(max-width: 760px)").matches) {
+        pane.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    } catch (e) {
+      authError("#pl-error", `Profil nicht ladbar: ${e.message}`);
+    } finally {
+      pane.classList.remove("loading");
+    }
+  }
+
+  function plBar(label, value, max, cls) {
+    const row = plEl("div", "pl-bar-row");
+    const bar = plEl("div", `pl-bar ${cls}`);
+    const fill = plEl("span");
+    fill.style.width = `${Math.max(0, Math.min(100, ((value ?? 0) / max) * 100))}%`;
+    bar.append(fill);
+    row.append(plEl("span", "pl-bar-label muted small", label), bar,
+      plEl("span", "pl-bar-val", value == null ? "–" : `${value}/${max}`));
+    return row;
+  }
+
+  function plKv(label, value, extra) {
+    const box = plEl("div", "pl-kv");
+    box.append(plEl("span", "muted small", label));
+    const v = plEl("strong", "", null);
+    if (value instanceof Node) v.append(value); else v.textContent = value ?? "–";
+    box.append(v);
+    if (extra) box.append(plEl("span", "muted small", extra));
+    return box;
+  }
+
+  function plTile(label, value, sub, highlight) {
+    const tile = plEl("div", `pl-tile${highlight ? " hl" : ""}`);
+    tile.append(plEl("span", "pl-tile-label muted small", label),
+      plEl("strong", "pl-tile-val", value), plEl("span", "muted small", sub || ""));
+    return tile;
+  }
+
+  function renderPlProfile() {
+    const p = state.pl.profile;
+    const pane = $("#pl-profile");
+    pane.textContent = "";
+    if (!p) return;
+    const v = p.live || p.saved;
+    const s = p.stats || {};
+    const sess = p.sessions || {};
+    // Kopf
+    const head = plEl("div", "pl-head");
+    const face = plEl("img", "pl-head-face");
+    face.src = playerFace(p.name || p.uuid);
+    face.alt = "";
+    const title = plEl("div", "pl-head-text");
+    const nameRow = plEl("div", "pl-head-name");
+    nameRow.append(plEl("h4", "", p.name || "Unbekannt"));
+    nameRow.append(plEl("span", `pl-badge ${p.online ? "on" : "off"}`, p.online ? "Online" : "Offline"));
+    if (p.op_level > 0) nameRow.append(plEl("span", "pl-badge op", `Operator ${p.op_level}`));
+    if (p.whitelisted) nameRow.append(plEl("span", "pl-badge", "Whitelist"));
+    if (p.banned) nameRow.append(plEl("span", "pl-badge ban", "Gebannt"));
+    const sub = [];
+    if (sess.current_start) sub.push(`Sitzung ${fmtDuration(Date.now() / 1000 - sess.current_start)}`);
+    if (sess.first_seen) sub.push(`zuerst gesehen ${new Date(sess.first_seen * 1000).toLocaleDateString("de-DE")}`);
+    if (s.play_seconds) sub.push(`${fmtDuration(s.play_seconds)} gespielt`);
+    title.append(nameRow, plEl("div", "muted small", sub.join(" · ")));
+    if (p.uuid) {
+      const uid = plEl("code", "pl-uuid", p.uuid);
+      uid.title = "UUID";
+      title.append(uid);
+    }
+    head.append(face, title);
+    if (p.online && p.name) {
+      const inv = plEl("button", "btn small-btn", "Inventar");
+      inv.type = "button";
+      inv.addEventListener("click", () => openInventory(p.name));
+      head.append(inv);
+    }
+    pane.append(head);
+    // Tabs
+    const tabs = plEl("div", "pl-tabs");
+    tabs.setAttribute("role", "tablist");
+    const TABS = [["profil", "Profil"], ["sitzungen", "Sitzungen"], ["statistiken", "Statistiken"],
+      ["fortschritte", `Fortschritte (${(p.advancements || []).length})`]];
+    for (const [key, label] of TABS) {
+      const b = plEl("button", `pl-tab${state.pl.tab === key ? " active" : ""}`, label);
+      b.type = "button";
+      b.setAttribute("role", "tab");
+      b.dataset.plTab = key;
+      b.addEventListener("click", () => { state.pl.tab = key; renderPlProfile(); });
+      tabs.append(b);
+    }
+    pane.append(tabs);
+    const body = plEl("div", "pl-tab-body");
+    pane.append(body);
+
+    if (state.pl.tab === "profil") {
+      const vit = plEl("div", "pl-vitals");
+      if (v) {
+        const left = plEl("div", "pl-vitals-bars");
+        left.append(plBar("Leben", v.health, 20, "hp"), plBar("Hunger", v.food, 20, "food"));
+        if (v.saturation != null) left.append(plEl("span", "muted small", `Sättigung ${v.saturation}`));
+        const right = plEl("div", "pl-vitals-grid");
+        right.append(
+          plKv("Level", v.level ?? "–"),
+          plKv("Modus", MODES[v.gamemode] || v.gamemode || "–"),
+          plKv("Blickrichtung", v.facing || "–"),
+          plKv("Position", plPos(v.pos, v.dimension), DIMENSIONS[v.dimension] || ""),
+          plKv("Bett / Spawn", v.bed ? plPos(v.bed.pos, v.bed.dimension) : "keins",
+            v.bed ? DIMENSIONS[v.bed.dimension] || "" : ""),
+        );
+        vit.append(left, right);
+      } else {
+        vit.append(plEl("p", "muted small", "Noch keine gespeicherten Spielerdaten."));
+      }
+      body.append(vit);
+      body.append(plEl("p", "muted small pl-source", p.live
+        ? "Live-Werte vom laufenden Server."
+        : p.saved_at ? `Stand der letzten Speicherung (${fmtDate(p.saved_at)}).` : ""));
+      body.append(plEl("h5", "pl-sub", "Persönliche Rekorde"));
+      const rec = plEl("div", "pl-tiles");
+      rec.append(
+        plTile("Längste Sitzung", sess.longest ? fmtDuration(sess.longest.seconds) : "–",
+          sess.longest ? new Date(sess.longest.start * 1000).toLocaleDateString("de-DE") : "", false),
+        plTile("Mob-Kills", (s.mob_kills ?? 0).toLocaleString("de-DE"), "insgesamt", false),
+        plTile("Diamanten abgebaut", String(s.diamonds ?? 0), "insgesamt", (s.diamonds || 0) >= 100),
+        plTile("Überlebt seit", s.since_death_seconds ? fmtDuration(s.since_death_seconds) : "–",
+          "ohne zu sterben", (s.since_death_seconds || 0) >= 86400),
+        plTile("Strecke", plKm(s.distance_m ?? 0), "insgesamt", (s.distance_m || 0) >= 100000),
+        plTile("Tode", String(s.deaths ?? 0),
+          sess.count ? `${(s.deaths / sess.count || 0).toFixed(1).replace(".", ",")} je Sitzung` : "", false),
+      );
+      body.append(rec);
+      body.append(plEl("h5", "pl-sub", "Auf einen Blick"));
+      const glance = plEl("div", "pl-tiles");
+      const kd = s.deaths ? (s.mob_kills + s.player_kills) / s.deaths : null;
+      const total = p.advancements_total;
+      glance.append(
+        plTile("Sitzungen", `${sess.count || 0}`, sess.count ? `Ø ${fmtDuration(sess.avg_seconds)}` : "", false),
+        plTile("Kampf", (s.mob_kills ?? 0).toLocaleString("de-DE"),
+          `Kills · ${s.player_kills ?? 0} PvP · K/D ${kd == null ? "–" : kd.toFixed(1).replace(".", ",")}`, false),
+        plTile("Erkundung", plKm(s.distance_m ?? 0), `${fmtNumber(s.jumps ?? 0)} Sprünge`, false),
+        plTile("Fortschritte", total ? `${(p.advancements || []).length} / ${total}` : String((p.advancements || []).length),
+          total ? `${Math.round(((p.advancements || []).length / total) * 100)} % geschafft` : "", false),
+      );
+      body.append(glance);
+    } else if (state.pl.tab === "sitzungen") {
+      const list = sess.sessions || [];
+      if (!list.length) {
+        body.append(plEl("p", "muted small", "Noch keine Sitzungen aufgezeichnet. Das Dashboard zeichnet Sitzungen auf, während es läuft."));
+      } else {
+        const table = plEl("table", "pl-table");
+        const thead = plEl("thead");
+        const hr = plEl("tr");
+        for (const h of ["Beginn", "Ende", "Dauer"]) hr.append(plEl("th", "", h));
+        thead.append(hr);
+        const tbody = plEl("tbody");
+        for (const x of list) {
+          const tr = plEl("tr");
+          tr.append(plEl("td", "", fmtDate(x.start)),
+            plEl("td", "", x.open ? "läuft" : fmtDate(x.end)),
+            plEl("td", "", fmtDuration(x.seconds)));
+          tbody.append(tr);
+        }
+        table.append(thead, tbody);
+        body.append(table);
+        if (sess.count > list.length) body.append(plEl("p", "muted small", `Die letzten ${list.length} von ${sess.count} Sitzungen.`));
+      }
+    } else if (state.pl.tab === "statistiken") {
+      if (!Object.keys(s).length) {
+        body.append(plEl("p", "muted small", "Keine Statistik-Datei gefunden."));
+      } else {
+        const grid = plEl("div", "pl-stats");
+        const rows = [
+          ["Spielzeit", fmtDuration(s.play_seconds)], ["Tode", s.deaths],
+          ["Mob-Kills", s.mob_kills], ["PvP-Kills", s.player_kills],
+          ["Schaden ausgeteilt", `${fmtNumber(s.damage_dealt)} ♥`], ["Schaden erlitten", `${fmtNumber(s.damage_taken)} ♥`],
+          ["Blöcke abgebaut", fmtNumber(s.blocks_mined)], ["Diamanten", s.diamonds],
+          ["Sprünge", fmtNumber(s.jumps)], ["Geschlafen", s.sleeps], ["Fische gefangen", s.fish],
+          ["Strecke gesamt", plKm(s.distance_m)],
+        ];
+        for (const [k, val] of rows) grid.append(plKv(k, String(val ?? 0)));
+        body.append(grid);
+        const TRAVEL = { walk: "Gehen", sprint: "Rennen", crouch: "Schleichen", swim: "Schwimmen",
+          walk_on_water: "Auf Wasser", walk_under_water: "Unter Wasser", climb: "Klettern",
+          fall: "Fallen", fly: "Fliegen", aviate: "Elytra", boat: "Boot", horse: "Pferd",
+          minecart: "Lore", pig: "Schwein", strider: "Schreiter", happy_ghast: "Glücklicher Ghast" };
+        const travel = Object.entries(s.travel_m || {}).sort((a, b) => b[1] - a[1]);
+        if (travel.length) {
+          body.append(plEl("h5", "pl-sub", "Unterwegs"));
+          const tg = plEl("div", "pl-stats");
+          for (const [k, m] of travel) tg.append(plKv(TRAVEL[k] || k, plKm(m)));
+          body.append(tg);
+        }
+        if ((s.top_kills || []).length) {
+          body.append(plEl("h5", "pl-sub", "Meiste Kills"));
+          const kg = plEl("div", "pl-stats");
+          for (const k of s.top_kills) kg.append(plKv(k.mob.replace(/_/g, " "), fmtNumber(k.count)));
+          body.append(kg);
+        }
+      }
+    } else {
+      const list = p.advancements || [];
+      if (!list.length) {
+        body.append(plEl("p", "muted small", "Noch keine Fortschritte."));
+      } else {
+        const ul = plEl("ul", "pl-adv");
+        for (const a of list) {
+          const li = plEl("li", "pl-adv-item");
+          li.append(plEl("span", `pl-adv-group g-${a.group}`, a.group),
+            plEl("span", "pl-adv-title", a.title || a.path.split("/").pop().replace(/_/g, " ")),
+            plEl("span", "muted small", a.at ? a.at.slice(0, 10) : ""));
+          ul.append(li);
+        }
+        body.append(ul);
+        if (!p.advancements_total) {
+          body.append(plEl("p", "muted small", "Deutsche Namen erscheinen, sobald einmal die Inventar-Ansicht geöffnet wurde (lädt die Spieldaten)."));
+        }
+      }
+    }
+  }
+
+  /* Live-Tabelle */
+  async function pliveLoad() {
+    if (!state.detailId || state.plive.busy) return;
+    const id = state.detailId;
+    if (state.plive.id !== id) { // anderer Server: alte Zeilen weg
+      state.plive.id = id;
+      authError("#plive-error", "");
+      $("#plive-body").textContent = "";
+      show($("#plive-table"), false);
+      show($("#plive-empty"), false);
+      setText($("#plive-count"), "");
+      setText($("#plive-time"), "–");
+      setText($("#plive-weather"), "–");
+    }
+    if (instStateKey(currentDetailInst() || state.detailData || {}) !== "running") {
+      show($("#plive-table"), false);
+      show($("#plive-empty"), false);
+      setText($("#plive-hint"), "Server läuft nicht — die Tabelle erscheint, sobald er gestartet ist.");
+      return;
+    }
+    state.plive.busy = true;
+    try {
+      const data = await api(`/api/instances/${id}/players-live`);
+      if (state.detailId !== id) return;
+      authError("#plive-error", "");
+      setText($("#plive-hint"), "Aktualisiert sich alle 10 Sekunden, solange dieser Bereich offen ist.");
+      setText($("#plive-time"), `🕒 ${wsetClock(data.daytime)}`);
+      setText($("#plive-weather"), WEATHER[data.weather] || "–");
+      setText($("#plive-count"), data.online != null ? `${data.online} / ${data.max}` : "");
+      const rows = data.players || [];
+      show($("#plive-table"), rows.length > 0);
+      show($("#plive-empty"), rows.length === 0);
+      const tbody = $("#plive-body");
+      tbody.textContent = "";
+      for (const r of rows) {
+        const tr = plEl("tr");
+        const who = plEl("td", "plive-who");
+        const face = plEl("img", "pl-face");
+        face.src = playerFace(r.name);
+        face.alt = "";
+        const link = plEl("button", "plive-name", r.name);
+        link.type = "button";
+        link.title = "Profil öffnen";
+        link.addEventListener("click", () => {
+          const known = state.pl.players.find((p) => (p.name || "").toLowerCase() === r.name.toLowerCase());
+          plSelect(known || { name: r.name }, true);
+        });
+        who.append(face, link);
+        const hp = plEl("td", `plive-num${r.health != null && r.health < 10 ? " warn" : ""}`, r.health ?? "–");
+        const food = plEl("td", `plive-num${r.food != null && r.food < 10 ? " warn" : ""}`, r.food ?? "–");
+        const pos = plEl("td");
+        pos.append(plPos(r.pos, r.dimension));
+        const bed = plEl("td");
+        bed.append(r.bed ? plPos(r.bed.pos, r.bed.dimension) : plEl("span", "muted", "–"));
+        tr.append(who, plEl("td", "", r.session_seconds != null ? fmtDuration(r.session_seconds) : "–"),
+          pos, bed, hp, food, plEl("td", "plive-num", r.level ?? "–"));
+        tbody.append(tr);
+      }
+    } catch (e) {
+      authError("#plive-error", `Live-Daten nicht ladbar: ${e.message}`);
+    } finally {
+      state.plive.busy = false;
+    }
+  }
+
+  function pliveSync() {
+    const want = state.tab === "servers" && state.wsTab === "spieler" && !!state.detailId
+      && !document.hidden;
+    if (want && !state.plive.timer) {
+      pliveLoad();
+      state.plive.timer = setInterval(pliveLoad, 10000);
+    } else if (want && state.plive.id !== state.detailId) {
+      pliveLoad(); // Server gewechselt: nicht auf den nächsten Takt warten
+    } else if (!want && state.plive.timer) {
+      clearInterval(state.plive.timer);
+      state.plive.timer = null;
+    }
+  }
+
+  document.addEventListener("visibilitychange", pliveSync);
+  $("#plive-reload").addEventListener("click", pliveLoad);
+  $("#pl-reload").addEventListener("click", plLoad);
+  $("#pl-filter").addEventListener("input", renderPlList);
+
   /* ---------- Whitelist (whitelist.json) ---------- */
   function wlSetError(msg) {
     const box = $("#wl-error");
@@ -7253,6 +8025,7 @@
     if (key === "welt" && state.detailId && state.wsLoaded?.has("welt")) loadWorldInfo();
     else if (key !== "welt" && typeof resetMapFrame === "function") resetMapFrame();
     loadWsTabData(key);
+    pliveSync();
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
         && instStateKey(currentDetailInst() || state.detailData || {}) === "running") {
@@ -7274,6 +8047,7 @@
     const visible = state.tab === "servers" && !!state.detailId;
     show($("#hotbar-wrap"), visible);
     document.body.classList.toggle("has-hotbar", visible);
+    if (state.plive) pliveSync(); // Live-Tabelle nur im offenen Spieler-Bereich
   }
 
   /* Zähler in den Slots: Spieler online, installierte Mods */
@@ -7354,14 +8128,17 @@
       ["#mp-update-check", "mods-packs"],   // Installiertes Modpack
       ["#pack-search-input", "mods-packs"], // Modpack installieren (Suche)
       ["#pack-upload-goto", "mods-packs"],  // Modpack hochladen (→ Upload-Tab)
+      ["#wset-reload", "welt"],           // Welt-Einstellungen
       ["#world-reload", "welt"],          // Welten
       ["#map-reload", "welt"],            // Live-Karte
       ["#icon-reload", "welt"],           // Server-Icon
       ["#dp-reload", "welt"],             // Datapacks
       ["#fb-reload", "dateien"],          // Datei-Browser
+      ["#plive-reload", "spieler"],       // Verbundene Spieler (live)
+      ["#pl-reload", "spieler"],          // Spieler-Übersicht
       ["#rcon-reload", "spieler"],        // Spieler verwalten (RCON)
       ["#wl-reload-file", "spieler"],     // Whitelist
-      ["#gr-reload", "spieler"],          // Gamerules
+      ["#gr-reload", "welt"],             // Alle Gamerules
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
       ["#hib-save", "einstellungen"],     // Schlafmodus

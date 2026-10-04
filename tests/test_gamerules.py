@@ -120,25 +120,46 @@ class TestRouten:
         base = f"/api/instances/{instanz['id']}/gamerules"
 
         captured = []
+        batches = []
 
         def fake_command(host, port, password, cmd, timeout=15.0):
             captured.append(cmd)
-            if cmd.strip() == "gamerule":
-                return ("gamerule announceAdvancements = true\n"
-                        "gamerule keepInventory = true\n"
-                        "gamerule randomTickSpeed = 3\n")
             return f"Gamerule {cmd.split()[1]} is currently set to: false"
+
+        def fake_commands(host, port, password, cmds, timeout=15.0):
+            batches.append(list(cmds))
+            known_values = {"announceAdvancements": "true",
+                            "keepInventory": "true", "randomTickSpeed": "3"}
+            out = []
+            for cmd in cmds:
+                if cmd == "time query daytime":
+                    out.append("The time is 30000")
+                    continue
+                name = cmd.split()[1]
+                out.append(f"Gamerule {name} is currently set to: "
+                           f"{known_values[name]}" if name in known_values
+                           else "Incorrect argument for command")
+            return out
 
         from app import rcon as rcon_mod
         monkeypatch.setattr(rcon_mod, "command", fake_command)
+        monkeypatch.setattr(rcon_mod, "commands", fake_commands)
         r = client.get(base)
         assert r.status_code == 200
-        assert captured == ["gamerule"]
+        # Jede Regel einzeln, plus Uhrzeit — alles in einem Durchgang
+        assert len(batches) == 1
+        assert "gamerule keepInventory" in batches[0]
+        assert batches[0][-1] == "time query daytime"
+        assert r.json()["daytime"] == 6000
         rules = {g["name"]: g for g in r.json()["gamerules"]}
-        assert len(rules) == len(gr.GAMERULES)
+        # 1.21.4: Locator-Bar und Feuer-Radius gibt es noch nicht
+        assert "locatorBar" not in rules
+        assert "fireSpreadRadius" not in rules
+        assert len(rules) == len(gr.GAMERULES) - 2
         assert rules["keepInventory"]["value"] is True
         assert rules["doDaylightCycle"]["value"] is None  # nicht gemeldet
         assert rules["doDaylightCycle"]["default"] is True
+        assert rules["playersSleepingPercentage"]["default"] == 100
         # Setzen (bool)
         r = client.post(base, json={"name": "doDaylightCycle", "value": False})
         assert r.status_code == 200
@@ -149,6 +170,17 @@ class TestRouten:
         r = client.post(base, json={"name": "randomTickSpeed", "value": 10})
         assert r.status_code == 200
         assert captured[-1] == "gamerule randomTickSpeed 10"
+        # Schlaf-Schwelle 0 bis 100
+        r = client.post(base, json={"name": "playersSleepingPercentage",
+                                    "value": 0})
+        assert r.status_code == 200
+        assert captured[-1] == "gamerule playersSleepingPercentage 0"
+        r = client.post(base, json={"name": "playersSleepingPercentage",
+                                    "value": 101})
+        assert r.status_code == 400
+        # Regel aus neuerer Version → 400
+        r = client.post(base, json={"name": "locatorBar", "value": False})
+        assert r.status_code == 400
         # Unbekannte Gamerule → 400
         r = client.post(base, json={"name": "pvp", "value": True})
         assert r.status_code == 400
@@ -177,3 +209,123 @@ class TestRouten:
         r = client.post(f"/api/instances/{instanz['id']}/gamerules",
                         json={"name": "keepInventory", "value": True})
         assert r.status_code == 403
+
+
+class TestVersion:
+    def test_locator_bar_ab_1_21_6(self):
+        entry = gr.known("locatorBar")
+        assert not gr.available(entry, "1.21.4")
+        assert not gr.available(entry, "1.20.1")
+        assert gr.available(entry, "1.21.6")
+        assert gr.available(entry, "1.21.10")
+        assert gr.available(entry, "25w20a")  # Snapshot
+        assert gr.available(gr.known("keepInventory"), "1.16.5")
+
+    def test_daytime_parser(self):
+        assert gr.parse_daytime("The time is 6000") == 6000
+        assert gr.parse_daytime("The time is 30000") == 6000
+        assert gr.parse_daytime("") is None
+
+
+class TestUhrzeitWetter:
+    def test_nur_feste_befehle(self, client, instanz, monkeypatch):
+        from app import rcon as rcon_mod
+        from app import runtime
+        monkeypatch.setattr(runtime, "is_running", lambda inst: True)
+        monkeypatch.setattr(runtime, "rcon_target", lambda inst: ("127.0.0.1", 59998))
+        monkeypatch.setattr(runtime, "rcon_secret", lambda inst: "secret")
+        sent = []
+
+        def fake_commands(host, port, password, cmds, timeout=15.0):
+            sent.append(list(cmds))
+            return ["ok"] * (len(cmds) - 1) + ["The time is 18000"]
+
+        monkeypatch.setattr(rcon_mod, "commands", fake_commands)
+        url = f"/api/instances/{instanz['id']}/world/time-weather"
+        r = client.post(url, json={"time": "nacht", "weather": "klar"})
+        assert r.status_code == 200
+        assert sent[-1] == ["time set midnight", "weather clear",
+                            "time query daytime"]
+        assert r.json()["daytime"] == 18000
+        assert client.post(url, json={"time": "set 0; stop"}).status_code == 400
+        assert client.post(url, json={"weather": "schnee"}).status_code == 400
+        assert client.post(url, json={}).status_code == 400
+
+    def test_gestoppt_409(self, client, instanz, monkeypatch):
+        from app import runtime
+        monkeypatch.setattr(runtime, "is_running", lambda inst: False)
+        r = client.post(f"/api/instances/{instanz['id']}/world/time-weather",
+                        json={"weather": "regen"})
+        assert r.status_code == 409
+
+
+class TestNeueNamen:
+    """Ab 1.21.11 heißen die Regeln anders (Befehlsbaum aus misode/mcmeta)."""
+
+    def test_versionsgrenze(self):
+        assert not gr.new_names("1.21.10")
+        assert not gr.new_names("1.20.1")
+        assert gr.new_names("1.21.11")
+        assert gr.new_names("26.1")
+        assert gr.new_names("25w44a")
+        assert not gr.new_names("25w43a")
+
+    def test_zuordnung_vollstaendig(self):
+        names = {g["name"] for g in gr.GAMERULES}
+        assert set(gr.NEW_NAMES) <= names
+        assert gr.INVERTED.issubset(gr.NEW_NAMES)
+        entry = gr.known("doDaylightCycle")
+        assert gr.rcon_name(entry, "1.21.4") == "doDaylightCycle"
+        assert gr.rcon_name(entry, "1.21.11") == "advance_time"
+        # doFireTick gibt es neu nicht mehr, dafür den Radius
+        assert not gr.available(gr.known("doFireTick"), "1.21.11")
+        assert gr.available(gr.known("fireSpreadRadius"), "1.21.11")
+        assert not gr.available(gr.known("fireSpreadRadius"), "1.21.10")
+
+    def test_lesen_und_setzen_mit_neuen_namen(self, client, monkeypatch):
+        from app import rcon as rcon_mod
+        from app import runtime
+        inst = instances.create_instance("Neu-Srv", "fabric", "1.21.11",
+                                         accept_eula=True)
+        monkeypatch.setattr(runtime, "is_running", lambda inst: True)
+        monkeypatch.setattr(runtime, "rcon_target", lambda inst: ("127.0.0.1", 59998))
+        monkeypatch.setattr(runtime, "rcon_secret", lambda inst: "secret")
+        server = {"advance_time": "false", "raids": "false",
+                  "players_sleeping_percentage": "50",
+                  "fire_spread_radius_around_player": "128"}
+        sent = []
+
+        def fake_commands(host, port, password, cmds, timeout=15.0):
+            out = []
+            for cmd in cmds:
+                if cmd == "time query daytime":
+                    out.append("The time is 0")
+                    continue
+                name = cmd.split()[1]
+                out.append(f"Gamerule minecraft:{name} is currently set to: "
+                           f"{server[name]}" if name in server
+                           else "Incorrect argument for command")
+            return out
+
+        def fake_command(host, port, password, cmd, timeout=15.0):
+            sent.append(cmd)
+            return "ok"
+
+        monkeypatch.setattr(rcon_mod, "commands", fake_commands)
+        monkeypatch.setattr(rcon_mod, "command", fake_command)
+        base = f"/api/instances/{inst['id']}/gamerules"
+        rules = {g["name"]: g for g in client.get(base).json()["gamerules"]}
+        assert rules["doDaylightCycle"]["value"] is False
+        assert rules["disableRaids"]["value"] is True  # raids=false umgedreht
+        assert rules["playersSleepingPercentage"]["value"] == 50
+        assert rules["fireSpreadRadius"]["value"] == 128
+        assert "doFireTick" not in rules
+        assert "respawnBlocksExplode" not in rules
+        assert client.post(base, json={"name": "doWeatherCycle",
+                                       "value": False}).status_code == 200
+        assert sent[-1] == "gamerule advance_weather false"
+        r = client.post(base, json={"name": "disableRaids", "value": True})
+        assert r.json()["value"] is True
+        assert sent[-1] == "gamerule raids false"
+        assert client.post(base, json={"name": "doFireTick",
+                                       "value": False}).status_code == 400
