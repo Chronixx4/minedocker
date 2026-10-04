@@ -520,22 +520,78 @@
             <p id="backup-empty" class="muted hidden">Noch keine Backups vorhanden.</p>
           </div>
 
-          <div class="upload-box">
-            <h3>Welt <span class="muted small">(Ordner als Archiv)</span>
-              <button id="world-reload" class="btn small-btn" title="Welt-Info aktualisieren">Aktualisieren</button>
+          <div class="upload-box ws-worlds-box">
+            <h3>Welten <span id="worlds-count" class="muted small"></span>
+              <button id="world-reload" class="btn small-btn" title="Welten neu laden">Aktualisieren</button>
             </h3>
             <p class="muted small" id="world-info">–</p>
-            <div class="upload-row">
-              <button id="world-download-btn" class="btn primary" disabled>Welt herunterladen (.zip)</button>
-            </div>
-            <div class="upload-row" style="margin-top: 0.5rem;">
-              <input id="world-upload-file" class="file-input admin-only" type="file" accept=".zip,.tar.gz">
-              <button id="world-upload-btn" class="btn admin-only" disabled>Welt hochladen</button>
-            </div>
-            <p class="muted small">Ersetzt die Welt: Das Archiv enthält <code>level.dat</code> direkt
-              (Welt-Inhalt) oder in einem Unterordner (Ordner-Name wird übernommen).
-              Nur bei gestoppter Instanz möglich.</p>
+            <ul id="worlds-list" class="world-list"></ul>
+            <details class="ws-details admin-only" id="world-new-box">
+              <summary>+ Neue Welt</summary>
+              <div class="world-form">
+                <label class="toolbar-field" for="world-new-name">Name
+                  <input id="world-new-name" class="search-input" type="text" maxlength="48"
+                         placeholder="z. B. Abenteuer" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="toolbar-field" for="world-new-seed">Seed
+                  <input id="world-new-seed" class="search-input" type="text" maxlength="64"
+                         placeholder="leer = zufällig" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="toolbar-field" for="world-new-type">Welt-Typ
+                  <select id="world-new-type">
+                    <option value="normal">Normal</option>
+                    <option value="flat">Flachland</option>
+                    <option value="large_biomes">Große Biome</option>
+                    <option value="amplified">Zerklüftet</option>
+                  </select>
+                </label>
+                <button id="world-new-btn" class="btn primary">Anlegen</button>
+              </div>
+              <p class="muted small">Die neue Welt wird beim nächsten Start erzeugt und ist dann aktiv.
+                Die bisherigen Welten bleiben erhalten — du kannst jederzeit zurückwechseln.</p>
+            </details>
+            <details class="ws-details admin-only">
+              <summary>Welt importieren (.zip / .tar.gz)</summary>
+              <div class="world-form">
+                <input id="world-upload-file" class="file-input" type="file" accept=".zip,.tar.gz">
+                <label class="toolbar-field" for="world-import-name">Name
+                  <input id="world-import-name" class="search-input" type="text" maxlength="48"
+                         placeholder="leer = aus dem Archiv" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="check" for="world-import-activate">
+                  <input type="checkbox" id="world-import-activate"> direkt aktivieren
+                </label>
+                <button id="world-upload-btn" class="btn" disabled>Importieren</button>
+              </div>
+              <p class="muted small">Fügt die Welt zusätzlich hinzu, die aktive Welt bleibt unangetastet.
+                Das Archiv enthält <code>level.dat</code> direkt oder in einem Unterordner.</p>
+            </details>
             <div id="world-error" class="err hidden"></div>
+          </div>
+
+          <div class="upload-box ws-map-box">
+            <h3>Live-Karte <span class="muted small">(BlueMap)</span>
+              <button id="map-reload" class="btn small-btn" title="Karten-Status neu laden">Aktualisieren</button>
+            </h3>
+            <p id="map-info" class="muted small">–</p>
+            <div id="map-setup" class="map-setup admin-only hidden">
+              <label class="check" for="map-accept">
+                <input type="checkbox" id="map-accept">
+                <span>BlueMap darf die Minecraft-Client-Ressourcen (Texturen, Modelle) von Mojang
+                  herunterladen — nötig zum Rendern
+                  (<a href="https://www.minecraft.net/eula" target="_blank" rel="noopener">Mojang-EULA</a>).</span>
+              </label>
+              <button id="map-enable" class="btn primary" disabled>Karte aktivieren</button>
+            </div>
+            <div class="row map-actions">
+              <a id="map-open" class="btn hidden" target="_blank" rel="noopener">In neuem Tab öffnen</a>
+              <button id="map-restart" class="btn primary admin-only hidden">Jetzt neu starten</button>
+              <button id="map-disable" class="btn danger admin-only hidden">Karte deaktivieren</button>
+            </div>
+            <div id="map-frame-wrap" class="map-frame hidden">
+              <iframe id="map-frame" title="Live-Karte" referrerpolicy="no-referrer"></iframe>
+            </div>
+            <div id="map-error" class="err hidden"></div>
           </div>
 
           <div class="upload-box">

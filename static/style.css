@@ -2777,3 +2777,74 @@ kbd {
   .ws-ov-main .logs { height: 200px; }
   .ws-activity { max-height: 220px; }
 }
+
+/* ==========================================================================
+   Welten-Verwaltung und Live-Karte (Welt-Slot)
+   ========================================================================== */
+.world-list {
+  list-style: none;
+  margin: 0.4rem 0 0.8rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.world-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--edge-lo);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 1px 1px 0 var(--edge-hi);
+}
+.world-row.active { box-shadow: inset 3px 0 0 var(--accent), inset 1px 1px 0 var(--edge-hi); }
+.world-row > img { width: 28px; height: 28px; image-rendering: pixelated; flex: none; }
+.world-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.world-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; min-width: 0; }
+.world-name {
+  font-family: var(--font-pixel);
+  font-size: 1.05rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.world-head .badge { font-size: 0.72rem; padding: 0.05rem 0.4rem; }
+.world-actions { display: flex; flex-wrap: wrap; gap: 0.3rem; justify-content: flex-end; }
+.world-actions .small-btn { margin-left: 0; }
+.world-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin: 0.6rem 0 0.3rem;
+}
+.world-form .toolbar-field { display: flex; flex-direction: column; gap: 0.25rem; }
+.world-form .search-input { min-width: 0; width: 200px; max-width: 100%; }
+.ws-worlds-box .ws-details { margin-top: 0.5rem; }
+
+.map-setup { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.5rem 0; }
+.map-setup .check { align-items: flex-start; gap: 0.5rem; line-height: 1.4; }
+.map-setup .check input { margin-top: 0.2rem; flex: none; }
+.map-setup .btn { align-self: flex-start; }
+.map-actions { margin: 0.4rem 0; flex-wrap: wrap; }
+.map-actions .btn { margin-left: 0; text-decoration: none; }
+.map-frame {
+  margin-top: 0.6rem;
+  border: 1px solid var(--edge-lo);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #000;
+  height: min(70vh, 640px);
+}
+.map-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+@media (max-width: 640px) {
+  .world-row { flex-wrap: wrap; }
+  .world-actions { width: 100%; justify-content: flex-start; }
+  .world-form .search-input { width: 100%; }
+  .world-form .toolbar-field { width: 100%; }
+  .map-frame { height: 60vh; }
+}

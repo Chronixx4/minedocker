@@ -38,6 +38,7 @@ from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
 from . import history as history_mod
 from . import icon as icon_mod
+from . import livemap as livemap_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
 from . import updates as updates_mod
@@ -324,6 +325,29 @@ class FileRenameRequest(BaseModel):
 class DatapackNameRequest(BaseModel):
     """Datapack-Dateiname (nur .zip)."""
     name: str = Field(min_length=1, max_length=128)
+
+
+class WorldCreateRequest(BaseModel):
+    """Neue Welt: wird beim nächsten Start mit Seed/Typ erzeugt."""
+    name: str = Field(min_length=1, max_length=48)
+    seed: str = Field(default="", max_length=64)
+    level_type: str = Field(default="normal", max_length=16)
+
+
+class WorldNameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=48)
+
+
+class WorldRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=48)
+    new_name: str = Field(min_length=1, max_length=48)
+
+
+class MapToggleRequest(BaseModel):
+    """Live-Karte (BlueMap) ein-/ausschalten. accept_download bestätigt den
+    Download der Minecraft-Client-Ressourcen durch BlueMap (Mojang-EULA)."""
+    enabled: bool
+    accept_download: bool = False
 
 
 class GameruleSetRequest(BaseModel):
@@ -1664,6 +1688,108 @@ async def instance_world_upload(instance_id: str, file: UploadFile = File(...)):
         staging_path.unlink(missing_ok=True)
     logger.info("Welt ersetzt: %s → %s", original, instance_id)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Mehrere Welten je Instanz (Liste, neu, wechseln, kopieren, umbenennen,
+# löschen, zusätzlich importieren, einzeln herunterladen)
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/worlds")
+async def instance_worlds_list(instance_id: str):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(worlds.list_worlds, instance_id)
+
+
+@api.post("/instances/{instance_id}/worlds")
+async def instance_worlds_create(instance_id: str, req: WorldCreateRequest):
+    result = await asyncio.to_thread(
+        worlds.create_world, instance_id, req.name, req.seed, req.level_type)
+    logger.info("Neue Welt angelegt: %s → %s", req.name, instance_id)
+    return result
+
+
+@api.post("/instances/{instance_id}/worlds/activate")
+async def instance_worlds_activate(instance_id: str, req: WorldNameRequest):
+    result = await asyncio.to_thread(worlds.switch_world, instance_id, req.name)
+    logger.info("Welt gewechselt: %s → %s", req.name, instance_id)
+    return result
+
+
+@api.post("/instances/{instance_id}/worlds/copy")
+async def instance_worlds_copy(instance_id: str, req: WorldRenameRequest):
+    return await asyncio.to_thread(
+        worlds.copy_world, instance_id, req.name, req.new_name)
+
+
+@api.post("/instances/{instance_id}/worlds/rename")
+async def instance_worlds_rename(instance_id: str, req: WorldRenameRequest):
+    return await asyncio.to_thread(
+        worlds.rename_world, instance_id, req.name, req.new_name)
+
+
+@api.post("/instances/{instance_id}/worlds/delete")
+async def instance_worlds_delete(instance_id: str, req: WorldNameRequest):
+    result = await asyncio.to_thread(worlds.delete_world, instance_id, req.name)
+    logger.info("Welt gelöscht: %s → %s", req.name, instance_id)
+    return result
+
+
+@api.post("/instances/{instance_id}/worlds/import")
+async def instance_worlds_import(instance_id: str, file: UploadFile = File(...),
+                                 name: str = Form(default=""),
+                                 activate: bool = Form(default=False)):
+    """Welt-Archiv als zusätzliche Welt hinzufügen (aktive Welt bleibt)."""
+    instances.get_instance(instance_id)
+    original = worlds.validate_archive_filename(file.filename or "")
+    staging_path = worlds.staging_dir() / f"world_{uuid.uuid4().hex[:8]}_{original}"
+    try:
+        await _stream_upload(file, staging_path, packs._MAX_PACK_BYTES)
+        result = await asyncio.to_thread(
+            worlds.import_world, instance_id, staging_path, original,
+            name.strip() or None, activate)
+    finally:
+        staging_path.unlink(missing_ok=True)
+    logger.info("Welt importiert: %s → %s", result["name"], instance_id)
+    return result
+
+
+@api.get("/instances/{instance_id}/worlds/download")
+async def instance_worlds_download(instance_id: str, name: str):
+    instances.get_instance(instance_id)
+    result = await asyncio.to_thread(worlds.create_named_world_zip, instance_id, name)
+
+    def _cleanup():
+        Path(result["path"]).unlink(missing_ok=True)
+
+    return FileResponse(result["path"], filename=result["name"],
+                        media_type="application/zip",
+                        background=BackgroundTask(_cleanup))
+
+
+# ---------------------------------------------------------------------------
+# Live-Weltkarte (BlueMap) je Instanz
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/map")
+async def instance_map_status(instance_id: str):
+    """Status der Live-Karte inkl. Erreichbarkeit des BlueMap-Webservers."""
+    instance = instances.get_instance(instance_id)
+    result = await asyncio.to_thread(livemap_mod.status, instance)
+    container = await asyncio.to_thread(runtime.container_status, instance)
+    result["server_running"] = bool(container.get("running"))
+    result["reachable"] = (result["enabled"] and result["server_running"]
+                           and await livemap_mod.reachable(instance))
+    return result
+
+
+@api.put("/instances/{instance_id}/map")
+async def instance_map_toggle(instance_id: str, req: MapToggleRequest):
+    """Karte ein-/ausschalten (wirksam beim nächsten (Neu-)Start)."""
+    instances.get_instance(instance_id)
+    if req.enabled:
+        return await livemap_mod.enable(instance_id, req.accept_download)
+    return await asyncio.to_thread(livemap_mod.disable, instance_id)
 
 
 # ---------------------------------------------------------------------------
