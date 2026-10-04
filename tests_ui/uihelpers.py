@@ -8,6 +8,15 @@ PING = {"online": True, "version": "Fabric 1.21.4", "motd": "Willkommen!",
         "latency_ms": 3, "error": None}
 
 
+def plain_headers(headers: dict) -> dict:
+    """Antwort-Header für einen umgeschriebenen JSON-Body: ohne GZip-Angaben
+    (route.fetch liefert den Body schon entpackt)."""
+    out = {k: v for k, v in headers.items()
+           if k.lower() not in ("content-encoding", "content-length")}
+    out["content-type"] = "application/json"
+    return out
+
+
 def simulate_running(page: Page, state: dict) -> None:
     """Lässt Instanzen im Browser als laufend erscheinen.
 
@@ -43,7 +52,7 @@ def simulate_running(page: Page, state: dict) -> None:
         else:
             fix(data.get("instance", data))
         route.fulfill(response=resp, body=json.dumps(data),
-                      headers={**resp.headers, "content-type": "application/json"})
+                      headers=plain_headers(resp.headers))
 
     page.route("**/api/instances/live", live)
     page.route("**/api/instances", instances)

@@ -201,3 +201,37 @@ class TestModmetaPlattenCache:
         mods.mkdir(parents=True, exist_ok=True)
         self._jar(mods / "a.jar", "alpha")
         assert instances.mods_overview(inst["id"])["mods"][0]["meta"]["mod_id"] == "alpha"
+
+
+class TestPollingEntlastet:
+    def test_container_statuses_parallel_und_vollstaendig(self, fake_docker):
+        from app import instances, runtime
+        a = instances.create_instance("Poll-A", "fabric", "1.21.4", accept_eula=True)
+        b = instances.create_instance("Poll-B", "fabric", "1.21.4", accept_eula=True)
+        runtime.start_instance(a)
+        statuses = runtime.container_statuses([a, b])
+        assert statuses[a["id"]]["running"] is True
+        assert statuses[b["id"]]["running"] is False
+        assert runtime.container_statuses([]) == {}
+
+    def test_status_teilt_ergebnis(self, client, monkeypatch):
+        from app import main, runtime
+        calls = []
+
+        def fake_resources():
+            calls.append(1)
+            return {"found": False, "containers": []}
+        monkeypatch.setattr(runtime, "docker_resources", fake_resources)
+        monkeypatch.setitem(main._status_cache, "value", None)
+        monkeypatch.setitem(main._status_cache, "task", None)
+        assert client.get("/api/status").status_code == 200
+        assert client.get("/api/status").status_code == 200
+        assert len(calls) == 1
+
+    def test_gzip_fuer_frontend_nicht_fuer_downloads(self, client):
+        r = client.get("/app.js", headers={"Accept-Encoding": "gzip"})
+        assert r.headers.get("content-encoding") == "gzip"
+        from app import main
+        excluded = next(m for m in main.app.user_middleware
+                        if m.cls.__name__ == "GZipMiddleware").kwargs["exclude_content_types"]
+        assert "application/gzip" in excluded and "text/event-stream" in excluded

@@ -3,7 +3,7 @@ import json
 import re
 
 from playwright.sync_api import expect
-from uihelpers import simulate_running
+from uihelpers import plain_headers, simulate_running
 
 SLOTS = ["uebersicht", "konsole", "spieler", "mods", "welt",
          "dateien", "backups", "zeitplan", "einstellungen"]
@@ -120,7 +120,8 @@ def _detail_ohne_speicher(page, inst):
         data = resp.json()
         data["disk"] = None
         data["disk_pending"] = True
-        route.fulfill(response=resp, json=data)
+        route.fulfill(response=resp, body=json.dumps(data),
+                      headers=plain_headers(resp.headers))
 
     page.route(f"**/api/instances/{inst['id']}", detail)
 

@@ -127,6 +127,7 @@ def sample_tick(now: int | None = None) -> int:
     rows: list[tuple] = []
     ping_targets: list[tuple[str, dict, tuple]] = []
     running_ids: set = set()
+    names_by_instance: dict = {}
     try:
         resources = runtime.docker_resources()
     except Exception:
@@ -143,10 +144,14 @@ def sample_tick(now: int | None = None) -> int:
             running_ids.add(inst_id)
             try:
                 inst = instances_get(inst_id)
+                if _is_paused(inst_id):
+                    # Schlafmodus: der Ping würde den Server wecken; niemand online
+                    rows.append((ts, "players", inst_id, None, None, 0, 0))
+                    names_by_instance[inst_id] = []
+                    continue
                 ping_targets.append((inst_id, inst, instance_ping_target(inst_id)))
             except Exception:
                 continue  # Instanz gelöscht? nächsten Tick neu prüfen
-    names_by_instance: dict = {}
     if ping_targets:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             futures = {pool.submit(_ping_players, inst, target): inst_id
@@ -176,6 +181,11 @@ def instances_get(inst_id: str):
     """Instanz-Metadaten (lazy import, wirft bei Unbekannten)."""
     from . import instances  # lazy, vermeidet Import-Zirkel
     return instances.get_instance(inst_id)
+
+
+def _is_paused(inst_id: str) -> bool:
+    from . import instances  # lazy, vermeidet Import-Zirkel
+    return instances.is_paused(inst_id)
 
 
 def instance_ping_target(inst_id: str):

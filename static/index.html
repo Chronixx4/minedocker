@@ -364,6 +364,23 @@
         </div>
       </div>
       <div id="detail-error" class="err hidden"></div>
+      <!-- Absturz-Diagnose (Watchdog bzw. „Absturz analysieren“) -->
+      <div id="crash-box" class="crash-box hidden">
+        <div class="crash-head">
+          <strong id="crash-title">Letzter Absturz</strong>
+          <span id="crash-when" class="muted small"></span>
+          <span class="crash-actions">
+            <button id="crash-analyze" class="btn small-btn" title="Log und Crash-Report jetzt auswerten">Neu analysieren</button>
+            <button id="crash-dismiss" class="btn small-btn" title="Hinweis ausblenden">Ausblenden</button>
+          </span>
+        </div>
+        <ul id="crash-findings" class="crash-findings"></ul>
+        <p id="crash-suspects" class="muted small hidden"></p>
+        <details id="crash-log-wrap">
+          <summary class="muted small">Letzte Logzeilen</summary>
+          <pre id="crash-log" class="crash-log"></pre>
+        </details>
+      </div>
       <div id="ws-panels" class="ws-panels">
         <div class="ws-panel hidden" data-ws-panel="uebersicht">
           <!-- Live-Werte als XP-Leisten -->
@@ -518,9 +535,11 @@
               <button id="backup-create-btn" class="btn primary admin-only">Backup erstellen</button>
               <button id="backup-reload-btn" class="btn">Aktualisieren</button>
             </div>
-            <p class="muted small">Sichert Welt, Configs und Mods der Instanz im Volume. Für
-              konsistente Snapshots die Instanz vorher stoppen. Wiederherstellen
-              ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <p class="muted small">Sichert Welt, Configs und Mods der Instanz. Bei laufendem
+              Server wird vorher alles gespeichert. Vor Mod-Updates, Modpack-Installationen
+              und Versionswechseln entsteht automatisch ein Sicherheits-Backup.
+              Wiederherstellen ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <p id="backup-location" class="muted small hidden"></p>
             <div id="backup-error" class="err hidden"></div>
             <ul id="backup-list" class="mod-list"></ul>
             <p id="backup-empty" class="muted hidden">Noch keine Backups vorhanden.</p>
@@ -690,6 +709,78 @@
               <button id="jvm-save" class="btn primary admin-only">Speichern</button>
             </div>
             <div id="jvm-error" class="err hidden"></div>
+          </div>
+
+          <!-- Versionswechsel (MC-Version/Loader) -->
+          <div class="upload-box">
+            <h3>Version wechseln <span class="muted small">(Server muss gestoppt sein)</span></h3>
+            <div class="form-grid">
+              <label>Minecraft-Version
+                <select id="ver-mc-version"></select>
+              </label>
+              <label>Server-Loader
+                <select id="ver-loader"></select>
+              </label>
+              <label>Loader-Version
+                <select id="ver-loader-version"></select>
+              </label>
+            </div>
+            <p class="muted small" id="ver-loader-note"></p>
+            <div class="row">
+              <button id="ver-check" class="btn">Mods prüfen</button>
+            </div>
+            <div id="ver-preview" class="hidden">
+              <p id="ver-summary" class="small"></p>
+              <ul id="ver-mods" class="mod-list compact"></ul>
+              <label class="check">
+                <input type="checkbox" id="ver-update-mods" checked>
+                Mods auf passende Versionen bringen
+              </label>
+              <label class="check">
+                <input type="checkbox" id="ver-disable-missing" checked>
+                Mods ohne passende Version deaktivieren
+              </label>
+              <label class="check hidden" id="ver-downgrade-wrap">
+                <input type="checkbox" id="ver-allow-downgrade">
+                Ich weiß, dass eine ältere Version die Welt beschädigen kann
+              </label>
+              <div class="row" style="margin-top: 0.5rem;">
+                <button id="ver-apply" class="btn primary admin-only">Version wechseln</button>
+              </div>
+            </div>
+            <div id="ver-progress" class="hidden">
+              <div class="metric-head"><span id="ver-phase" class="muted small"></span><span id="ver-pct" class="muted small"></span></div>
+              <div class="bar"><div id="ver-bar" class="bar-fill" style="width:0%"></div></div>
+            </div>
+            <p class="muted small">Vorher entsteht automatisch ein Backup inklusive Welt.
+              Die neue Server-Software lädt der nächste Start.</p>
+            <div id="ver-error" class="err hidden"></div>
+          </div>
+
+          <!-- Schlafmodus (itzg Autopause/Autostop) -->
+          <div class="upload-box">
+            <h3>Schlafmodus <span class="muted small">(wirksam beim nächsten Start)</span></h3>
+            <div class="row">
+              <label class="muted small" for="hib-mode">Wenn niemand spielt</label>
+              <select id="hib-mode">
+                <option value="off">Aus (Server läuft immer)</option>
+                <option value="pause">Pausieren (wacht beim Verbinden auf)</option>
+                <option value="stop">Stoppen (spart auch RAM)</option>
+              </select>
+              <span class="muted small">nach</span>
+              <input id="hib-minutes" type="number" min="5" max="1440" step="5"
+                     class="sched-num" value="30">
+              <span class="muted small">Min</span>
+            </div>
+            <p class="muted small"><strong>Pausieren</strong> friert den Server ein, sobald
+              die eingestellte Zeit niemand online war. Er spart dann CPU, behält aber
+              seinen RAM. Wer sich verbindet, weckt ihn automatisch (der erste Versuch kann
+              einen Moment dauern). <strong>Stoppen</strong> beendet den Server und gibt
+              auch den RAM frei; starten dann wieder hier im Dashboard.</p>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="hib-save" class="btn primary admin-only">Speichern</button>
+            </div>
+            <div id="hib-error" class="err hidden"></div>
           </div>
 
           <!-- Zeitplan (Auto-Start, geplanter Neustart, Backups, Update-Check) -->

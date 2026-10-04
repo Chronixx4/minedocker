@@ -9,6 +9,11 @@ und optionale Alerts (Discord-/Telegram-Webhook) versenden.
   Neustart/Löschen) setzt 'stopped' und kann einen Stop-Alert auslösen.
 - 'start' setzt 'running' (deckt auch Docker-Restarts der Restart-Policy ab)
   und kann einen Start-Alert auslösen.
+- Bei einem Crash wird die Ursache aus Log und crash-reports/ ermittelt
+  (crashinfo.diagnose) und als last_crash an der Instanz gespeichert.
+- Absturzschleife: stürzt ein Server CRASH_LOOP_COUNT-mal innerhalb von
+  CRASH_LOOP_WINDOW Sekunden ab, stoppt der Watchdog ihn, statt Docker
+  endlos neu starten zu lassen.
 
 Alerts (optional, konfigurierbar über Env):
 - ALERT_WEBHOOK_URL: Discord-kompatibler Webhook (POST {"content": ...})
@@ -33,6 +38,12 @@ _RETRY_SECONDS = 15.0
 # Erwartete (intentionale) Container-Stops: {instanz_id: deadline}
 _expected_stops: dict = {}
 _LOCK = threading.Lock()
+
+# Absturzschleife: Crash-Zeitpunkte je Instanz und angehaltene Instanzen
+CRASH_LOOP_COUNT = 3
+CRASH_LOOP_WINDOW = 600.0
+_crash_times: dict = {}
+_halted: dict = {}  # instanz_id → Fehlertext
 
 # Shutdown-Signal für die Event-Schleife (vom Lifespan gesetzt)
 STOP = threading.Event()
@@ -116,18 +127,89 @@ def handle_event(event: dict) -> str | None:
     except (TypeError, ValueError):
         exit_code = 0
     if _pop_expected_stop(instance_id) or exit_code == 0:
+        with _LOCK:
+            halted = _halted.pop(instance_id, None)
+        if halted:
+            # Vom Watchdog wegen Absturzschleife angehalten: Fehler bleibt
+            # stehen (ein zwischendurch gemeldeter Neustart hat ihn überschrieben)
+            instances.set_status(instance_id, "error", halted)
+            return "stop"
         instances.set_status(instance_id, "stopped", None)
         logger.info("Watchdog: Container gestoppt: %s (Exit %s)",
                     instance_id, exit_code)
         notify("stop", f"[mc-dashboard] Server gestoppt: {instance['name']}")
         return "stop"
-    detail = f"Container unerwartet beendet (Exit-Code {exit_code})"
+    diag = _diagnose(instance, exit_code)
+    detail = f"Abgestürzt: {diag['summary']} (Exit-Code {exit_code})"
+    looping = _record_crash(instance_id)
+    if looping:
+        detail = (f"Absturzschleife angehalten ({CRASH_LOOP_COUNT} Abstürze in "
+                  f"{int(CRASH_LOOP_WINDOW // 60)} Minuten): {diag['summary']}")
+    try:
+        instances.set_crash(instance_id, diag)
+    except Exception:
+        logger.exception("Crash-Diagnose nicht speicherbar")
     instances.set_status(instance_id, "error", detail)
     logger.warning("Watchdog: Container-Crash erkannt: %s (%s)",
                    instance_id, detail)
+    if looping:
+        _halt(instance, detail)
     notify("crash",
            f"[mc-dashboard] Server-CRASH: {instance['name']} — {detail}")
     return "crash"
+
+
+def _diagnose(instance: dict, exit_code: int) -> dict:
+    """Crash-Ursache aus Log-Ende und crash-reports/ (wirft nie)."""
+    from . import crashinfo, instances, runtime  # lazy, vermeidet Import-Zirkel
+    try:
+        lines = runtime.logs(instance, tail=300)
+    except Exception:
+        lines = []
+    try:
+        return crashinfo.diagnose(instances.instance_dir(instance["id"]),
+                                  lines, exit_code=exit_code)
+    except Exception:
+        logger.exception("Crash-Diagnose fehlgeschlagen")
+        return {"at": int(time.time()), "exit_code": exit_code,
+                "summary": "Ursache nicht erkannt", "findings": [],
+                "suspects": [], "crash_report": None, "log_tail": lines[-25:]}
+
+
+def _record_crash(instance_id: str, now: float | None = None) -> bool:
+    """Merkt sich den Absturz; True, wenn eine Absturzschleife vorliegt."""
+    now = time.time() if now is None else now
+    with _LOCK:
+        recent = [t for t in _crash_times.get(instance_id, [])
+                  if now - t <= CRASH_LOOP_WINDOW]
+        recent.append(now)
+        if len(recent) >= CRASH_LOOP_COUNT:
+            _crash_times.pop(instance_id, None)
+            return True
+        _crash_times[instance_id] = recent
+        return False
+
+
+def _halt(instance: dict, detail: str) -> None:
+    """Stoppt einen Server in Absturzschleife (Docker würde ihn sonst wegen
+    der Restart-Policy endlos neu starten)."""
+    from . import runtime  # lazy, vermeidet Import-Zirkel
+    instance_id = instance["id"]
+    with _LOCK:
+        _halted[instance_id] = detail
+    expect_stop(instance_id)
+    try:
+        runtime.stop_instance(instance)
+        logger.warning("Watchdog: Absturzschleife, Server angehalten: %s", instance_id)
+    except Exception as exc:
+        logger.warning("Watchdog: Anhalten fehlgeschlagen (%s): %s", instance_id, exc)
+
+
+def forget_crashes(instance_id: str) -> None:
+    """Zähler zurücksetzen (manueller Start nach Absturzschleife)."""
+    with _LOCK:
+        _crash_times.pop(instance_id, None)
+        _halted.pop(instance_id, None)
 
 
 def _event_filter() -> dict:

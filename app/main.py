@@ -30,10 +30,24 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES as GZIP_DEFAULT_EXCLUDED
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import auth as auth_mod
 from . import backups as backups_mod
-from . import catalog, curseforge, instances, modcategories, modinstall, modrinth, packs, runtime, worlds
+from . import (
+    catalog,
+    crashinfo,
+    curseforge,
+    instances,
+    modcategories,
+    modinstall,
+    modrinth,
+    packs,
+    runtime,
+    versionchange,
+    worlds,
+)
 from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
@@ -129,6 +143,16 @@ app.add_middleware(
 )
 
 app.middleware("http")(security_headers_middleware)
+
+# Kompression für Frontend und JSON (app.js & Co. ~450 KB → ~100 KB). Bereits
+# gepackte Downloads (Backups, Welten, Mods) und Bilder bleiben unangetastet,
+# Live-Logs (text/event-stream) schließt Starlette selbst aus.
+app.add_middleware(
+    GZipMiddleware, minimum_size=1024,
+    exclude_content_types=(*GZIP_DEFAULT_EXCLUDED,
+                           "application/gzip", "application/x-gzip",
+                           "application/zip", "application/java-archive",
+                           "application/octet-stream", "image/*", "video/*"))
 
 # Alle /api-Routen (außer /api/health und /api/auth/*) durchlaufen den
 # kombinierten Guard: DASHBOARD_API_KEY (Admin) ODER Login-Cookie; Rollen-
@@ -286,6 +310,23 @@ class ScheduleModel(BaseModel):
     update_check: UpdateCheckScheduleModel | None = None
 
 
+class HibernateModel(BaseModel):
+    mode: str = Field(pattern=r"^(off|pause|stop)$")
+    minutes: int = Field(default=30, ge=5, le=1440)
+
+
+class VersionTargetRequest(BaseModel):
+    loader: str = Field(min_length=1, max_length=16)
+    game_version: str = Field(min_length=1, max_length=32)
+
+
+class VersionChangeRequest(VersionTargetRequest):
+    loader_version: str | None = Field(default=None, max_length=64)
+    update_mods: bool = True
+    disable_missing: bool = True
+    allow_downgrade: bool = False
+
+
 class UpdateInstanceRequest(BaseModel):
     """Instanz-Einstellungen ändern (Name, RAM, JVM-Flags, Tags, Port, Zeitplan)."""
     name: str | None = Field(default=None, min_length=1, max_length=64)
@@ -298,6 +339,8 @@ class UpdateInstanceRequest(BaseModel):
     tags: list[str] | None = None
     port: int | None = Field(default=None, ge=1024, le=65535)
     schedule: ScheduleModel | None = None
+    # Schlafmodus: {"mode": "off"|"pause"|"stop", "minutes": 5-1440}
+    hibernate: HibernateModel | None = None
 
 
 class AuthSetupRequest(BaseModel):
@@ -660,8 +703,28 @@ def _check_console_command(cmd: str) -> str:
 async def status():
     """Ressourcen aller laufenden Minecraft-Container (Instanzen + ggf.
     legacy 'minecraft'-Container) über die Docker-Engine-API."""
-    resources = await asyncio.to_thread(runtime.docker_resources)
-    return {"resources": resources}
+    return {"resources": await _shared_resources()}
+
+
+# /api/status wird von jedem offenen Browser-Tab alle 5 s abgefragt; die
+# Docker-Stats kosten je Container ca. 1 s. Gleichzeitige und kurz
+# aufeinanderfolgende Anfragen teilen sich deshalb ein Ergebnis.
+_STATUS_TTL = 4.0
+_status_cache: dict = {"at": 0.0, "value": None, "task": None}
+
+
+async def _shared_resources() -> dict:
+    now = time.monotonic()
+    if _status_cache["value"] is not None and now - _status_cache["at"] < _STATUS_TTL:
+        return _status_cache["value"]
+    task = _status_cache["task"]
+    if task is None or task.done():
+        task = asyncio.ensure_future(asyncio.to_thread(runtime.docker_resources))
+        _status_cache["task"] = task
+    value = await asyncio.shield(task)
+    if _status_cache["task"] is task:
+        _status_cache.update(at=time.monotonic(), value=value)
+    return value
 
 
 @api.get("/mods")
@@ -1025,10 +1088,13 @@ async def _read_capped(file: UploadFile, max_bytes: int,
 @api.get("/instances")
 async def list_instances():
     result = []
-    for instance in instances.list_instances():
-        status = await asyncio.to_thread(runtime.container_status, instance)
+    all_instances = instances.list_instances()
+    statuses = await asyncio.to_thread(runtime.container_statuses, all_instances)
+    for instance in all_instances:
+        status = statuses[instance["id"]]
         entry = dict(instance)
-        entry["container"] = {"running": status["running"], "state": status["container"]}
+        entry["container"] = {"running": status["running"], "state": status["container"],
+                              "paused": status["running"] and instances.is_paused(instance["id"])}
         if status.get("started_at"):
             entry["container"]["started_at"] = status["started_at"]
         if status.get("error"):
@@ -1042,20 +1108,24 @@ async def live_instances():
     """SLP-Ping aller laufenden Instanzen (parallel, je 2 s Timeout).
     Liefert Spielerzahl, MOTD und Version für die Übersicht; gestoppte
     Instanzen fehlen. Wirft nicht — Pings liefern immer ein Objekt."""
-    running = []
-    for instance in instances.list_instances():
-        status = await asyncio.to_thread(runtime.container_status, instance)
-        if status["running"]:
-            running.append(instance)
+    all_instances = instances.list_instances()
+    statuses = await asyncio.to_thread(runtime.container_statuses, all_instances)
+    running = [i for i in all_instances if statuses[i["id"]]["running"]]
 
     async def ping_one(instance: dict) -> dict:
-        ping_host, ping_port = _instance_ping_host(instance)
-        ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
+        paused = instances.is_paused(instance["id"])
+        if paused:
+            # Ein Ping würde den schlafenden Server sofort wecken
+            ping = dict(_OFFLINE_PING)
+        else:
+            ping_host, ping_port = _instance_ping_host(instance)
+            ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
         return {
             "id": instance["id"],
             "name": instance["name"],
             "port": instance["port"],
             "ping": ping,
+            "paused": paused,
         }
 
     live = list(await asyncio.gather(*(ping_one(i) for i in running))) \
@@ -1256,6 +1326,9 @@ async def instance_detail(instance_id: str, response: Response):
                               asyncio.to_thread(runtime.container_status, instance))
         if not status["running"]:
             return status, dict(_OFFLINE_PING)
+        if instances.is_paused(instance_id):
+            # Schlafmodus: ein Ping würde den Server wecken
+            return status, dict(_OFFLINE_PING)
         ping = await _timed(timings, "ping",
                             asyncio.to_thread(server_status, ping_host, ping_port, 1.0))
         return status, ping
@@ -1269,7 +1342,8 @@ async def instance_detail(instance_id: str, response: Response):
         _timed(timings, "disk", _detail_disk(instance_id)),
     )
     detail = dict(instance)
-    detail["container"] = {"running": status["running"], "state": status["container"]}
+    detail["container"] = {"running": status["running"], "state": status["container"],
+                           "paused": status["running"] and instances.is_paused(instance_id)}
     if status.get("started_at"):
         detail["container"]["started_at"] = status["started_at"]
     if status.get("error"):
@@ -1310,7 +1384,7 @@ async def instance_update(instance_id: str, req: UpdateInstanceRequest):
     if not body and schedule is None:
         raise HTTPException(status_code=400,
                             detail="Keine Änderungen übergeben "
-                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule)")
+                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule/hibernate)")
     result = {"instance": instances.get_instance(instance_id), "changed": []}
     if schedule is not None:
         result = instances.update_schedule(
@@ -1344,9 +1418,58 @@ async def instance_clone(instance_id: str, req: CloneInstanceRequest):
     return instance
 
 
+@api.post("/instances/{instance_id}/version/check")
+async def instance_version_check(instance_id: str, req: VersionTargetRequest):
+    """Vorschau eines Versionswechsels: welche Mods es für die Zielversion
+    gibt, welche fehlen und welche unbekannt sind."""
+    try:
+        return await versionchange.check(instance_id, req.loader, req.game_version)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Versions-Vorschau fehlgeschlagen")
+        raise HTTPException(status_code=502, detail=f"Mod-Anbieter nicht erreichbar: {exc}")
+
+
+@api.post("/instances/{instance_id}/version")
+async def instance_version_change(instance_id: str, req: VersionChangeRequest):
+    """Minecraft-Version/Loader wechseln (Job): Backup, Mods mitziehen,
+    fehlende Mods deaktivieren, Version umstellen. Server muss gestoppt sein."""
+    job = await versionchange.start_change(
+        instance_id, req.loader, req.game_version, req.loader_version,
+        update_mods=req.update_mods, disable_missing=req.disable_missing,
+        allow_downgrade=req.allow_downgrade)
+    return {"job_id": job["id"], "total": job["total"], "phase": job["phase"]}
+
+
+@api.post("/instances/{instance_id}/crash/analyze")
+async def instance_crash_analyze(instance_id: str):
+    """Absturz-Ursache jetzt ermitteln (Log-Ende + neuester Crash-Report der
+    letzten 24 h), z. B. wenn ein Server nicht hochkommt."""
+    instance = instances.get_instance(instance_id)
+    try:
+        lines = await asyncio.to_thread(runtime.logs, instance, 300)
+    except RuntimeError:
+        lines = []
+    diag = await asyncio.to_thread(
+        crashinfo.diagnose, instances.instance_dir(instance_id), lines,
+        since=time.time() - 86400)
+    await asyncio.to_thread(instances.set_crash, instance_id, diag)
+    return diag
+
+
+@api.delete("/instances/{instance_id}/crash")
+async def instance_crash_dismiss(instance_id: str):
+    """Angezeigte Absturz-Diagnose ausblenden."""
+    instances.get_instance(instance_id)
+    await asyncio.to_thread(instances.set_crash, instance_id, None)
+    return {"ok": True}
+
+
 @api.post("/instances/{instance_id}/start")
 async def instance_start(instance_id: str):
     instance = instances.get_instance(instance_id)
+    watchdog_mod.forget_crashes(instance_id)  # Absturzschleife neu zählen
     container = await asyncio.to_thread(runtime.container_status, instance)
     if container.get("running"):
         instances.set_status(instance_id, "running", None)
@@ -1800,7 +1923,10 @@ def _handle_backup_error(exc: Exception) -> HTTPException:
 async def list_instance_backups(instance_id: str):
     instances.get_instance(instance_id)
     try:
-        return {"backups": await asyncio.to_thread(backups_mod.list_backups, instance_id)}
+        items = await asyncio.to_thread(backups_mod.list_backups, instance_id)
+        external = await asyncio.to_thread(backups_mod.is_external)
+        return {"backups": items, "external": external,
+                "location": str(backups_mod.backups_root())}
     except Exception as exc:
         raise _handle_backup_error(exc)
 
@@ -2277,13 +2403,13 @@ async def instance_pack_install(instance_id: str, req: InstallPackRequest):
 
 
 @api.get("/instances/{instance_id}/modpacks/update-check")
-async def instance_pack_update_check(instance_id: str):
+async def instance_pack_update_check(instance_id: str, refresh: bool = False):
     """Prüft, ob für das installierte Modpack eine neuere Version verfügbar
     ist (Modrinth: neueste kompatible Version, CurseForge: neueste Datei).
     'checkable=false' bei hochgeladenen Archiven ohne Projekt-Quelle."""
     instances.get_instance(instance_id)
     try:
-        return await packs.pack_update_check(instance_id)
+        return await packs.pack_update_check_cached(instance_id, refresh)
     except HTTPException:
         raise
     except Exception as exc:

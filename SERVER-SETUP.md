@@ -200,6 +200,14 @@ Archiv. Die Renderdaten der Live-Karte (`bluemap/`) werden nicht gesichert;
 BlueMap rendert sie nach einem Restore neu.
 3-2-1-Regel: 3 Kopien, 2 Medien, 1 extern.
 
+**Dashboard-Backups auf eine zweite Platte:** Standardmäßig liegen sie in
+`/data/backups`, also auf derselben Platte wie die Server. In der `.env`
+`DASHBOARD_BACKUPS_DIR=/pfad/auf/zweiter/platte` setzen und
+`docker compose up -d` ausführen; der `init`-Service setzt die Rechte. Neue
+Backups landen dann dort, die Backup-Box zeigt „eigene Platte“. Ältere
+Backups bleiben in `/data/backups/<id>/` und lassen sich bei Bedarf von Hand
+in den neuen Ordner verschieben.
+
 **Docker/Volume (dieses Projekt):**
 ```bash
 # Backup des gesamten mcdata-Volumes (Instanzen inklusive). /data-Quelle:
@@ -304,15 +312,32 @@ hilfreich gegen Watchdog-Kicks) nach Bedarf.
   selbst gerade neu startete. Saubere Stops (Dashboard-Stop/Neustart) werden
   nicht als Crash gewertet; Docker-Restarts der Restart-Policy setzen den
   Status wieder auf „läuft".
+- **Crash-Diagnose:** Bei einem Absturz wertet der Watchdog Log-Ende und
+  `crash-reports/` aus und zeigt im Server-Bereich die Ursache in Klartext
+  (fehlende Mod-Abhängigkeit, falsche Java-Version, zu wenig RAM, Client-Mod
+  auf dem Server, belegter Port, doppelte Mod, Mixin-Konflikt, EULA,
+  beschädigte Welt) samt verdächtiger Mods. „Neu analysieren“ wertet auch
+  ohne Absturz-Event aus, z. B. wenn ein Server nicht hochkommt. Drei
+  Abstürze in zehn Minuten halten den Server an (Absturzschleife), statt ihn
+  endlos neu starten zu lassen.
+- **Schlafmodus (je Server, Einstellungen):** „Pausieren“ friert den Server
+  ein, wenn die eingestellte Zeit niemand online war (itzg
+  `ENABLE_AUTOPAUSE`, spart CPU) und weckt ihn beim nächsten
+  Verbindungsversuch; „Stoppen“ beendet ihn (`ENABLE_AUTOSTOP`, spart auch
+  RAM), starten dann im Dashboard. Das Dashboard pingt schlafende Server
+  nicht an, damit es sie nicht selbst weckt. Hinweis: Für „Pausieren“ läuft
+  der Container ohne `no-new-privileges`, weil der Weck-Dienst (knockd) sonst
+  nicht starten darf.
 - **Alerts (optional):** Bei Crash/Start/Stop kann ein Webhook benachrichtigt
   werden — Discord-kompatibel (`ALERT_WEBHOOK_URL`, POST `{"content": …}`)
   und/oder Telegram (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`). Mit
   `ALERT_EVENTS` wählt man die Ereignisse (`crash,start,stop`, Default: alle
   drei; z. B. nur `crash`). Ohne Env-Variablen bleibt alles still.
 - **Sicherheits-Snapshots:** Vor jeder Modpack-Installation in eine Instanz
-  mit bestehenden Mods (und vor jedem Backup-Restore) legt das Dashboard
-  automatisch einen Snapshot an (`pre-install-*.tar.gz` bzw.
-  `pre-restore-*.tar.gz` in der Instanz-Backup-Liste) — eine fehlgeschlagene
+  mit bestehenden Mods, vor jedem Backup-Restore und vor Mod-Updates bzw.
+  Versionswechseln legt das Dashboard automatisch einen Snapshot an
+  (`pre-install-*`, `pre-restore-*` bzw. `pre-update-*.tar.gz` in der
+  Instanz-Backup-Liste) — eine fehlgeschlagene
   Installation ist damit per Restore rückholbar, `force`-Überschreiben ist
   risikofrei. Pro Instanz rotieren max. 3 Sicherheits-Snapshots.
 - **Job-Persistenz:** Laufende Downloads/Installationen/Mod-Updates werden

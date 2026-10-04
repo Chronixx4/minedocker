@@ -263,6 +263,26 @@ class TestUpdateJob:
         assert [(e["filename"], e["reason"]) for e in trash] == \
             [("sodium-fabric-0.15.0.jar", "update")]
         assert job["results"][0]["backup"] == trash[0]["id"]
+        # vorher Sicherheits-Backup der ganzen Instanz (inkl. Welt)
+        from app import backups
+        names = [b["name"] for b in backups.list_backups(instanz["id"])]
+        assert job["backup"] in names and job["backup"].startswith("pre-update-")
+
+    def test_ohne_backup_kein_update(self, instanz, _modrinth_mock, monkeypatch):
+        from app import backups
+        d = _mods_dir(instanz)
+        (d / "sodium-fabric-0.15.0.jar").write_bytes(b"sodium-mod")
+        check = asyncio.run(updates.check_updates(instanz["id"]))
+        plan = updates._plan_from_check(check, None)
+
+        def kaputt(*args, **kwargs):
+            raise OSError("Platte voll")
+        monkeypatch.setattr(backups, "safety_backup", kaputt)
+        job = self._job(plan)
+        asyncio.run(updates._run_update_job(job, instanz, plan))
+        assert job["status"] == "error"
+        assert "Platte voll" in job["error"]
+        assert (d / "sodium-fabric-0.15.0.jar").is_file()
 
     def test_deaktivierter_zustand_bleibt(self, instanz, _modrinth_mock):
         d = _mods_dir(instanz)

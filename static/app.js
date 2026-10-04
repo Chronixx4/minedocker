@@ -702,8 +702,16 @@
     return "stopped";
   }
 
+  // Anzeige-Zustand: wie instStateKey, aber schlafende Server (Schlafmodus)
+  // heißen „schläft“; für Steuerung zählen sie weiter als laufend
+  function instDisplayKey(inst) {
+    const key = instStateKey(inst);
+    return key === "running" && inst.container?.paused ? "paused" : key;
+  }
+
   const OV_STATE_LABELS = {
     running: "läuft", starting: "startet…", error: "Fehler", stopped: "gestoppt",
+    paused: "schläft",
   };
 
   function containerStatsById() {
@@ -819,7 +827,11 @@
 
   function pingLine(inst) {
     if (!inst.container?.running) return null;
-    const ping = liveEntry(inst)?.ping;
+    const live = liveEntry(inst);
+    if (live?.paused || inst.container?.paused) {
+      return "Schläft, niemand online. Wacht beim Verbinden auf.";
+    }
+    const ping = live?.ping;
     if (!ping) return "Status-Abfrage läuft…";
     if (!ping.online) return "Server antwortet noch nicht (Start kann dauern)";
     const p = ping.players || {};
@@ -997,7 +1009,7 @@
         `${inst.loader}${inst.loader_version ? ` ${inst.loader_version}` : ""} · MC ${inst.game_version}`);
       const badge = node.querySelector(".inst-badge");
       badge.classList.add(stateBadgeClass(inst));
-      setText(node.querySelector(".inst-state"), OV_STATE_LABELS[instStateKey(inst)]);
+      setText(node.querySelector(".inst-state"), OV_STATE_LABELS[instDisplayKey(inst)]);
 
       // Info-Chips: Loader, MC-Version, RAM, Modpack, Port (klickbar = Adresse kopieren), Uptime
       const chips = node.querySelector(".chips");
@@ -1223,7 +1235,7 @@
       meta.className = "res-c-meta muted small";
       const metaParts = [];
       if (inst) {
-        metaParts.push(OV_STATE_LABELS[instStateKey(inst)]);
+        metaParts.push(OV_STATE_LABELS[instDisplayKey(inst)]);
         if (inst.container?.running && inst.container.started_at) {
           const up = fmtUptime(inst.container.started_at);
           if (up) metaParts.push(`seit ${up}`);
@@ -2473,6 +2485,7 @@
   $("#inst-reload").addEventListener("click", loadInstances);
 
   function stateBadgeClass(inst) {
+    if (inst.container?.running && inst.container?.paused) return "sleep";
     if (inst.status === "running" || inst.container?.running) return "on";
     if (inst.status === "starting") return "starting";
     if (inst.status === "error") return "error";
@@ -2899,6 +2912,9 @@
   /* ---------- Detail-Ansicht (Instanz-Workspace) ---------- */
   async function openDetail(id) {
     state.detailId = id;
+    // Daten der Bereiche laden erst, wenn man sie öffnet (weniger Anfragen
+    // beim Öffnen eines Servers); der aktuelle Bereich lädt nach den Details
+    state.wsLoaded = null; // erst nach dem Zurücksetzen der Bereiche laden
     show($("#inst-list-wrap"), false); // Workspace ersetzt die Liste (Tab-Look)
     show($("#inst-create"), false);
     show($("#inst-import-box"), false);
@@ -2933,6 +2949,7 @@
       $("#jvm-opts").value = cached.jvm_opts || "";
       $("#jvm-aikar").checked = !!cached.use_aikar;
       $("#jvm-java").value = cached.java || "auto";
+      loadHibernate(cached);
       setRamFields(cached.memory);
       state.detailMemory = (cached.memory || "2G").toUpperCase();
       loadSchedule(cached);
@@ -2956,7 +2973,6 @@
     // Whitelist-Editor zurücksetzen und Datei laden
     state.wlEntries = [];
     renderWhitelistStatic();
-    loadWhitelist();
     // Mod-Update-Ansicht zurücksetzen (Ergebnis ist instanzbezogen)
     state.detailUpdates = null;
     setText($("#mods-update-summary"), "");
@@ -2976,8 +2992,6 @@
     $("#icon-upload-btn").disabled = true;
     // Datei-Browser zurücksetzen (Wurzel der neuen Instanz laden)
     state.fb = { path: "", entries: [] };
-    fbReload();
-    dpReload();
     // Gamerules zurücksetzen (werden per „Laden" geholt — nur laufend)
     state.grRules = [];
     $("#gr-filter").value = "";
@@ -2990,6 +3004,7 @@
       $("#jvm-opts").value = detail.jvm_opts || "";
       $("#jvm-aikar").checked = !!detail.use_aikar;
       $("#jvm-java").value = detail.java || "auto";
+      loadHibernate(detail);
       setRamFields(detail.memory);
       state.detailMemory = (detail.memory || "2G").toUpperCase();
       show($("#jvm-error"), false);
@@ -2998,11 +3013,9 @@
       show($("#sched-error"), false);
       // Tags + Port in die Felder laden
       loadTagsAndPort(detail);
-      // Modpack-Update-Check direkt beim Öffnen (still bei Fehlern)
       show($("#mp-update-btn"), false);
       setText($("#mp-update-info"), "Update-Check läuft…");
       show($("#mp-update-error"), false);
-      checkPackUpdate(true);
     }
     // server.properties laden: füttert den Editor UND die Info-Box
     // (Schwierigkeit, Spielmodus, MOTD) — nach dem Laden Info neu rendern
@@ -3013,10 +3026,162 @@
       }
     });
     updateWsControls();
-    loadBackups();
-    loadWorldInfo();
-    loadIconPreview();
+    if (state.detailId === openedId) {
+      state.wsLoaded = new Set();
+      loadWsTabData(state.wsTab);
+    }
   }
+
+  /* Daten eines Workspace-Bereichs einmal je geöffnetem Server laden */
+  function loadWsTabData(key) {
+    if (!state.detailId || !state.wsLoaded || state.wsLoaded.has(key)) return;
+    state.wsLoaded.add(key);
+    if (key === "welt") { loadWorldInfo(); dpReload(); loadIconPreview(); }
+    else if (key === "dateien") fbReload();
+    else if (key === "spieler") loadWhitelist();
+    else if (key === "backups") loadBackups();
+    else if (key === "mods") { checkPackUpdate(true); loadModTrash(); }
+    else if (key === "einstellungen") loadVersionForm();
+  }
+
+  /* ---------- Versionswechsel (MC-Version/Loader) ---------- */
+  function verSetError(msg) {
+    setText($("#ver-error"), msg);
+    show($("#ver-error"), !!msg);
+  }
+
+  function verTarget() {
+    return {
+      loader: $("#ver-loader").value,
+      game_version: $("#ver-mc-version").value,
+      loader_version: $("#ver-loader-version").value || null,
+    };
+  }
+
+  async function loadVersionForm() {
+    const inst = state.detailData || currentDetailInst();
+    if (!inst) return;
+    show($("#ver-preview"), false);
+    verSetError("");
+    fillSelect($("#ver-mc-version"), [], "Versionen werden geladen…");
+    try {
+      const versions = await api("/api/catalog/mc-versions");
+      const options = versions.releases.map((v) => ({ value: v, label: v }));
+      if (!versions.releases.includes(inst.game_version)) {
+        options.unshift({ value: inst.game_version, label: inst.game_version });
+      }
+      fillSelect($("#ver-mc-version"), options, "Version wählen");
+      $("#ver-mc-version").value = inst.game_version;
+      await reloadLoadersInto("ver", inst.game_version);
+      $("#ver-loader").value = inst.loader;
+      updateLoaderVersionInto("ver");
+    } catch (e) {
+      fillSelect($("#ver-mc-version"), [], "Katalog nicht erreichbar");
+    }
+  }
+
+  function verRow(text, cls) {
+    const li = document.createElement("li");
+    li.className = `mod-row ${cls || ""}`;
+    li.textContent = text;
+    return li;
+  }
+
+  $("#ver-mc-version").addEventListener("change", async () => {
+    const loader = $("#ver-loader").value;
+    await reloadLoadersInto("ver", $("#ver-mc-version").value);
+    if (loader) { $("#ver-loader").value = loader; updateLoaderVersionInto("ver"); }
+    show($("#ver-preview"), false);
+  });
+  $("#ver-loader").addEventListener("change", () => {
+    updateLoaderVersionInto("ver");
+    show($("#ver-preview"), false);
+  });
+
+  $("#ver-check").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    const btn = $("#ver-check");
+    const target = verTarget();
+    if (!target.loader || !target.game_version) { verSetError("Bitte Version und Loader wählen."); return; }
+    btn.disabled = true;
+    btn.textContent = "Prüfe…";
+    verSetError("");
+    try {
+      const res = await api(`/api/instances/${state.detailId}/version/check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loader: target.loader, game_version: target.game_version }),
+      });
+      const m = res.mods;
+      const parts = [`${res.current.loader} ${res.current.game_version} → ${res.target.loader} ${res.target.game_version}.`];
+      const updatable = m.available.filter((x) => !x.unchanged).length;
+      if (m.available.length || m.missing.length || m.unknown.length) {
+        parts.push(`${updatable} Mods werden aktualisiert, ${m.missing.length} gibt es dafür nicht,`
+          + ` ${m.unknown.length} unbekannt (bleiben wie sie sind).`);
+      }
+      if (res.modpack) parts.push(`Achtung: Modpack „${res.modpack}“ ist installiert, besser ein passendes Pack-Update nutzen.`);
+      if (res.downgrade) parts.push("Achtung: ältere Version, die Welt kann beschädigt werden.");
+      setText($("#ver-summary"), parts.join(" "));
+      const list = $("#ver-mods");
+      list.textContent = "";
+      for (const x of m.missing) list.appendChild(verRow(`✗ ${x.filename}: keine passende Version`, "warn"));
+      for (const x of m.available.filter((y) => !y.unchanged)) {
+        list.appendChild(verRow(`↑ ${x.filename}: ${x.from || "?"} → ${x.to}`));
+      }
+      for (const x of m.unknown) list.appendChild(verRow(`? ${x.filename}: unbekannt, bleibt unverändert`));
+      show($("#ver-downgrade-wrap"), !!res.downgrade);
+      $("#ver-allow-downgrade").checked = false;
+      show($("#ver-preview"), true);
+    } catch (e) {
+      verSetError(`Prüfung fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Mods prüfen";
+    }
+  });
+
+  $("#ver-apply").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    const target = verTarget();
+    const ok = await confirmDialog({
+      title: "Version wechseln?",
+      message: `Der Server wird auf ${target.loader} ${target.game_version} umgestellt. `
+        + "Vorher entsteht ein Backup inklusive Welt.",
+      ok: "Wechseln",
+    });
+    if (!ok) return;
+    const btn = $("#ver-apply");
+    btn.disabled = true;
+    verSetError("");
+    try {
+      const job = await api(`/api/instances/${state.detailId}/version`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...target,
+          update_mods: $("#ver-update-mods").checked,
+          disable_missing: $("#ver-disable-missing").checked,
+          allow_downgrade: $("#ver-allow-downgrade").checked,
+        }),
+      });
+      const done = await pollProgress(job, {
+        box: $("#ver-progress"), bar: $("#ver-bar"), phase: $("#ver-phase"), pct: $("#ver-pct"),
+      });
+      const sum = done?.summary || {};
+      const msg = [`Server steht jetzt auf ${sum.target || `${target.loader} ${target.game_version}`}.`];
+      if (sum.updated) msg.push(`${sum.updated} Mods aktualisiert.`);
+      if (sum.disabled?.length) msg.push(`${sum.disabled.length} deaktiviert.`);
+      toast(msg.join(" "), "success");
+      if (sum.failed) verSetError(`Fehler bei: ${sum.errors.join(" · ")}`);
+      show($("#ver-preview"), false);
+      await loadDetail();
+      loadVersionForm();
+    } catch (e) {
+      verSetError(`Wechsel fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   function closeDetail() {
     state.detailId = null;
     state.detailData = null;
@@ -3044,7 +3209,7 @@
       const badge = $("#detail-state");
       badge.className = "badge inst-badge";
       badge.classList.add(stateBadgeClass(detail));
-      setText($("#detail-state-text"), OV_STATE_LABELS[instStateKey(detail)]);
+      setText($("#detail-state-text"), OV_STATE_LABELS[instDisplayKey(detail)]);
       state.detailData = detail;
       // Eingebettete Mod-Suche: Ziel steht erst jetzt sicher fest
       if (state.searchEmbedded && state.wsTab === "mods" && state.modsView === "add") {
@@ -3084,7 +3249,85 @@
     }
   }
 
+  /* ---------- Absturz-Diagnose ---------- */
+  function renderCrash(detail) {
+    const crash = detail?.last_crash;
+    const box = $("#crash-box");
+    show(box, !!crash || detail?.status === "error");
+    show($("#crash-dismiss"), !!crash);
+    if (!crash) {
+      // Fehlerstatus ohne Diagnose (z. B. aus älterer Version): anbieten
+      setText($("#crash-title"), "Der Server meldet einen Fehler");
+      setText($("#crash-when"), "");
+      $("#crash-findings").textContent = "";
+      const li = document.createElement("li");
+      li.textContent = "„Neu analysieren“ wertet Log und Crash-Report aus und nennt die Ursache.";
+      $("#crash-findings").appendChild(li);
+      show($("#crash-suspects"), false);
+      $("#crash-log").textContent = "–";
+      return;
+    }
+    setText($("#crash-title"), `Letzter Absturz: ${crash.summary || "Ursache nicht erkannt"}`);
+    setText($("#crash-when"), [crash.at ? fmtDate(crash.at) : "",
+      crash.exit_code != null ? `Exit-Code ${crash.exit_code}` : "",
+      crash.crash_report ? `Bericht: crash-reports/${crash.crash_report}` : ""]
+      .filter(Boolean).join(" · "));
+    const list = $("#crash-findings");
+    list.textContent = "";
+    const findings = crash.findings || [];
+    if (!findings.length) {
+      const li = document.createElement("li");
+      li.textContent = "Keine bekannte Ursache gefunden. Die letzten Logzeilen unten zeigen meist, was schiefging.";
+      list.appendChild(li);
+    }
+    for (const f of findings) {
+      const li = document.createElement("li");
+      const title = document.createElement("strong");
+      title.textContent = f.title;
+      const hint = document.createElement("div");
+      hint.textContent = f.hint;
+      li.append(title, hint);
+      if (f.evidence?.length) {
+        const pre = document.createElement("pre");
+        pre.textContent = f.evidence.join("\n");
+        li.appendChild(pre);
+      }
+      list.appendChild(li);
+    }
+    const suspects = crash.suspects || [];
+    setText($("#crash-suspects"), suspects.length ? `Verdächtige Mods: ${suspects.join(", ")}` : "");
+    show($("#crash-suspects"), suspects.length > 0);
+    $("#crash-log").textContent = (crash.log_tail || []).join("\n") || "–";
+    $("#crash-log-wrap").open = !findings.length;
+  }
+
+  $("#crash-dismiss").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    try {
+      await api(`/api/instances/${state.detailId}/crash`, { method: "DELETE" });
+      if (state.detailData) delete state.detailData.last_crash;
+      show($("#crash-box"), false);
+    } catch (e) {
+      toast(`Ausblenden fehlgeschlagen: ${e.message}`, "error");
+    }
+  });
+
+  async function analyzeCrash() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    try {
+      const crash = await api(`/api/instances/${id}/crash/analyze`, { method: "POST" });
+      if (state.detailId !== id || !state.detailData) return;
+      state.detailData.last_crash = crash;
+      renderCrash(state.detailData);
+    } catch (e) {
+      toast(`Analyse fehlgeschlagen: ${e.message}`, "error");
+    }
+  }
+  $("#crash-analyze").addEventListener("click", analyzeCrash);
+
   function renderDetailInfo(detail) {
+    renderCrash(detail);
     const box = $("#detail-info");
     box.textContent = "";
     const errBox = $("#detail-error");
@@ -3104,7 +3347,7 @@
         + ` · Packs ${fmtBytes(disk.packs_bytes)}` : "")
       : (detail.disk_pending ? "wird berechnet…" : null);
     const items = [
-      ["Status", OV_STATE_LABELS[instStateKey(detail)]],
+      ["Status", OV_STATE_LABELS[instDisplayKey(detail)]],
       ["Docker", detail.container?.state || "–"],
       ["Uptime", up || "–"],
       ["Loader", `${detail.loader}${detail.loader_version ? ` ${detail.loader_version}` : ""}`],
@@ -3114,7 +3357,8 @@
       ["RAM", detail.memory || "2G"],
       ["Speicher", diskLine || "–"],
       ["Erstellt", fmtDate(detail.created_at)],
-      ["Erreichbar", ping.online ? "ja" : "nein"],
+      ["Erreichbar", detail.container?.paused ? "schläft (wacht beim Verbinden auf)"
+        : ping.online ? "ja" : "nein"],
       ["Spieler", ping.online && ping.players
         ? `${ping.players.online}/${ping.players.max}` : "–"],
       ["Server-Version", ping.version || "–"],
@@ -3155,7 +3399,8 @@
     state.detailMods = mods || [];
     renderModNotes(detail);
     applyModFilter();
-    loadModTrash();
+    // Papierkorb nur nachladen, wenn der Mods-Bereich schon geladen ist
+    if (state.wsLoaded?.has("mods")) loadModTrash();
   }
 
   // Hinweise über der Mod-Liste: erkannte Probleme + „Neustart nötig“
@@ -3478,12 +3723,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filenames: filenames || null }),
       });
-      await pollProgress(job, {
+      const done = await pollProgress(job, {
         box: $("#mods-update-progress"),
         bar: $("#mods-update-bar"),
         phase: $("#mods-update-phase"),
         pct: $("#mods-update-pct"),
       });
+      Object.assign(job, done || {});
       const summary = job.summary
         ? `${job.summary.updated} aktualisiert${job.summary.failed ? `, ${job.summary.failed} fehlgeschlagen` : ""}.`
         : "Aktualisiert.";
@@ -4480,6 +4726,15 @@
     try {
       const data = await api(`/api/instances/${state.detailId}/backups`);
       list.textContent = "";
+      const loc = $("#backup-location");
+      if (data.location) {
+        setText(loc, data.external
+          ? `Ablage: ${data.location} (eigene Platte)`
+          : `Ablage: ${data.location}, auf derselben Platte wie die Server. Fällt sie aus, `
+            + "sind auch die Backups weg. Abhilfe: DASHBOARD_BACKUPS_DIR in der .env auf "
+            + "eine zweite Platte setzen oder Backups herunterladen.");
+      }
+      show(loc, !!data.location);
       show($("#backup-empty"), data.backups.length === 0);
       for (const b of data.backups) {
         const row = document.createElement("li");
@@ -5476,6 +5731,40 @@
     }
   });
 
+  /* ---------- Schlafmodus je Instanz ---------- */
+  function loadHibernate(inst) {
+    const hib = inst.hibernate || {};
+    $("#hib-mode").value = hib.mode || "off";
+    $("#hib-minutes").value = hib.minutes || 30;
+    show($("#hib-error"), false);
+  }
+
+  $("#hib-save").addEventListener("click", async () => {
+    const btn = $("#hib-save");
+    btn.disabled = true;
+    show($("#hib-error"), false);
+    const minutes = Math.min(1440, Math.max(5, parseInt($("#hib-minutes").value, 10) || 30));
+    const hibernate = { mode: $("#hib-mode").value, minutes };
+    try {
+      const inst = await api(`/api/instances/${state.detailId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hibernate }),
+      });
+      loadHibernate(inst);
+      const cached = (state.instList || []).find((i) => i.id === state.detailId);
+      if (cached) cached.hibernate = inst.hibernate;
+      toast(state.detailRunning
+        ? "Schlafmodus gespeichert, wirksam nach dem nächsten Neustart."
+        : "Schlafmodus gespeichert.", "success");
+    } catch (e) {
+      setText($("#hib-error"), `Speichern fehlgeschlagen: ${e.message}`);
+      show($("#hib-error"), true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   /* ---------- Zeitplan je Instanz (Scheduler) ---------- */
   function schedInt(value, lo, hi, fallback) {
     const num = parseInt(value, 10);
@@ -6101,7 +6390,8 @@
     btn.disabled = true;
     if (!quiet) mpUpdateSetError("");
     try {
-      const data = await api(`/api/instances/${state.detailId}/modpacks/update-check`);
+      const data = await api(`/api/instances/${state.detailId}/modpacks/update-check`
+        + (quiet ? "" : "?refresh=true"));
       if (state.detailId && data) renderPackUpdateState(data);
     } catch (e) {
       setText($("#mp-update-info"), "Update-Check fehlgeschlagen.");
@@ -6486,8 +6776,9 @@
     // Mods › Hinzufügen: Suche in den Server-Bereich holen (Ziel = dieser Server)
     if (key === "mods" && state.modsView === "add" && state.detailId) mountSearch(true);
     // Welt-Slot: Welten + Karte laden; beim Verlassen die Karte entladen
-    if (key === "welt" && state.detailId) loadWorldInfo();
-    else if (typeof resetMapFrame === "function") resetMapFrame();
+    if (key === "welt" && state.detailId && state.wsLoaded?.has("welt")) loadWorldInfo();
+    else if (key !== "welt" && typeof resetMapFrame === "function") resetMapFrame();
+    loadWsTabData(key);
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
         && instStateKey(currentDetailInst() || state.detailData || {}) === "running") {
@@ -6599,6 +6890,8 @@
       ["#gr-reload", "spieler"],          // Gamerules
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
+      ["#hib-save", "einstellungen"],     // Schlafmodus
+      ["#ver-check", "einstellungen"],    // Version wechseln
       ["#tags-save", "einstellungen"],    // Tags & Port
       ["#inst-delete-btn", "einstellungen"], // Server löschen
       ["#sched-autostart", "zeitplan"],   // Zeitplan
@@ -6693,7 +6986,7 @@
       icon.alt = "";
       const dot = document.createElement("span");
       dot.className = `inst-tab-dot ${instStateKey(inst)}`;
-      dot.title = OV_STATE_LABELS[instStateKey(inst)];
+      dot.title = OV_STATE_LABELS[instDisplayKey(inst)];
       const count = document.createElement("span");
       count.className = "inst-tab-count hidden";
       b.dataset.id = inst.id;
@@ -6738,7 +7031,7 @@
     const badge = $("#detail-state");
     badge.className = "badge inst-badge";
     badge.classList.add(stateBadgeClass(inst));
-    setText($("#detail-state-text"), OV_STATE_LABELS[key]);
+    setText($("#detail-state-text"), OV_STATE_LABELS[instDisplayKey(inst)]);
     const up = running && inst.container?.started_at
       ? fmtUptime(inst.container.started_at) : null;
     setText($("#ws-uptime"), up ? `Läuft seit ${up}` : ""); // Status steht schon im Badge
