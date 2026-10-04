@@ -426,12 +426,17 @@ async def _installed_project_ids_uncached(instance_id: str) -> dict:
     return out
 
 
-async def check_updates(instance_id: str) -> dict:
+async def check_updates(instance_id: str, target: dict | None = None) -> dict:
     """Prüft alle Mods der Instanz gegen Modrinth (+ CurseForge mit Key).
+    target ({"loader", "game_version"}) sucht die neueste Version für eine
+    andere Minecraft-Version/einen anderen Loader (Versionswechsel); erkannt
+    werden die installierten Dateien weiter am aktuellen Stand.
     Wirft HTTPException nur für 404/400; Anbieter-Ausfälle pro Mod toleriert."""
     instance = instances.get_instance(instance_id)
     loader = instance["loader"]
     game_version = instance["game_version"]
+    want_loader = (target or {}).get("loader") or loader
+    want_version = (target or {}).get("game_version") or game_version
     files = _iter_mod_files(instance_id)
     if len(files) > _MAX_CHECKED:
         raise HTTPException(status_code=400,
@@ -471,10 +476,10 @@ async def check_updates(instance_id: str) -> dict:
                 if info["source"] == "modrinth":
                     return await _modrinth_latest(client, info["installed"]
                                                   .get("project_id") or "",
-                                                  loader, game_version)
+                                                  want_loader, want_version)
                 cf_files = await _cf_files(client, str(info["installed_file"]
                                                        .get("modId") or ""),
-                                           game_version, loader)
+                                           want_version, want_loader)
                 from . import curseforge
                 try:
                     return curseforge._pick_file(cf_files, jar_preferred=True)
@@ -494,6 +499,14 @@ async def check_updates(instance_id: str) -> dict:
             "installed": None, "latest": None,
         }
         if info is None or latest is None:
+            if info is not None:
+                # Mod erkannt, aber keine passende Version (z. B. für die
+                # Zielversion eines Versionswechsels)
+                base["source"] = info["source"]
+                base["project_id"] = (info["installed"].get("project_id")
+                                      if info["source"] == "modrinth"
+                                      else str(info["installed_file"].get("modId") or ""))
+                base["no_compatible"] = True
             items.append(base)
             continue
         if info["source"] == "modrinth":
@@ -644,9 +657,11 @@ async def _resolve_latest(plan_item: dict, instance: dict,
     }
 
 
-async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
+async def _run_update_job(job: dict, instance: dict, plan: list,
+                          snapshot: bool = True) -> None:
     """Führt den Update-Plan aus: je Mod die neueste Datei laden und ersetzen.
-    Fehler einzelner Mods brechen den Job nicht ab (Ergebnisliste)."""
+    Fehler einzelner Mods brechen den Job nicht ab (Ergebnisliste).
+    snapshot=False: der Aufrufer hat schon ein Sicherheits-Backup angelegt."""
     from . import curseforge
     mods_root = instances.mods_dir(instance["id"])
     sem = asyncio.Semaphore(_JOB_CONCURRENCY)
@@ -698,19 +713,20 @@ async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
     job["results"] = []
     # Sicherheits-Backup (inkl. Welt): eine neue Mod-Version kann beim
     # ersten Start Weltdaten umschreiben. Ohne Backup kein Update.
-    job["phase"] = "Sicherheits-Backup"
-    try:
-        from . import backups  # lazy, vermeidet Import-Zirkel
-        snap = await asyncio.to_thread(
-            backups.safety_backup, instance["id"],
-            instances.instance_dir(instance["id"]), "pre-update")
-        job["backup"] = snap["name"]
-    except Exception as exc:
-        job["phase"] = "abgebrochen"
-        job["status"] = "error"
-        job["error"] = f"Sicherheits-Backup fehlgeschlagen, nichts geändert: {exc}"
-        modrinth.persist_job(job)
-        return
+    if snapshot:
+        job["phase"] = "Sicherheits-Backup"
+        try:
+            from . import backups  # lazy, vermeidet Import-Zirkel
+            snap = await asyncio.to_thread(
+                backups.safety_backup, instance["id"],
+                instances.instance_dir(instance["id"]), "pre-update")
+            job["backup"] = snap["name"]
+        except Exception as exc:
+            job["phase"] = "abgebrochen"
+            job["status"] = "error"
+            job["error"] = f"Sicherheits-Backup fehlgeschlagen, nichts geändert: {exc}"
+            modrinth.persist_job(job)
+            return
     job["phase"] = f"Aktualisiere (0/{job['total']})"
     client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0),
                                follow_redirects=True)

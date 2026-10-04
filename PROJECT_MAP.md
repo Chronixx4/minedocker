@@ -320,7 +320,26 @@ Checkliste, Dashboard-Schnellstart).
     der Restart-Policy ab); optionale Alerts: ALERT_WEBHOOK_URL (Discord-
     kompatibel) und/oder Telegram (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID),
     Ereignisauswahl via ALERT_EVENTS (Default crash,start,stop); wirft nie,
-    reconnectet bei Docker-Fehlern endlos, stoppt sauber beim Shutdown
+    reconnectet bei Docker-Fehlern endlos, stoppt sauber beim Shutdown;
+    bei Crash Diagnose über crashinfo.diagnose → instance.json last_crash,
+    Absturzschleife (3 Crashes in 10 min) → Server anhalten, Status bleibt
+    'error' (forget_crashes() beim manuellen Start)
+  - crashinfo.py – Crash-Diagnose aus Log-Ende + neuestem crash-reports/-
+    Bericht (max. 15 min alt): Muster für Java-Version, fehlende Mod-
+    Abhängigkeit, RAM (auch Exit 137), Client-Mod, Port, EULA, doppelte Mods,
+    Mixin, Welt; verdächtige Mods; Routen POST /instances/{id}/crash/analyze,
+    DELETE /instances/{id}/crash
+  - versionchange.py – MC-Version/Loader wechseln: POST
+    /instances/{id}/version/check (Vorschau: available/missing/unknown über
+    updates.check_updates(target=…)), POST /instances/{id}/version (Job
+    kind 'version': pre-update-Backup → Mods prüfen → instance.json umstellen
+    → fehlende Mods deaktivieren → Mods per _run_update_job(snapshot=False)
+    ersetzen); nur gestoppt, Downgrade nur mit allow_downgrade
+  - Schlafmodus: instance.json hibernate {mode off/pause/stop, minutes};
+    runtime._hibernate_env setzt ENABLE_AUTOPAUSE bzw. ENABLE_AUTOSTOP
+    (pause: ohne no-new-privileges wegen knockd-Capability; stop: Restart-
+    Policy on-failure); instances.is_paused() = /data/.paused, dann kein
+    Ping/RCON durch Detail, Live-Liste, Verlauf, Vorwarnung, Backup
 - scheduler.py – Geplante Aufgaben je Instanz (Daemon-Thread aus dem
     Lifespan, Tick alle 30 s, Zustand in /data/scheduler_state.json mit
     Atomic-Write; wirft nie, räumt verwaiste Einträge gelöschter Instanzen

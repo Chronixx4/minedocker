@@ -45,6 +45,7 @@ from . import (
     modrinth,
     packs,
     runtime,
+    versionchange,
     worlds,
 )
 from . import datapacks as datapacks_mod
@@ -312,6 +313,18 @@ class ScheduleModel(BaseModel):
 class HibernateModel(BaseModel):
     mode: str = Field(pattern=r"^(off|pause|stop)$")
     minutes: int = Field(default=30, ge=5, le=1440)
+
+
+class VersionTargetRequest(BaseModel):
+    loader: str = Field(min_length=1, max_length=16)
+    game_version: str = Field(min_length=1, max_length=32)
+
+
+class VersionChangeRequest(VersionTargetRequest):
+    loader_version: str | None = Field(default=None, max_length=64)
+    update_mods: bool = True
+    disable_missing: bool = True
+    allow_downgrade: bool = False
 
 
 class UpdateInstanceRequest(BaseModel):
@@ -1403,6 +1416,30 @@ async def instance_clone(instance_id: str, req: CloneInstanceRequest):
     logger.info("Instanz geklont: %s → %s (Port %s)",
                 instance_id, instance["name"], instance["port"])
     return instance
+
+
+@api.post("/instances/{instance_id}/version/check")
+async def instance_version_check(instance_id: str, req: VersionTargetRequest):
+    """Vorschau eines Versionswechsels: welche Mods es für die Zielversion
+    gibt, welche fehlen und welche unbekannt sind."""
+    try:
+        return await versionchange.check(instance_id, req.loader, req.game_version)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Versions-Vorschau fehlgeschlagen")
+        raise HTTPException(status_code=502, detail=f"Mod-Anbieter nicht erreichbar: {exc}")
+
+
+@api.post("/instances/{instance_id}/version")
+async def instance_version_change(instance_id: str, req: VersionChangeRequest):
+    """Minecraft-Version/Loader wechseln (Job): Backup, Mods mitziehen,
+    fehlende Mods deaktivieren, Version umstellen. Server muss gestoppt sein."""
+    job = await versionchange.start_change(
+        instance_id, req.loader, req.game_version, req.loader_version,
+        update_mods=req.update_mods, disable_missing=req.disable_missing,
+        allow_downgrade=req.allow_downgrade)
+    return {"job_id": job["id"], "total": job["total"], "phase": job["phase"]}
 
 
 @api.post("/instances/{instance_id}/crash/analyze")

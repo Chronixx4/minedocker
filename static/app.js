@@ -3041,7 +3041,147 @@
     else if (key === "spieler") loadWhitelist();
     else if (key === "backups") loadBackups();
     else if (key === "mods") { checkPackUpdate(true); loadModTrash(); }
+    else if (key === "einstellungen") loadVersionForm();
   }
+
+  /* ---------- Versionswechsel (MC-Version/Loader) ---------- */
+  function verSetError(msg) {
+    setText($("#ver-error"), msg);
+    show($("#ver-error"), !!msg);
+  }
+
+  function verTarget() {
+    return {
+      loader: $("#ver-loader").value,
+      game_version: $("#ver-mc-version").value,
+      loader_version: $("#ver-loader-version").value || null,
+    };
+  }
+
+  async function loadVersionForm() {
+    const inst = state.detailData || currentDetailInst();
+    if (!inst) return;
+    show($("#ver-preview"), false);
+    verSetError("");
+    fillSelect($("#ver-mc-version"), [], "Versionen werden geladen…");
+    try {
+      const versions = await api("/api/catalog/mc-versions");
+      const options = versions.releases.map((v) => ({ value: v, label: v }));
+      if (!versions.releases.includes(inst.game_version)) {
+        options.unshift({ value: inst.game_version, label: inst.game_version });
+      }
+      fillSelect($("#ver-mc-version"), options, "Version wählen");
+      $("#ver-mc-version").value = inst.game_version;
+      await reloadLoadersInto("ver", inst.game_version);
+      $("#ver-loader").value = inst.loader;
+      updateLoaderVersionInto("ver");
+    } catch (e) {
+      fillSelect($("#ver-mc-version"), [], "Katalog nicht erreichbar");
+    }
+  }
+
+  function verRow(text, cls) {
+    const li = document.createElement("li");
+    li.className = `mod-row ${cls || ""}`;
+    li.textContent = text;
+    return li;
+  }
+
+  $("#ver-mc-version").addEventListener("change", async () => {
+    const loader = $("#ver-loader").value;
+    await reloadLoadersInto("ver", $("#ver-mc-version").value);
+    if (loader) { $("#ver-loader").value = loader; updateLoaderVersionInto("ver"); }
+    show($("#ver-preview"), false);
+  });
+  $("#ver-loader").addEventListener("change", () => {
+    updateLoaderVersionInto("ver");
+    show($("#ver-preview"), false);
+  });
+
+  $("#ver-check").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    const btn = $("#ver-check");
+    const target = verTarget();
+    if (!target.loader || !target.game_version) { verSetError("Bitte Version und Loader wählen."); return; }
+    btn.disabled = true;
+    btn.textContent = "Prüfe…";
+    verSetError("");
+    try {
+      const res = await api(`/api/instances/${state.detailId}/version/check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loader: target.loader, game_version: target.game_version }),
+      });
+      const m = res.mods;
+      const parts = [`${res.current.loader} ${res.current.game_version} → ${res.target.loader} ${res.target.game_version}.`];
+      const updatable = m.available.filter((x) => !x.unchanged).length;
+      if (m.available.length || m.missing.length || m.unknown.length) {
+        parts.push(`${updatable} Mods werden aktualisiert, ${m.missing.length} gibt es dafür nicht,`
+          + ` ${m.unknown.length} unbekannt (bleiben wie sie sind).`);
+      }
+      if (res.modpack) parts.push(`Achtung: Modpack „${res.modpack}“ ist installiert, besser ein passendes Pack-Update nutzen.`);
+      if (res.downgrade) parts.push("Achtung: ältere Version, die Welt kann beschädigt werden.");
+      setText($("#ver-summary"), parts.join(" "));
+      const list = $("#ver-mods");
+      list.textContent = "";
+      for (const x of m.missing) list.appendChild(verRow(`✗ ${x.filename}: keine passende Version`, "warn"));
+      for (const x of m.available.filter((y) => !y.unchanged)) {
+        list.appendChild(verRow(`↑ ${x.filename}: ${x.from || "?"} → ${x.to}`));
+      }
+      for (const x of m.unknown) list.appendChild(verRow(`? ${x.filename}: unbekannt, bleibt unverändert`));
+      show($("#ver-downgrade-wrap"), !!res.downgrade);
+      $("#ver-allow-downgrade").checked = false;
+      show($("#ver-preview"), true);
+    } catch (e) {
+      verSetError(`Prüfung fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Mods prüfen";
+    }
+  });
+
+  $("#ver-apply").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    const target = verTarget();
+    const ok = await confirmDialog({
+      title: "Version wechseln?",
+      message: `Der Server wird auf ${target.loader} ${target.game_version} umgestellt. `
+        + "Vorher entsteht ein Backup inklusive Welt.",
+      ok: "Wechseln",
+    });
+    if (!ok) return;
+    const btn = $("#ver-apply");
+    btn.disabled = true;
+    verSetError("");
+    try {
+      const job = await api(`/api/instances/${state.detailId}/version`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...target,
+          update_mods: $("#ver-update-mods").checked,
+          disable_missing: $("#ver-disable-missing").checked,
+          allow_downgrade: $("#ver-allow-downgrade").checked,
+        }),
+      });
+      const done = await pollProgress(job, {
+        box: $("#ver-progress"), bar: $("#ver-bar"), phase: $("#ver-phase"), pct: $("#ver-pct"),
+      });
+      const sum = done?.summary || {};
+      const msg = [`Server steht jetzt auf ${sum.target || `${target.loader} ${target.game_version}`}.`];
+      if (sum.updated) msg.push(`${sum.updated} Mods aktualisiert.`);
+      if (sum.disabled?.length) msg.push(`${sum.disabled.length} deaktiviert.`);
+      toast(msg.join(" "), "success");
+      if (sum.failed) verSetError(`Fehler bei: ${sum.errors.join(" · ")}`);
+      show($("#ver-preview"), false);
+      await loadDetail();
+      loadVersionForm();
+    } catch (e) {
+      verSetError(`Wechsel fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   function closeDetail() {
     state.detailId = null;
     state.detailData = null;
@@ -6751,6 +6891,7 @@
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
       ["#hib-save", "einstellungen"],     // Schlafmodus
+      ["#ver-check", "einstellungen"],    // Version wechseln
       ["#tags-save", "einstellungen"],    // Tags & Port
       ["#inst-delete-btn", "einstellungen"], // Server löschen
       ["#sched-autostart", "zeitplan"],   // Zeitplan
@@ -6890,7 +7031,7 @@
     const badge = $("#detail-state");
     badge.className = "badge inst-badge";
     badge.classList.add(stateBadgeClass(inst));
-    setText($("#detail-state-text"), OV_STATE_LABELS[key]);
+    setText($("#detail-state-text"), OV_STATE_LABELS[instDisplayKey(inst)]);
     const up = running && inst.container?.started_at
       ? fmtUptime(inst.container.started_at) : null;
     setText($("#ws-uptime"), up ? `Läuft seit ${up}` : ""); // Status steht schon im Badge

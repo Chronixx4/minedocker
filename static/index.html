@@ -711,6 +711,52 @@
             <div id="jvm-error" class="err hidden"></div>
           </div>
 
+          <!-- Versionswechsel (MC-Version/Loader) -->
+          <div class="upload-box">
+            <h3>Version wechseln <span class="muted small">(Server muss gestoppt sein)</span></h3>
+            <div class="form-grid">
+              <label>Minecraft-Version
+                <select id="ver-mc-version"></select>
+              </label>
+              <label>Server-Loader
+                <select id="ver-loader"></select>
+              </label>
+              <label>Loader-Version
+                <select id="ver-loader-version"></select>
+              </label>
+            </div>
+            <p class="muted small" id="ver-loader-note"></p>
+            <div class="row">
+              <button id="ver-check" class="btn">Mods prüfen</button>
+            </div>
+            <div id="ver-preview" class="hidden">
+              <p id="ver-summary" class="small"></p>
+              <ul id="ver-mods" class="mod-list compact"></ul>
+              <label class="check">
+                <input type="checkbox" id="ver-update-mods" checked>
+                Mods auf passende Versionen bringen
+              </label>
+              <label class="check">
+                <input type="checkbox" id="ver-disable-missing" checked>
+                Mods ohne passende Version deaktivieren
+              </label>
+              <label class="check hidden" id="ver-downgrade-wrap">
+                <input type="checkbox" id="ver-allow-downgrade">
+                Ich weiß, dass eine ältere Version die Welt beschädigen kann
+              </label>
+              <div class="row" style="margin-top: 0.5rem;">
+                <button id="ver-apply" class="btn primary admin-only">Version wechseln</button>
+              </div>
+            </div>
+            <div id="ver-progress" class="hidden">
+              <div class="metric-head"><span id="ver-phase" class="muted small"></span><span id="ver-pct" class="muted small"></span></div>
+              <div class="bar"><div id="ver-bar" class="bar-fill" style="width:0%"></div></div>
+            </div>
+            <p class="muted small">Vorher entsteht automatisch ein Backup inklusive Welt.
+              Die neue Server-Software lädt der nächste Start.</p>
+            <div id="ver-error" class="err hidden"></div>
+          </div>
+
           <!-- Schlafmodus (itzg Autopause/Autostop) -->
           <div class="upload-box">
             <h3>Schlafmodus <span class="muted small">(wirksam beim nächsten Start)</span></h3>
