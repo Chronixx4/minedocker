@@ -33,7 +33,18 @@ from starlette.background import BackgroundTask
 
 from . import auth as auth_mod
 from . import backups as backups_mod
-from . import catalog, curseforge, instances, modcategories, modinstall, modrinth, packs, runtime, worlds
+from . import (
+    catalog,
+    crashinfo,
+    curseforge,
+    instances,
+    modcategories,
+    modinstall,
+    modrinth,
+    packs,
+    runtime,
+    worlds,
+)
 from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
@@ -1362,9 +1373,34 @@ async def instance_clone(instance_id: str, req: CloneInstanceRequest):
     return instance
 
 
+@api.post("/instances/{instance_id}/crash/analyze")
+async def instance_crash_analyze(instance_id: str):
+    """Absturz-Ursache jetzt ermitteln (Log-Ende + neuester Crash-Report der
+    letzten 24 h), z. B. wenn ein Server nicht hochkommt."""
+    instance = instances.get_instance(instance_id)
+    try:
+        lines = await asyncio.to_thread(runtime.logs, instance, 300)
+    except RuntimeError:
+        lines = []
+    diag = await asyncio.to_thread(
+        crashinfo.diagnose, instances.instance_dir(instance_id), lines,
+        since=time.time() - 86400)
+    await asyncio.to_thread(instances.set_crash, instance_id, diag)
+    return diag
+
+
+@api.delete("/instances/{instance_id}/crash")
+async def instance_crash_dismiss(instance_id: str):
+    """Angezeigte Absturz-Diagnose ausblenden."""
+    instances.get_instance(instance_id)
+    await asyncio.to_thread(instances.set_crash, instance_id, None)
+    return {"ok": True}
+
+
 @api.post("/instances/{instance_id}/start")
 async def instance_start(instance_id: str):
     instance = instances.get_instance(instance_id)
+    watchdog_mod.forget_crashes(instance_id)  # Absturzschleife neu zählen
     container = await asyncio.to_thread(runtime.container_status, instance)
     if container.get("running"):
         instances.set_status(instance_id, "running", None)

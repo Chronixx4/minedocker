@@ -364,6 +364,23 @@
         </div>
       </div>
       <div id="detail-error" class="err hidden"></div>
+      <!-- Absturz-Diagnose (Watchdog bzw. „Absturz analysieren“) -->
+      <div id="crash-box" class="crash-box hidden">
+        <div class="crash-head">
+          <strong id="crash-title">Letzter Absturz</strong>
+          <span id="crash-when" class="muted small"></span>
+          <span class="crash-actions">
+            <button id="crash-analyze" class="btn small-btn" title="Log und Crash-Report jetzt auswerten">Neu analysieren</button>
+            <button id="crash-dismiss" class="btn small-btn" title="Hinweis ausblenden">Ausblenden</button>
+          </span>
+        </div>
+        <ul id="crash-findings" class="crash-findings"></ul>
+        <p id="crash-suspects" class="muted small hidden"></p>
+        <details id="crash-log-wrap">
+          <summary class="muted small">Letzte Logzeilen</summary>
+          <pre id="crash-log" class="crash-log"></pre>
+        </details>
+      </div>
       <div id="ws-panels" class="ws-panels">
         <div class="ws-panel hidden" data-ws-panel="uebersicht">
           <!-- Live-Werte als XP-Leisten -->

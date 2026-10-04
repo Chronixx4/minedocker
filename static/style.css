@@ -3058,3 +3058,14 @@ kbd {
 }
 /* Eingebettet: Leiste über der Hotbar halten */
 #search-card.embedded .mod-cart { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+
+/* Absturz-Diagnose */
+.crash-box { border: 1px solid rgba(248, 113, 113, 0.45); background: rgba(248, 113, 113, 0.08);
+  border-radius: 10px; padding: 0.75rem 1rem; margin: 0.5rem 0 0.75rem; }
+.crash-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.crash-actions { margin-left: auto; display: flex; gap: 0.4rem; }
+.crash-findings { margin: 0.5rem 0 0; padding-left: 1.1rem; }
+.crash-findings li { margin-bottom: 0.5rem; }
+.crash-findings pre, .crash-log { white-space: pre-wrap; word-break: break-word; font-size: 0.78rem;
+  max-height: 14rem; overflow: auto; margin: 0.3rem 0 0; padding: 0.4rem 0.5rem;
+  background: rgba(0, 0, 0, 0.25); border-radius: 6px; }

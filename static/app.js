@@ -3099,7 +3099,85 @@
     }
   }
 
+  /* ---------- Absturz-Diagnose ---------- */
+  function renderCrash(detail) {
+    const crash = detail?.last_crash;
+    const box = $("#crash-box");
+    show(box, !!crash || detail?.status === "error");
+    show($("#crash-dismiss"), !!crash);
+    if (!crash) {
+      // Fehlerstatus ohne Diagnose (z. B. aus älterer Version): anbieten
+      setText($("#crash-title"), "Der Server meldet einen Fehler");
+      setText($("#crash-when"), "");
+      $("#crash-findings").textContent = "";
+      const li = document.createElement("li");
+      li.textContent = "„Neu analysieren“ wertet Log und Crash-Report aus und nennt die Ursache.";
+      $("#crash-findings").appendChild(li);
+      show($("#crash-suspects"), false);
+      $("#crash-log").textContent = "–";
+      return;
+    }
+    setText($("#crash-title"), `Letzter Absturz: ${crash.summary || "Ursache nicht erkannt"}`);
+    setText($("#crash-when"), [crash.at ? fmtDate(crash.at) : "",
+      crash.exit_code != null ? `Exit-Code ${crash.exit_code}` : "",
+      crash.crash_report ? `Bericht: crash-reports/${crash.crash_report}` : ""]
+      .filter(Boolean).join(" · "));
+    const list = $("#crash-findings");
+    list.textContent = "";
+    const findings = crash.findings || [];
+    if (!findings.length) {
+      const li = document.createElement("li");
+      li.textContent = "Keine bekannte Ursache gefunden. Die letzten Logzeilen unten zeigen meist, was schiefging.";
+      list.appendChild(li);
+    }
+    for (const f of findings) {
+      const li = document.createElement("li");
+      const title = document.createElement("strong");
+      title.textContent = f.title;
+      const hint = document.createElement("div");
+      hint.textContent = f.hint;
+      li.append(title, hint);
+      if (f.evidence?.length) {
+        const pre = document.createElement("pre");
+        pre.textContent = f.evidence.join("\n");
+        li.appendChild(pre);
+      }
+      list.appendChild(li);
+    }
+    const suspects = crash.suspects || [];
+    setText($("#crash-suspects"), suspects.length ? `Verdächtige Mods: ${suspects.join(", ")}` : "");
+    show($("#crash-suspects"), suspects.length > 0);
+    $("#crash-log").textContent = (crash.log_tail || []).join("\n") || "–";
+    $("#crash-log-wrap").open = !findings.length;
+  }
+
+  $("#crash-dismiss").addEventListener("click", async () => {
+    if (!state.detailId) return;
+    try {
+      await api(`/api/instances/${state.detailId}/crash`, { method: "DELETE" });
+      if (state.detailData) delete state.detailData.last_crash;
+      show($("#crash-box"), false);
+    } catch (e) {
+      toast(`Ausblenden fehlgeschlagen: ${e.message}`, "error");
+    }
+  });
+
+  async function analyzeCrash() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    try {
+      const crash = await api(`/api/instances/${id}/crash/analyze`, { method: "POST" });
+      if (state.detailId !== id || !state.detailData) return;
+      state.detailData.last_crash = crash;
+      renderCrash(state.detailData);
+    } catch (e) {
+      toast(`Analyse fehlgeschlagen: ${e.message}`, "error");
+    }
+  }
+  $("#crash-analyze").addEventListener("click", analyzeCrash);
+
   function renderDetailInfo(detail) {
+    renderCrash(detail);
     const box = $("#detail-info");
     box.textContent = "";
     const errBox = $("#detail-error");

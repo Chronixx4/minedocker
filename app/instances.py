@@ -331,6 +331,17 @@ def set_status(instance_id: str, status: str, error: str | None = None) -> None:
         _save_meta(instance)
 
 
+def set_crash(instance_id: str, crash: dict | None) -> None:
+    """Speichert die Diagnose des letzten Absturzes (None = verwerfen)."""
+    with _META_LOCK:
+        instance = _load_meta(instance_id)
+        if crash is None:
+            instance.pop("last_crash", None)
+        else:
+            instance["last_crash"] = crash
+        _save_meta(instance)
+
+
 # Schlafmodus (itzg): "pause" friert den Java-Prozess ein, wenn niemand
 # spielt, und weckt ihn beim nächsten Verbindungsversuch; "stop" beendet den
 # Server (spart auch RAM), Start dann wieder übers Dashboard.
