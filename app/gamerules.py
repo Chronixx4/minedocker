@@ -12,6 +12,7 @@
   keine pvp-Gamerule. showCoordinates ebenfalls weggelassen (Bedrock-only).
 """
 import logging
+import re
 
 from fastapi import HTTPException
 
@@ -21,8 +22,11 @@ _INT_MAX = 2**31 - 1
 
 
 def _g(name: str, gtype: str, default, desc: str = "",
-       lo: int | None = None, hi: int | None = None) -> dict:
+       lo: int | None = None, hi: int | None = None,
+       since: tuple | None = None) -> dict:
     entry = {"name": name, "type": gtype, "default": default, "desc": desc}
+    if since:
+        entry["since"] = since
     if gtype == "int":
         entry["min"] = lo
         entry["max"] = hi
@@ -67,6 +71,9 @@ GAMERULES: list = [
     _g("keepInventory", "bool", False, "Inventar beim Tod behalten"),
     _g("lavaSourceConversion", "bool", True,
        "Fließende Lava wird zur Quelle (mit Spitze+Kessel)"),
+    _g("locatorBar", "bool", True,
+       "Ortungsleiste zeigt, wo andere Spieler sind (ab 1.21.6)",
+       since=(1, 21, 6)),
     _g("logAdminCommands", "bool", True, "Admin-Befehle im Server-Log"),
     _g("maxCommandChainLength", "int", 65535,
        "Max. Länge einer Befehlsblock-Kette", lo=0, hi=_INT_MAX),
@@ -81,6 +88,9 @@ GAMERULES: list = [
     _g("mobGriefing", "bool", True,
        "Mobs verändern Blöcke (Creeper, Endermen, Schafe…)"),
     _g("naturalRegeneration", "bool", True, "Natürliche HP-Regeneration"),
+    _g("playersSleepingPercentage", "int", 100,
+       "Anteil schlafender Spieler (%), um die Nacht zu überspringen",
+       lo=0, hi=100),
     _g("playersNetherPortalCreativeDelay", "int", 0,
        "Netherportal-Verzögerung Kreativ (Ticks)", lo=0, hi=_INT_MAX),
     _g("playersNetherPortalDefaultDelay", "int", 80,
@@ -113,6 +123,27 @@ _BY_NAME = {g["name"]: g for g in GAMERULES}
 
 def known(name: str) -> dict | None:
     return _BY_NAME.get((name or "").strip())
+
+
+def _version_tuple(version: str) -> tuple:
+    nums = re.findall(r"\d+", (version or "").split("-")[0])
+    return tuple(int(n) for n in nums[:3]) or (0,)
+
+
+def available(entry: dict, game_version: str) -> bool:
+    """Gibt es die Regel in dieser MC-Version? Snapshots gelten als neu."""
+    since = entry.get("since")
+    if not since or re.match(r"^\d{2}w\d{2}", game_version or ""):
+        return True
+    return _version_tuple(game_version) >= since
+
+
+# Uhrzeit-/Wetter-Knöpfe der Welt-Einstellungen: feste Befehle, kein
+# freier Text vom Browser.
+TIME_PRESETS = {"morgen": "time set day", "mittag": "time set noon",
+                "abend": "time set 12000", "nacht": "time set midnight"}
+WEATHER_PRESETS = {"klar": "weather clear", "regen": "weather rain",
+                   "gewitter": "weather thunder"}
 
 
 def validate_value(entry: dict, value) -> str:
@@ -149,7 +180,6 @@ def parse_gamerules_output(output: str) -> dict:
     - Listen-Format (/gamerule ohne Argumente): 'gamerule <name> = <value>'
     - Abfrage-Format (/gamerule <name>): 'Gamerule <name> is currently set to: <value>'
     (Groß-/Kleinschreibung tolerant; nur Namen der kuratierten Liste.)"""
-    import re
     values: dict = {}
     if not output:
         return values
@@ -188,6 +218,24 @@ def _rcon(instance: dict, command: str) -> str:
                             detail=f"RCON nicht erreichbar: {exc}") from exc
 
 
+def _rcon_many(instance: dict, cmds: list) -> list:
+    from . import rcon as rcon_mod  # lazy, vermeidet Import-Zirkel
+    from . import runtime
+    host, port = runtime.rcon_target(instance)
+    try:
+        return rcon_mod.commands(host, port, runtime.rcon_secret(instance),
+                                 cmds, timeout=15.0)
+    except (TimeoutError, rcon_mod.RconError, OSError) as exc:
+        raise HTTPException(status_code=503,
+                            detail=f"RCON nicht erreichbar: {exc}") from exc
+
+
+def parse_daytime(output: str) -> int | None:
+    """'The time is 6000' → 6000 (Ticks seit Tagesbeginn, 0 bis 23999)."""
+    match = re.search(r"(-?\d+)", output or "")
+    return int(match.group(1)) % 24000 if match else None
+
+
 def read_gamerules(instance_id: str) -> dict:
     """Alle kuratierten Gamerules mit aktuellem Wert (RCON, nur laufend)."""
     from . import instances  # lazy, vermeidet Import-Zirkel
@@ -197,10 +245,15 @@ def read_gamerules(instance_id: str) -> dict:
         raise HTTPException(status_code=409,
                             detail="Gamerules sind nur bei laufender Instanz "
                                    "lesbar — Server starten")
-    output = _rcon(instance, "gamerule")
-    live = parse_gamerules_output(output)
+    rules_here = [e for e in GAMERULES
+                  if available(e, instance.get("game_version") or "")]
+    # Vanilla kennt kein 'gamerule' ohne Argumente — jede Regel einzeln
+    # abfragen, alles über eine RCON-Verbindung.
+    cmds = [f"gamerule {e['name']}" for e in rules_here]
+    outputs = _rcon_many(instance, [*cmds, "time query daytime"])
+    live = parse_gamerules_output("\n".join(outputs[:-1]))
     rules = []
-    for entry in GAMERULES:
+    for entry in rules_here:
         raw = live.get(entry["name"])
         rules.append({
             "name": entry["name"],
@@ -212,7 +265,7 @@ def read_gamerules(instance_id: str) -> dict:
             "desc": entry.get("desc") or "",
             "raw": raw,
         })
-    return {"gamerules": rules}
+    return {"gamerules": rules, "daytime": parse_daytime(outputs[-1])}
 
 
 def set_gamerule(instance_id: str, name: str, value) -> dict:
@@ -225,6 +278,10 @@ def set_gamerule(instance_id: str, name: str, value) -> dict:
         raise HTTPException(status_code=400,
                             detail=f"Unbekannte Gamerule '{name}' — nur die "
                                    "kuratierte Vanilla-1.21.x-Liste ist erlaubt")
+    if not available(entry, instance.get("game_version") or ""):
+        raise HTTPException(status_code=400,
+                            detail=f"'{entry['name']}' gibt es in dieser "
+                                   "Minecraft-Version nicht")
     if not runtime.is_running(instance):
         raise HTTPException(status_code=409,
                             detail="Gamerules sind nur bei laufender Instanz "
@@ -237,11 +294,38 @@ def set_gamerule(instance_id: str, name: str, value) -> dict:
     return {"name": entry["name"], "value": typed, "output": output}
 
 
+def set_time_weather(instance_id: str, time: str | None,
+                     weather: str | None) -> dict:
+    """Uhrzeit und/oder Wetter über feste Voreinstellungen setzen (RCON)."""
+    from . import instances, runtime  # lazy, vermeidet Import-Zirkel
+    instance = instances.get_instance(instance_id)
+    cmds = []
+    if time is not None:
+        if time not in TIME_PRESETS:
+            raise HTTPException(status_code=400, detail="Unbekannte Uhrzeit")
+        cmds.append(TIME_PRESETS[time])
+    if weather is not None:
+        if weather not in WEATHER_PRESETS:
+            raise HTTPException(status_code=400, detail="Unbekanntes Wetter")
+        cmds.append(WEATHER_PRESETS[weather])
+    if not cmds:
+        raise HTTPException(status_code=400,
+                            detail="Uhrzeit oder Wetter angeben")
+    if not runtime.is_running(instance):
+        raise HTTPException(status_code=409,
+                            detail="Nur bei laufender Instanz möglich — "
+                                   "Server starten")
+    outputs = _rcon_many(instance, [*cmds, "time query daytime"])
+    logger.info("Welt: %s (%s)", ", ".join(cmds), instance_id)
+    return {"commands": cmds, "daytime": parse_daytime(outputs[-1])}
+
+
 __all__ = [
     "GAMERULES",
     "known",
     "parse_gamerules_output",
     "read_gamerules",
     "set_gamerule",
+    "set_time_weather",
     "validate_value",
 ]

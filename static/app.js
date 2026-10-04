@@ -3036,7 +3036,7 @@
   function loadWsTabData(key) {
     if (!state.detailId || !state.wsLoaded || state.wsLoaded.has(key)) return;
     state.wsLoaded.add(key);
-    if (key === "welt") { loadWorldInfo(); dpReload(); loadIconPreview(); }
+    if (key === "welt") { wsetLoad(); loadWorldInfo(); dpReload(); loadIconPreview(); }
     else if (key === "dateien") fbReload();
     else if (key === "spieler") loadWhitelist();
     else if (key === "backups") loadBackups();
@@ -6592,6 +6592,318 @@
   $("#gr-reload").addEventListener("click", grReload);
   $("#gr-filter").addEventListener("input", renderGamerules);
 
+  /* ---------- Welt-Einstellungen (Spielregeln + Allgemein) ---------- */
+  // Kuratierte Auswahl mit verständlichen Erklärungen; alle übrigen Regeln
+  // bleiben im Gamerule-Editor, alle Properties im server.properties-Editor.
+  const WSET_RULES = [
+    { name: "playersSleepingPercentage", label: "Schlaf-Schwelle", slider: true,
+      desc: "Wie viel Prozent der Spieler schlafen müssen, damit die Nacht übersprungen wird. Bei 0 reicht ein einzelner schlafender Spieler." },
+    { name: "doDaylightCycle", label: "Tageszyklus",
+      desc: "Wenn aus, bleiben Sonne und Mond stehen. Die Uhrzeit setzt du oben mit den Knöpfen." },
+    { name: "doWeatherCycle", label: "Wetterwechsel",
+      desc: "Wenn aus, bleibt das aktuelle Wetter dauerhaft. Das Wetter setzt du oben mit den Knöpfen." },
+    { name: "locatorBar", label: "Spieler-Ortungsleiste",
+      desc: "Zeigt jedem Spieler eine Leiste mit der Richtung zu den anderen. Wer seine Basis geheim halten will, schaltet sie aus. Schleichen oder ein Mob-Kopf verstecken einen Spieler kurzzeitig." },
+    { name: "keepInventory", label: "Inventar behalten",
+      desc: "Spieler behalten beim Tod ihre Items und ihre Erfahrung." },
+    { name: "mobGriefing", label: "Mobs verändern Blöcke",
+      desc: "Creeper sprengen Löcher, Endermen tragen Blöcke weg. Aus schützt Bauten, stoppt aber auch Dorfbewohner beim Ernten." },
+    { name: "doInsomnia", label: "Phantome",
+      desc: "Phantome greifen Spieler an, die drei Nächte nicht geschlafen haben." },
+    { name: "doFireTick", label: "Feuer breitet sich aus",
+      desc: "Feuer springt auf brennbare Blöcke über. Aus verhindert Waldbrände und abgebrannte Holzhäuser." },
+  ];
+
+  const WSET_GENERAL = [
+    { key: "level-name", label: "Weltname", readonly: true, def: "world",
+      desc: "Ordner der aktiven Welt. Welten wechseln und neu anlegen geht weiter unten unter „Welten“." },
+    { key: "level-seed", label: "Welt-Seed", readonly: true, def: "", empty: "zufällig",
+      desc: "Bestimmt, wie die Welt erzeugt wird. Gilt nur beim Erzeugen; eine neue Welt mit eigenem Seed legst du unter „Welten“ an." },
+    { key: "gamemode", label: "Spielmodus", def: "survival",
+      choices: [["survival", "Überleben"], ["creative", "Kreativ"], ["adventure", "Abenteuer"], ["spectator", "Zuschauer"]],
+      desc: "Modus für neue Spieler. Überleben ist das klassische Spiel, Kreativ gibt unbegrenzt Blöcke und Fliegen, Abenteuer ist für eigene Karten, Zuschauer nur zum Zusehen." },
+    { key: "difficulty", label: "Schwierigkeit", def: "easy",
+      choices: [["peaceful", "Friedlich"], ["easy", "Einfach"], ["normal", "Normal"], ["hard", "Schwer"]],
+      desc: "Friedlich entfernt alle Monster, Einfach macht sie schwächer, Normal ist das Standard-Spiel, bei Schwer kann man verhungern." },
+    { key: "hardcore", label: "Hardcore", bool: true, def: "false",
+      desc: "Nur ein Leben: Wer stirbt, kann nur noch zuschauen. Die Schwierigkeit ist dann fest auf Schwer." },
+    { key: "pvp", label: "PvP", bool: true, def: "true",
+      desc: "Spieler können sich gegenseitig Schaden zufügen." },
+    { key: "max-players", label: "Maximale Spieler", int: [1, 1000], def: "20",
+      desc: "So viele Spieler können gleichzeitig verbunden sein." },
+    { key: "allow-flight", label: "Fliegen erlauben", bool: true, def: "false", adv: true,
+      desc: "Verhindert Kicks wegen Fliegens. Nötig für manche Mods und Plugins mit Flug." },
+    { key: "allow-nether", label: "Nether erlauben", bool: true, def: "true", adv: true,
+      desc: "Wenn aus, funktionieren Netherportale nicht." },
+    { key: "force-gamemode", label: "Spielmodus erzwingen", bool: true, def: "false", adv: true,
+      desc: "Setzt jeden Spieler beim Betreten auf den Standard-Spielmodus zurück." },
+    { key: "spawn-protection", label: "Spawn-Schutz", int: [0, 256], def: "16", adv: true,
+      desc: "Radius in Blöcken um den Spawn, in dem nur Operatoren bauen dürfen. 0 schaltet den Schutz ab." },
+    { key: "view-distance", label: "Sichtweite", int: [3, 32], def: "10", adv: true,
+      desc: "Wie viele Chunks Spieler sehen. Der größte Hebel für RAM und Leistung." },
+    { key: "simulation-distance", label: "Simulationsweite", int: [3, 32], def: "10", adv: true,
+      desc: "In wie vielen Chunks um Spieler Pflanzen wachsen und Mobs sich bewegen." },
+  ];
+
+  state.wset = { props: [], rules: [], edits: {} };
+
+  function wsetSetError(msg) { authError("#wset-error", msg); }
+
+  function wsetRunning() {
+    return instStateKey(currentDetailInst() || state.detailData || {}) === "running";
+  }
+
+  // Minecraft-Ticks → Uhrzeit (Tick 0 = 6:00 Uhr)
+  function wsetClock(ticks) {
+    if (ticks == null) return "–";
+    const hour = (Math.floor(ticks / 1000) + 6) % 24;
+    const minute = Math.floor((ticks % 1000) * 60 / 1000);
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  function wsetRow(label, desc, def, control) {
+    const row = document.createElement("div");
+    row.className = "wset-row";
+    const text = document.createElement("div");
+    text.className = "wset-text";
+    const title = document.createElement("div");
+    title.className = "wset-label";
+    title.textContent = label;
+    const info = document.createElement("div");
+    info.className = "wset-desc muted small";
+    info.textContent = desc;
+    text.append(title, info);
+    if (def !== null) {
+      const d = document.createElement("div");
+      d.className = "wset-default muted small";
+      const code = document.createElement("code");
+      code.textContent = def;
+      d.append("Standard: ", code);
+      text.append(d);
+    }
+    const ctl = document.createElement("div");
+    ctl.className = "wset-control";
+    ctl.append(control);
+    row.append(text, ctl);
+    return row;
+  }
+
+  function wsetSwitch(checked, onChange) {
+    const label = document.createElement("label");
+    label.className = "wset-switch";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = checked;
+    input.disabled = state.role === "viewer";
+    input.addEventListener("change", () => onChange(input));
+    const knob = document.createElement("span");
+    knob.className = "wset-knob";
+    label.append(input, knob);
+    return label;
+  }
+
+  function renderWsetRules() {
+    const list = $("#wset-rules");
+    list.textContent = "";
+    const byName = new Map(state.wset.rules.map((g) => [g.name, g]));
+    for (const def of WSET_RULES) {
+      const rule = byName.get(def.name);
+      if (!rule) continue; // in dieser Version nicht vorhanden
+      const value = rule.value == null ? rule.default : rule.value;
+      let control;
+      if (def.slider) {
+        control = document.createElement("div");
+        control.className = "wset-slider";
+        const range = document.createElement("input");
+        range.type = "range";
+        range.min = String(rule.min ?? 0);
+        range.max = String(rule.max ?? 100);
+        range.value = String(value);
+        range.disabled = state.role === "viewer";
+        range.setAttribute("aria-label", def.label);
+        const out = document.createElement("span");
+        out.className = "wset-slider-val";
+        out.textContent = `${value} %`;
+        range.addEventListener("input", () => { out.textContent = `${range.value} %`; });
+        range.addEventListener("change", () => wsetSetRule(def, Number(range.value), () => {
+          range.value = String(value);
+          out.textContent = `${value} %`;
+        }));
+        control.append(range, out);
+      } else {
+        control = wsetSwitch(value === true, (input) =>
+          wsetSetRule(def, input.checked, () => { input.checked = !input.checked; }));
+      }
+      const shownDefault = def.slider ? `${rule.default} %` : (rule.default ? "an" : "aus");
+      list.appendChild(wsetRow(def.label, def.desc, shownDefault, control));
+    }
+  }
+
+  async function wsetSetRule(def, value, revert) {
+    try {
+      const data = await api(`/api/instances/${state.detailId}/gamerules`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: def.name, value }),
+      });
+      const rule = state.wset.rules.find((g) => g.name === def.name);
+      if (rule) rule.value = data.value;
+      const grRule = state.grRules.find((g) => g.name === def.name);
+      if (grRule) { grRule.value = data.value; renderGamerules(); }
+      const shown = typeof data.value === "boolean" ? (data.value ? "an" : "aus") : `${data.value} %`;
+      toast(`${def.label}: ${shown}`, "success");
+    } catch (e) {
+      revert();
+      toast(`${def.label} nicht geändert: ${e.message}`, "error");
+    }
+  }
+
+  async function wsetTimeWeather(body) {
+    try {
+      const data = await api(`/api/instances/${state.detailId}/world/time-weather`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setText($("#wset-time"), wsetClock(data.daytime));
+      toast(body.time ? `Uhrzeit: ${wsetClock(data.daytime)}` : "Wetter geändert", "success");
+    } catch (e) {
+      toast(`Nicht geändert: ${e.message}`, "error");
+    }
+  }
+
+  function wsetPropValue(key) {
+    if (key in state.wset.edits) return state.wset.edits[key];
+    return state.wset.props.find((p) => p.key === key)?.value;
+  }
+
+  function wsetEdit(key, value) {
+    state.wset.edits[key] = value;
+    $("#wset-save").disabled = false;
+  }
+
+  function renderWsetGeneral() {
+    const list = $("#wset-general");
+    list.textContent = "";
+    const advanced = $("#wset-advanced").checked;
+    const viewer = state.role === "viewer";
+    for (const def of WSET_GENERAL) {
+      if (def.adv && !advanced) continue;
+      const raw = wsetPropValue(def.key);
+      const value = raw == null ? def.def : String(raw);
+      let control;
+      if (def.readonly) {
+        control = document.createElement("code");
+        control.className = "wset-readonly";
+        control.textContent = value || def.empty || "–";
+      } else if (def.bool) {
+        control = wsetSwitch(value.trim().toLowerCase() === "true",
+          (input) => wsetEdit(def.key, input.checked ? "true" : "false"));
+      } else if (def.choices) {
+        control = document.createElement("select");
+        control.className = "cfg-input";
+        for (const [v, text] of def.choices) {
+          const opt = document.createElement("option");
+          opt.value = v;
+          opt.textContent = text;
+          control.appendChild(opt);
+        }
+        control.value = value.trim().toLowerCase();
+        control.disabled = viewer;
+        control.addEventListener("change", (e) => wsetEdit(def.key, e.target.value));
+      } else {
+        control = document.createElement("input");
+        control.type = "number";
+        control.className = "cfg-input wset-num";
+        control.min = String(def.int[0]);
+        control.max = String(def.int[1]);
+        control.value = value;
+        control.disabled = viewer;
+        control.addEventListener("input", (e) => wsetEdit(def.key, e.target.value));
+      }
+      if (!def.readonly && !def.bool) control.setAttribute("aria-label", def.label);
+      const shownDefault = def.readonly ? null
+        : def.choices ? def.choices.find(([v]) => v === def.def)?.[1]
+          : def.bool ? (def.def === "true" ? "an" : "aus") : def.def;
+      list.appendChild(wsetRow(def.label, def.desc, shownDefault, control));
+    }
+  }
+
+  async function wsetLoad() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    wsetSetError("");
+    state.wset.edits = {};
+    $("#wset-save").disabled = true;
+    show($("#wset-restart-row"), false);
+    try {
+      const cfg = await api(`/api/instances/${id}/config`);
+      if (state.detailId !== id) return;
+      state.wset.props = cfg.properties || [];
+    } catch (e) {
+      state.wset.props = [];
+      wsetSetError(`Einstellungen nicht ladbar: ${e.message}`);
+    }
+    renderWsetGeneral();
+    const running = wsetRunning();
+    state.wset.rules = [];
+    show($("#wset-rules-off"), !running);
+    show($("#wset-clock"), false);
+    if (running) {
+      try {
+        const data = await api(`/api/instances/${id}/gamerules`);
+        if (state.detailId !== id) return;
+        state.wset.rules = data.gamerules || [];
+        setText($("#wset-time"), wsetClock(data.daytime));
+        show($("#wset-clock"), true);
+      } catch (e) {
+        show($("#wset-rules-off"), e.status === 409);
+        if (e.status !== 409) wsetSetError(`Spielregeln nicht ladbar: ${e.message}`);
+      }
+    }
+    renderWsetRules();
+  }
+
+  async function wsetSave() {
+    const btn = $("#wset-save");
+    btn.disabled = true;
+    wsetSetError("");
+    try {
+      const edits = { ...state.wset.edits };
+      const properties = state.wset.props.map((p) =>
+        ({ key: p.key, value: p.key in edits ? edits[p.key] : p.value }));
+      for (const [key, value] of Object.entries(edits)) {
+        if (!state.wset.props.some((p) => p.key === key)) properties.push({ key, value });
+      }
+      const data = await api(`/api/instances/${state.detailId}/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties }),
+      });
+      state.wset.props = properties;
+      state.wset.edits = {};
+      toast("Welt-Einstellungen gespeichert.", "success");
+      show($("#wset-restart-row"), !!data.restart_required);
+      if (state.cfgOpen) loadCfg();
+    } catch (e) {
+      btn.disabled = false;
+      wsetSetError(`Speichern fehlgeschlagen: ${e.message}`);
+    }
+  }
+
+  $("#wset-reload").addEventListener("click", wsetLoad);
+  $("#wset-save").addEventListener("click", wsetSave);
+  $("#wset-advanced").addEventListener("change", renderWsetGeneral);
+  $("#wset-restart").addEventListener("click", () => {
+    if (!state.detailId) return;
+    show($("#wset-restart-row"), false);
+    instAction({ id: state.detailId }, "restart");
+  });
+  document.querySelectorAll("[data-wset-time]").forEach((btn) =>
+    btn.addEventListener("click", () => wsetTimeWeather({ time: btn.dataset.wsetTime })));
+  document.querySelectorAll("[data-wset-weather]").forEach((btn) =>
+    btn.addEventListener("click", () => wsetTimeWeather({ weather: btn.dataset.wsetWeather })));
+
   /* ---------- Whitelist (whitelist.json) ---------- */
   function wlSetError(msg) {
     const box = $("#wl-error");
@@ -7354,6 +7666,7 @@
       ["#mp-update-check", "mods-packs"],   // Installiertes Modpack
       ["#pack-search-input", "mods-packs"], // Modpack installieren (Suche)
       ["#pack-upload-goto", "mods-packs"],  // Modpack hochladen (→ Upload-Tab)
+      ["#wset-reload", "welt"],           // Welt-Einstellungen
       ["#world-reload", "welt"],          // Welten
       ["#map-reload", "welt"],            // Live-Karte
       ["#icon-reload", "welt"],           // Server-Icon
@@ -7361,7 +7674,7 @@
       ["#fb-reload", "dateien"],          // Datei-Browser
       ["#rcon-reload", "spieler"],        // Spieler verwalten (RCON)
       ["#wl-reload-file", "spieler"],     // Whitelist
-      ["#gr-reload", "spieler"],          // Gamerules
+      ["#gr-reload", "welt"],             // Alle Gamerules
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
       ["#hib-save", "einstellungen"],     // Schlafmodus

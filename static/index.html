@@ -878,9 +878,62 @@
             <div id="console-error" class="err hidden"></div>
           </div>
 
+          <!-- Welt-Einstellungen (Spielregeln sofort, Allgemein beim Neustart) -->
+          <div class="upload-box wset-box">
+            <h3>Welt-Einstellungen
+              <button id="wset-reload" class="btn small-btn" title="Werte neu laden">Aktualisieren</button>
+            </h3>
+            <div class="wset-section">
+              <div class="wset-head">
+                <h4>Spielregeln</h4>
+                <span class="muted small">Sofort wirksam, kein Neustart nötig.</span>
+              </div>
+              <div id="wset-clock" class="wset-clock hidden">
+                <div class="wset-clock-now">
+                  <span class="muted small">Uhrzeit in der Welt</span>
+                  <strong id="wset-time">–</strong>
+                </div>
+                <div class="wset-clock-actions admin-only">
+                  <div class="seg" role="group" aria-label="Uhrzeit setzen">
+                    <button type="button" class="seg-btn" data-wset-time="morgen">Morgen</button>
+                    <button type="button" class="seg-btn" data-wset-time="mittag">Mittag</button>
+                    <button type="button" class="seg-btn" data-wset-time="abend">Abend</button>
+                    <button type="button" class="seg-btn" data-wset-time="nacht">Nacht</button>
+                  </div>
+                  <div class="seg" role="group" aria-label="Wetter setzen">
+                    <button type="button" class="seg-btn" data-wset-weather="klar">Klar</button>
+                    <button type="button" class="seg-btn" data-wset-weather="regen">Regen</button>
+                    <button type="button" class="seg-btn" data-wset-weather="gewitter">Gewitter</button>
+                  </div>
+                </div>
+              </div>
+              <div id="wset-rules" class="wset-list"></div>
+              <p id="wset-rules-off" class="muted small hidden">Server starten, um die Spielregeln
+                zu sehen und zu ändern.</p>
+            </div>
+            <div class="wset-section">
+              <div class="wset-head">
+                <h4>Allgemein</h4>
+                <span class="muted small">Wirksam beim nächsten (Neu-)Start.</span>
+                <label class="check wset-adv" for="wset-advanced">
+                  <input type="checkbox" id="wset-advanced"> Erweitert
+                </label>
+              </div>
+              <div id="wset-general" class="wset-list"></div>
+              <div class="row admin-only" style="margin-top: 0.6rem;">
+                <button id="wset-save" class="btn primary" disabled>Speichern</button>
+                <span id="wset-restart-row" class="row hidden">
+                  <span class="muted small">Neustart nötig, damit es wirkt.</span>
+                  <button id="wset-restart" class="btn">Jetzt neu starten</button>
+                </span>
+              </div>
+            </div>
+            <div id="wset-error" class="err hidden"></div>
+          </div>
+
           <!-- Gamerule-Quick-Editor (nur bei laufender Instanz) -->
           <div class="upload-box">
-            <h3>Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
+            <h3>Alle Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
               <button id="gr-reload" class="btn small-btn" title="Aktuelle Werte laden">Laden</button>
             </h3>
             <p class="muted small" id="gr-hint">Werte werden sofort per RCON gesetzt

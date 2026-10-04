@@ -420,6 +420,12 @@ class GameruleSetRequest(BaseModel):
     value: bool | int | str | None = None
 
 
+class TimeWeatherRequest(BaseModel):
+    """Uhrzeit/Wetter der Welt über feste Voreinstellungen setzen."""
+    time: str | None = Field(default=None, max_length=16)
+    weather: str | None = Field(default=None, max_length=16)
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
@@ -2464,6 +2470,13 @@ async def instance_gamerules_set(instance_id: str, req: GameruleSetRequest):
     instances.get_instance(instance_id)
     return await asyncio.to_thread(gamerules_mod.set_gamerule,
                                    instance_id, req.name, req.value)
+
+
+@api.post("/instances/{instance_id}/world/time-weather")
+async def instance_time_weather(instance_id: str, req: TimeWeatherRequest):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(gamerules_mod.set_time_weather,
+                                   instance_id, req.time, req.weather)
 
 
 # ---------------------------------------------------------------------------
