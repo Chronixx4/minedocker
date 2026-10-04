@@ -2943,10 +2943,6 @@
     show($("#mods-update-all"), false);
     show($("#mods-update-progress"), false);
     show($("#mods-update-error"), false);
-    // Upload-UI für die neue Instanz zurücksetzen
-    show($("#upload-error"), false);
-    $("#pack-upload-file").value = "";
-    $("#pack-upload-btn").disabled = true;
     // Welten/Karte zurücksetzen
     show($("#world-error"), false);
     $("#world-upload-file").value = "";
@@ -3844,82 +3840,27 @@
     });
   }
 
-  /* ---------- Modpack-Upload (.mrpack / CurseForge-.zip) ---------- */
-  async function uploadPackCore(instanceId, file, els) {
-    const { btn, errorBox, fileInput, poll, onSuccess } = els;
-    const fileName = file.name;
-    show(errorBox, false);
-    const problem = await packFileProblem(file);
-    if (problem) {
-      setText(errorBox, problem);
-      show(errorBox, true);
-      return;
-    }
-    btn.disabled = true;
-    btn.textContent = "Lade hoch…";
-    const send = (force) => {
-      const form = new FormData();
-      form.append("file", file);
-      if (force) form.append("force", "true");
-      return apiUpload(`/api/instances/${instanceId}/modpacks/upload`, form,
-        (pct) => { btn.textContent = `Lade hoch… ${pct} %`; });
-    };
-    try {
-      let job;
-      try {
-        job = await send(false);
-      } catch (e) {
-        if (e.status !== 409) throw e;
-        // Laufende Installation (kein force möglich) → Fehlermeldung durchreichen
-        if (/läuft bereits/i.test(e.message || "")) throw e;
-        if (!window.confirm(`${e.message}\n\nModpack ersetzen und neu installieren?`)) {
-          btn.textContent = "Installieren";
-          return;
-        }
-        job = await send(true);
-      }
-      const result = await poll(job);
-      const adapted = result?.summary?.version_adapted;
-      if (adapted?.to) {
-        toast(`Modpack "${fileName}" installiert — Server auf Minecraft `
-          + `${adapted.to.game_version} (${adapted.to.loader}) umgestellt.`, "success");
-      } else {
-        toast(`Modpack "${fileName}" installiert.`, "success");
-      }
-      fileInput.value = "";
-      btn.textContent = "Installieren";
-      if (onSuccess) onSuccess();
-    } catch (e) {
-      setText(errorBox, `Upload/Installation fehlgeschlagen: ${e.message}`);
-      show(errorBox, true);
-      btn.textContent = "Installieren";
-    } finally {
-      btn.disabled = !fileInput.files.length;
-    }
+  /* ---------- Modpack-Upload (eigener Tab: Ablegen → Vorschau → Installieren) ---------- */
+  // Andere Stellen (Server-Detail, Modpack-Tab) springen hierher und wählen
+  // das Ziel vor; der Upload läuft nur noch an dieser einen Stelle.
+  function openPackUpload(instanceId) {
+    state.upPresetTarget = instanceId || "";
+    activateTab("upload");
   }
+  $("#pack-upload-goto").addEventListener("click", () => openPackUpload(state.detailId));
 
-  $("#pack-upload-file").addEventListener("change", () => {
-    $("#pack-upload-btn").disabled = !$("#pack-upload-file").files.length;
-    show($("#upload-error"), false);
-  });
-  $("#pack-upload-btn").addEventListener("click", () => {
-    const file = $("#pack-upload-file").files[0];
-    if (file && state.detailId) {
-      uploadPackCore(state.detailId, file, {
-        btn: $("#pack-upload-btn"),
-        errorBox: $("#upload-error"),
-        fileInput: $("#pack-upload-file"),
-        poll: pollPackJob,
-        onSuccess: loadDetail,
-      });
-    }
-  });
-
-  /* ---------- Eigener Modpack-Upload-Tab ---------- */
   const upEls = {
+    drop: $("#up-drop"),
     file: $("#up-file"),
     btn: $("#up-install-btn"),
-    info: $("#up-file-info"),
+    reset: $("#up-reset-btn"),
+    analyze: { box: $("#up-analyze"), bar: $("#up-analyze-bar"),
+               phase: $("#up-analyze-phase"), pct: $("#up-analyze-pct") },
+    preview: $("#up-preview"),
+    pvTitle: $("#up-pv-title"),
+    pvFacts: $("#up-pv-facts"),
+    pvWarnings: $("#up-pv-warnings"),
+    pvErrors: $("#up-pv-errors"),
     target: $("#up-target-select"),
     existingOpts: $("#up-existing-opts"),
     newOpts: $("#up-new-opts"),
@@ -3927,6 +3868,7 @@
     force: $("#up-force"),
     name: $("#up-name"),
     memory: $("#up-memory"),
+    memoryHint: $("#up-memory-hint"),
     eula: $("#up-eula"),
     progress: { box: $("#up-progress"), bar: $("#up-bar"),
                 phase: $("#up-phase"), pct: $("#up-pct") },
@@ -3937,6 +3879,16 @@
     failedBox: $("#up-failed-box"),
     failedText: $("#up-failed-text"),
     failedList: $("#up-failed-list"),
+    retry: $("#up-retry-btn"),
+  };
+  state.upAnalysis = null;   // Antwort von /api/modpacks/analyze (mit token)
+  state.upBusy = false;
+  state.upRetryInstance = null;
+
+  const PACK_FORMATS = {
+    serverpack: "CurseForge „Server Files“",
+    curseforge: "CurseForge-Export (manifest.json)",
+    modrinth: "Modrinth (.mrpack)",
   };
 
   async function loadUploadTargets() {
@@ -3945,11 +3897,10 @@
       const options = data.instances.map((i) => ({
         value: i.id, label: `${i.name} (${i.loader} ${i.game_version})`,
       }));
-      const current = upEls.target.value;
+      const current = state.upPresetTarget ?? upEls.target.value;
+      state.upPresetTarget = undefined;
       fillSelect(upEls.target, options, "Neuen Server aus dem Pack erstellen");
-      if (current && options.some((o) => o.value === current)) {
-        upEls.target.value = current;
-      }
+      upEls.target.value = options.some((o) => o.value === current) ? current : "";
     } catch (e) {
       fillSelect(upEls.target, [], "Instanzen nicht abrufbar — neuer Server");
     }
@@ -3963,22 +3914,118 @@
   }
   upEls.target.addEventListener("change", syncUploadMode);
 
-  upEls.file.addEventListener("change", async () => {
-    const file = upEls.file.files[0];
+  function resetUpload() {
+    state.upAnalysis = null;
+    upEls.file.value = "";
+    show(upEls.preview, false);
+    show(upEls.analyze.box, false);
+    show(upEls.drop, true);
+    upEls.btn.disabled = true;
+  }
+  upEls.reset.addEventListener("click", () => {
+    resetUpload();
     show(upEls.error, false);
     show(upEls.summary, false);
-    show(upEls.info, false);
-    upEls.btn.disabled = !file;
-    if (!file) return;
+  });
+
+  function showPreview(a) {
+    setText(upEls.pvTitle, a.version ? `${a.title} ${a.version}` : a.title);
+    const facts = [
+      ["Datei", `${a.filename} · ${fmtBytes(a.size)}`],
+      ["Typ", PACK_FORMATS[a.format] || a.format],
+      ["Minecraft", a.game_version || "nicht erkannt"],
+      ["Loader", a.loader
+        ? `${a.loader}${a.loader_version ? ` ${a.loader_version}` : ""}` : "nicht erkannt"],
+      ["Java", a.java ? `Java ${a.java} (automatisch)` : "–"],
+      ["Mods", String(a.mods)],
+      ["Empfohlener RAM", a.recommended_memory || `Standard (${a.default_memory})`],
+    ];
+    if (a.detected_by) facts.push(["Erkannt über", a.detected_by]);
+    upEls.pvFacts.textContent = "";
+    for (const [k, v] of facts) {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v; // textContent schützt vor XSS (Werte aus dem Archiv)
+      upEls.pvFacts.append(dt, dd);
+    }
+    upEls.pvWarnings.textContent = "";
+    for (const w of a.warnings || []) {
+      const li = document.createElement("li");
+      li.textContent = w;
+      upEls.pvWarnings.appendChild(li);
+    }
+    show(upEls.pvWarnings, (a.warnings || []).length > 0);
+    setText(upEls.pvErrors, (a.errors || []).join(" "));
+    show(upEls.pvErrors, (a.errors || []).length > 0);
+    upEls.name.placeholder = a.title || "wird aus dem Pack abgeleitet";
+    setText(upEls.memory.options[0], `Standard (${a.default_memory})`);
+    upEls.memory.value = a.recommended_memory || "";
+    if (a.recommended_memory) {
+      setText(upEls.memoryHint,
+        `Vorgeschlagen für ${a.mods} Mods: ${a.recommended_memory} — bei Bedarf ändern.`);
+    }
+    upEls.btn.disabled = (a.errors || []).length > 0;
+    show(upEls.drop, false);
+    show(upEls.preview, true);
+  }
+
+  async function analyzePackFile(file) {
+    if (state.upBusy) return;
+    show(upEls.error, false);
+    show(upEls.summary, false);
+    show(upEls.preview, false);
     const problem = await packFileProblem(file);
     if (problem) {
       setText(upEls.error, problem);
       show(upEls.error, true);
-      upEls.btn.disabled = true;
+      upEls.file.value = "";
       return;
     }
-    setText(upEls.info, `Datei: ${file.name} · ${fmtBytes(file.size)} · Format wird beim Installieren aus dem Archiv gelesen`);
-    show(upEls.info, true);
+    const { box, bar, phase, pct } = upEls.analyze;
+    state.upBusy = true;
+    show(box, true);
+    bar.style.width = "0%";
+    setText(phase, `Lade ${file.name} hoch…`);
+    setText(pct, "");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const data = await apiUpload("/api/modpacks/analyze", form, (p) => {
+        bar.style.width = p + "%";
+        setText(pct, `${p} %`);
+        if (p >= 100) setText(phase, "Pack wird analysiert…");
+      });
+      state.upAnalysis = data;
+      showPreview(data);
+    } catch (e) {
+      setText(upEls.error, `Pack konnte nicht gelesen werden: ${e.message}`);
+      show(upEls.error, true);
+      resetUpload();
+    } finally {
+      state.upBusy = false;
+      show(box, false);
+    }
+  }
+
+  upEls.file.addEventListener("change", () => {
+    const file = upEls.file.files[0];
+    if (file) analyzePackFile(file);
+  });
+  // Drag & Drop auf die Ablagefläche
+  for (const ev of ["dragenter", "dragover"]) {
+    upEls.drop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      upEls.drop.classList.add("dragover");
+    });
+  }
+  for (const ev of ["dragleave", "drop"]) {
+    upEls.drop.addEventListener(ev, () => upEls.drop.classList.remove("dragover"));
+  }
+  upEls.drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0];
+    if (file) analyzePackFile(file);
   });
 
   // Job-Polling mit Ergebnis-/Fehlerdetails (failed-Liste, Summary)
@@ -4014,7 +4061,7 @@
     });
   }
 
-  function showUploadSummary(text, skipped, failed) {
+  function showUploadSummary(text, skipped, failed, retryInstance = null) {
     setText(upEls.summaryText, text);
     const skippedLines = (skipped || []).slice(0, 10);
     if (skippedLines.length) {
@@ -4026,6 +4073,7 @@
     } else {
       show(upEls.skippedList, false);
     }
+    state.upRetryInstance = retryInstance;
     if (failed && failed.length) {
       upEls.failedList.textContent = "";
       for (const line of failed.slice(0, 10)) {
@@ -4038,17 +4086,31 @@
         li.textContent = `… +${failed.length - 10} weitere`;
         upEls.failedList.appendChild(li);
       }
-      setText(upEls.failedText, "Nicht installiert:");
+      setText(upEls.failedText, retryInstance
+        ? `${failed.length} Mod(s) konnten nicht geladen werden — der Rest ist installiert:`
+        : "Nicht installiert:");
       show(upEls.failedBox, true);
     } else {
       show(upEls.failedBox, false);
     }
+    show(upEls.retry, !!retryInstance);
     show(upEls.summary, true);
   }
 
+  async function runUploadJob(job, label, instanceId) {
+    const result = await pollUploadJob(job, upEls.progress);
+    const summary = result?.summary || {};
+    const failed = summary.failed || [];
+    showUploadSummary(
+      `${label} · ${summary.files ?? "?"} Dateien installiert` +
+        (failed.length ? `, ${failed.length} fehlen.` : "."),
+      summary.skipped || [], failed, failed.length ? instanceId : null);
+    return result;
+  }
+
   upEls.btn.addEventListener("click", async () => {
-    const file = upEls.file.files[0];
-    if (!file) return;
+    const a = state.upAnalysis;
+    if (!a || state.upBusy) return;
     show(upEls.error, false);
     show(upEls.summary, false);
     const instanceId = upEls.target.value;
@@ -4057,66 +4119,91 @@
       show(upEls.error, true);
       return;
     }
+    state.upBusy = true;
     upEls.btn.disabled = true;
-    upEls.btn.textContent = "Lade hoch…";
+    upEls.btn.textContent = "Starte…";
     const sendExisting = (force) => {
       const form = new FormData();
-      form.append("file", file);
+      form.append("staged", a.token);
       if (force) form.append("force", "true");
       if (!upEls.autoVersion.checked) form.append("auto_version", "false");
-      return apiUpload(`/api/instances/${instanceId}/modpacks/upload`, form,
-        (pct) => { upEls.btn.textContent = `Lade hoch… ${pct} %`; });
+      return apiUpload(`/api/instances/${instanceId}/modpacks/upload`, form);
     };
     try {
       let job;
+      let label;
+      let targetId = instanceId;
       if (instanceId) {
         try {
           job = await sendExisting(upEls.force.checked);
         } catch (e) {
           if (e.status !== 409) throw e;
           if (/läuft bereits/i.test(e.message || "")) throw e;
-          if (!window.confirm(`${e.message}\n\nModpack ersetzen und neu installieren?`)) {
-            upEls.btn.textContent = "Installieren";
-            return;
-          }
+          const ok = await confirmDialog({
+            title: "Modpack ersetzen?", message: e.message,
+            ok: "Ersetzen & neu installieren", danger: true });
+          if (!ok) return;
           job = await sendExisting(true);
         }
+        label = `Instanz aktualisiert mit „${a.title}“`;
       } else {
         const form = new FormData();
-        form.append("file", file);
+        form.append("staged", a.token);
         const name = upEls.name.value.trim();
         if (name) form.append("name", name);
         const memory = upEls.memory.value;
         if (memory) form.append("memory", memory);
         form.append("accept_eula", "true");
-        job = await apiUpload("/api/instances/from-pack-upload", form,
-          (pct) => { upEls.btn.textContent = `Lade hoch… ${pct} %`; });
+        const created = await apiUpload("/api/instances/from-pack-upload", form);
+        job = { job_id: created.job.id };
+        targetId = created.instance.id;
+        label = `Neuer Server „${created.instance.name}“ (Port ${created.instance.port}, `
+          + `${created.instance.memory || a.default_memory} RAM)`;
       }
-      const created = job.instance || null;
-      if (created) job = { job_id: job.job.id }; // from-pack-upload: {instance, job}
-      const result = await pollUploadJob(job, upEls.progress);
-      const summary = result?.summary || {};
-      const targetLabel = created
-        ? `Neuer Server "${created.name}" (Port ${created.port})`
-        : `Instanz aktualisiert`;
-      showUploadSummary(
-        `${targetLabel} · Modpack "${result?.filename || file.name}" installiert — ${summary.files ?? "?"} Dateien.`,
-        summary.skipped || [], []);
-      toast(`Modpack "${file.name}" installiert.`, "success");
-      upEls.file.value = "";
-      show(upEls.info, false);
+      resetUpload();
+      show(upEls.drop, false);
+      await runUploadJob(job, label, targetId);
+      toast(`Modpack „${a.title}“ installiert.`, "success");
     } catch (e) {
-      setText(upEls.error, `Upload/Installation fehlgeschlagen: ${e.message}`);
+      setText(upEls.error, `Installation fehlgeschlagen: ${e.message}`);
       show(upEls.error, true);
-      // Teilfortschritt + fehlgeschlagene Dateien zeigen
       const skipped = e.summary?.skipped || [];
-      showUploadSummary(
-        `Fehlgeschlagen — installiert: ${e.summary?.files ?? 0} Dateien` +
-        (skipped.length ? ` · übersprungen: ${skipped.length}` : "") + ".",
-        skipped, e.failed || []);
+      if (e.failed?.length || skipped.length) {
+        showUploadSummary(
+          `Fehlgeschlagen — installiert: ${e.summary?.files ?? 0} Dateien` +
+          (skipped.length ? ` · übersprungen: ${skipped.length}` : "") + ".",
+          skipped, e.failed || []);
+      }
+      // Hochgeladene Datei ist nach einem Fehler weg → neu ablegen
+      if (e.status === 404) resetUpload();
     } finally {
-      upEls.btn.disabled = !upEls.file.files.length;
+      state.upBusy = false;
       upEls.btn.textContent = "Installieren";
+      upEls.btn.disabled = !state.upAnalysis || (state.upAnalysis.errors || []).length > 0;
+      if (!state.upAnalysis) show(upEls.drop, true);
+    }
+  });
+
+  upEls.retry.addEventListener("click", async () => {
+    const instanceId = state.upRetryInstance;
+    if (!instanceId || state.upBusy) return;
+    state.upBusy = true;
+    upEls.retry.disabled = true;
+    show(upEls.error, false);
+    try {
+      const job = await api(`/api/instances/${instanceId}/modpacks/retry-failed`,
+        { method: "POST" });
+      show(upEls.summary, false);
+      const result = await runUploadJob(job, "Erneuter Versuch", instanceId);
+      if (!(result?.summary?.failed || []).length) {
+        toast("Alle fehlenden Mods nachgeladen.", "success");
+      }
+    } catch (e) {
+      setText(upEls.error, `Erneuter Versuch fehlgeschlagen: ${e.message}`);
+      show(upEls.error, true);
+    } finally {
+      state.upBusy = false;
+      upEls.retry.disabled = false;
     }
   });
 
@@ -4262,7 +4349,7 @@
   }
 
   function openMpCreate(cfg) {
-    // cfg: {mode: "pack", hit} oder {mode: "upload", file}
+    // cfg: {mode: "pack", hit} (Uploads laufen über den Upload-Tab)
     activateTab("modpacks");
     state.mpCreate = cfg;
     show($("#mp-create-error"), false);
@@ -4272,22 +4359,16 @@
     const vSel = $("#mp-create-version");
     fillSelect(vSel, [], "Neueste (Standard)");
     vSel.disabled = true;
-    if (cfg.mode === "upload") {
-      setText($("#mp-create-title"), "Server aus hochgeladenem Modpack erstellen");
-      setText($("#mp-create-name"), cfg.file.name.replace(/\.(mrpack|zip)$/i, ""));
-      setText(info, `Datei: ${cfg.file.name} · Loader/MC-Version werden aus dem Archiv gelesen`);
-    } else {
-      const hit = cfg.hit;
-      setText($("#mp-create-title"), "Server aus Modpack erstellen");
-      setText($("#mp-create-name"), hit.title || hit.slug || "");
-      const parts = [];
-      if (hit.loaders?.length) parts.push(`Loader: ${hit.loaders.join(", ")}`);
-      if (hit.versions?.length) parts.push(`MC: ${hit.versions.slice(-3).join(", ")}`);
-      setText(info, `Modpack: "${hit.title || hit.slug}"` +
-        (parts.length ? ` · ${parts.join(" · ")}` : "") +
-        " · Version und Loader werden automatisch aus dem Modpack übernommen");
-      loadMpVersions(hit);
-    }
+    const hit = cfg.hit;
+    setText($("#mp-create-title"), "Server aus Modpack erstellen");
+    setText($("#mp-create-name"), hit.title || hit.slug || "");
+    const parts = [];
+    if (hit.loaders?.length) parts.push(`Loader: ${hit.loaders.join(", ")}`);
+    if (hit.versions?.length) parts.push(`MC: ${hit.versions.slice(-3).join(", ")}`);
+    setText(info, `Modpack: "${hit.title || hit.slug}"` +
+      (parts.length ? ` · ${parts.join(" · ")}` : "") +
+      " · Version und Loader werden automatisch aus dem Modpack übernommen");
+    loadMpVersions(hit);
     $("#mp-create").scrollIntoView({ behavior: "smooth", block: "nearest" });
     $("#mp-create-name").focus();
   }
@@ -4316,14 +4397,6 @@
       show(msgBox, true);
       return;
     }
-    if (cfg.mode === "upload") {
-      const problem = await packFileProblem(cfg.file);
-      if (problem) {
-        setText(msgBox, problem);
-        show(msgBox, true);
-        return;
-      }
-    }
     const name = $("#mp-create-name").value.trim() || null;
     const memory = $("#mp-create-memory").value || null;
     btn.disabled = true;
@@ -4331,39 +4404,25 @@
     let created = null;
     let jobId = null;
     try {
-      if (cfg.mode === "upload") {
-        const form = new FormData();
-        form.append("file", cfg.file);
-        if (name) form.append("name", name);
-        if (memory) form.append("memory", memory);
-        form.append("accept_eula", "true");
-        const result = await apiUpload("/api/instances/from-pack-upload", form,
-          (pct) => { btn.textContent = `Lade hoch… ${pct} %`; });
-        created = result.instance;
-        jobId = result.job.id;
-        $("#mp-upload-file").value = "";
-        $("#mp-upload-btn").disabled = true;
-      } else {
-        const body = {
-          project_id: cfg.hit.project_id,
-          source: cfg.hit._source || state.mpSource,
-          memory,
-          accept_eula: true,
-        };
-        const chosen = $("#mp-create-version").value;
-        if (chosen) {
-          if (body.source === "curseforge") body.file_id = chosen;
-          else body.version_id = chosen;
-        }
-        if (name) body.name = name;
-        const result = await api("/api/instances/from-pack", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        created = result.instance;
-        jobId = result.job.id;
+      const body = {
+        project_id: cfg.hit.project_id,
+        source: cfg.hit._source || state.mpSource,
+        memory,
+        accept_eula: true,
+      };
+      const chosen = $("#mp-create-version").value;
+      if (chosen) {
+        if (body.source === "curseforge") body.file_id = chosen;
+        else body.version_id = chosen;
       }
+      if (name) body.name = name;
+      const result = await api("/api/instances/from-pack", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      created = result.instance;
+      jobId = result.job.id;
       toast(`Server "${created.name}" erstellt (Port ${created.port}) — Installation läuft.`, "success");
       closeMpCreate();
       await pollProgress({ job_id: jobId }, progressEls);
@@ -4386,31 +4445,8 @@
     }
   });
 
-  $("#mp-upload-file").addEventListener("change", () => {
-    $("#mp-upload-btn").disabled = !$("#mp-upload-file").files.length;
-    show($("#mp-upload-error"), false);
-  });
-  $("#mp-upload-btn").addEventListener("click", () => {
-    const file = $("#mp-upload-file").files[0];
-    if (!file) return;
-    const target = mpTarget();
-    if (target) {
-      uploadPackCore(target.instanceId, file, {
-        btn: $("#mp-upload-btn"),
-        errorBox: $("#mp-upload-error"),
-        fileInput: $("#mp-upload-file"),
-        poll: (job) => pollProgress(job, {
-          box: $("#mp-progress"),
-          bar: $("#mp-bar"),
-          phase: $("#mp-phase"),
-          pct: $("#mp-pct"),
-        }),
-        onSuccess: () => mpSearch(state.mpOffset),
-      });
-    } else {
-      // Keine Instanz vorhanden: direkt einen Server aus der Datei erstellen
-      openMpCreate({ mode: "upload", file });
-    }
+  $("#mp-upload-goto").addEventListener("click", () => {
+    openPackUpload(mpTarget()?.instanceId || "");
   });
   /* ---------- Backups je Instanz ---------- */
   async function loadBackups() {
@@ -6528,7 +6564,7 @@
     const mapping = [
       ["#mp-update-check", "mods-packs"],   // Installiertes Modpack
       ["#pack-search-input", "mods-packs"], // Modpack installieren (Suche)
-      ["#pack-upload-file", "mods-packs"],  // Modpack hochladen
+      ["#pack-upload-goto", "mods-packs"],  // Modpack hochladen (→ Upload-Tab)
       ["#world-reload", "welt"],          // Welten
       ["#map-reload", "welt"],            // Live-Karte
       ["#icon-reload", "welt"],           // Server-Icon

@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -1128,36 +1129,54 @@ async def instance_from_pack(req: CreateFromPackRequest):
     return {"instance": result["instance"], "job": result["job"]}
 
 
+async def _save_pack_upload(file: UploadFile, dest: Path) -> None:
+    """Modpack-Upload streamend speichern (4 GiB-Deckel); räumt bei Fehler auf."""
+    try:
+        await _stream_upload(file, dest, packs._MAX_PACK_BYTES)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
+
+
+@api.post("/modpacks/analyze")
+async def modpack_analyze(file: UploadFile = File(...)):
+    """Vorschau: Lädt ein Pack-Archiv hoch und liest, was erkannt wird
+    (Format, Minecraft/Loader, Java, Mods, RAM-Empfehlung, Warnungen).
+    Die Datei bleibt unter 'token' liegen, damit die Installation sie ohne
+    zweiten Upload verwenden kann (Feld 'staged')."""
+    filename = instances.validate_pack_filename(file.filename or "")
+    token, archive = packs.preview_path(filename)
+    await _save_pack_upload(file, archive)
+    try:
+        result = await asyncio.to_thread(packs.analyze_archive, archive, filename)
+    except Exception:
+        archive.unlink(missing_ok=True)
+        raise
+    return {"token": token, **result}
+
+
 @api.post("/instances/from-pack-upload", status_code=201)
 async def instance_from_pack_upload(name: str = Form(""),
                                     memory: str = Form(""),
                                     port: int | None = Form(None),
                                     accept_eula: bool = Form(False),
-                                    file: UploadFile = File(...)):
-    """Erstellt aus einem hochgeladenen Modpack-Archiv (.mrpack/.zip) direkt
-    eine neue Server-Instanz: Loader/MC-Version werden aus dem Index gelesen."""
-    filename = instances.validate_pack_filename(file.filename or "")
-    archive = None
-    try:
+                                    staged: str = Form(""),
+                                    file: UploadFile | None = File(None)):
+    """Erstellt aus einem hochgeladenen Modpack-Archiv (.mrpack/.zip/Server
+    Files) direkt eine neue Server-Instanz: Loader/MC-Version werden aus dem
+    Archiv gelesen. Statt 'file' kann 'staged' (Token aus /modpacks/analyze)
+    übergeben werden."""
+    if staged:
+        archive, filename = packs.staged_preview(staged)
+    elif file is not None:
+        filename = instances.validate_pack_filename(file.filename or "")
         archive = packs.staging_dir() / f"upload_{uuid.uuid4().hex[:8]}_{filename}"
-        written = 0
-        with open(archive, "wb") as fh:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > packs._MAX_PACK_BYTES:
-                    raise HTTPException(status_code=413,
-                                        detail="Modpack zu groß (max 4 GiB)")
-                fh.write(chunk)
-    except HTTPException:
-        if archive is not None:
-            archive.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        if archive is not None:
-            archive.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
-    finally:
-        await file.close()
+        await _save_pack_upload(file, archive)
+    else:
+        raise HTTPException(status_code=400, detail="Keine Modpack-Datei angegeben")
     try:
         result = await packs.create_server_from_upload(
             archive, filename, name=(name or "").strip() or None,
@@ -2292,10 +2311,20 @@ async def instance_pack_update(instance_id: str, req: PackUpdateRequest):
             "total": job["total"], "phase": job["phase"]}
 
 
+@api.post("/instances/{instance_id}/modpacks/retry-failed")
+async def instance_pack_retry_failed(instance_id: str):
+    """Lädt nur die Dateien nach, die bei der letzten Pack-Installation
+    fehlgeschlagen sind."""
+    job = await packs.retry_failed(instance_id)
+    return {"job_id": job["id"], "filename": job["filename"],
+            "total": job["total"], "phase": job["phase"]}
+
+
 @api.post("/instances/{instance_id}/modpacks/upload")
 async def instance_pack_upload(instance_id: str, force: bool = Form(False),
                                auto_version: bool = Form(True),
-                               file: UploadFile = File(...)):
+                               staged: str = Form(""),
+                               file: UploadFile | None = File(None)):
     """Installiert ein hochgeladenes Modpack-Archiv (.mrpack oder CurseForge-.zip).
 
     Das Archiv wird streamend in packs/ der Instanz geschrieben (Größenlimit
@@ -2306,32 +2335,28 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
     (nur bei gestoppter Instanz, sonst Fehler im Job).
     """
     instances.get_instance(instance_id)
-    filename = instances.validate_pack_filename(file.filename or "")
+    staged_path = None
+    if staged:
+        staged_path, filename = packs.staged_preview(staged)
+    elif file is not None:
+        filename = instances.validate_pack_filename(file.filename or "")
+    else:
+        raise HTTPException(status_code=400, detail="Keine Modpack-Datei angegeben")
     pack_dir = instances.pack_dir(instance_id)
     try:
         pack_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"packs-Ordner nicht schreibbar: {exc}")
     dest = pack_dir / filename
-    try:
+    if staged_path is not None:
+        try:
+            shutil.move(str(staged_path), str(dest))
+        except OSError as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Upload nicht übernehmbar: {exc}") from exc
+    elif file is not None:
         # Streamend schreiben, damit große Archive den Speicher nicht füllen
-        max_bytes = 4 * 1024 * 1024 * 1024  # harte Grenze, wie packs._MAX_PACK_BYTES
-        written = 0
-        with open(dest, "wb") as fh:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > max_bytes:
-                    raise HTTPException(status_code=413,
-                                        detail="Modpack zu groß (max 4 GiB)")
-                fh.write(chunk)
-    except HTTPException:
-        dest.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
-    finally:
-        await file.close()
+        await _save_pack_upload(file, dest)
 
     try:
         job = await packs.install_upload(instance_id, dest, filename,

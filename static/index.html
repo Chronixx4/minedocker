@@ -499,12 +499,8 @@
           </div>
           <div class="upload-box">
             <h3>Fertiges Modpack hochladen</h3>
-            <div class="upload-row">
-              <input id="pack-upload-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
-              <button id="pack-upload-btn" class="btn primary admin-only" disabled>Installieren</button>
-            </div>
-            <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Benötigte MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt (Server muss dafür gestoppt sein)</p>
-            <div id="upload-error" class="err hidden"></div>
+            <p class="muted small">CurseForge-Zip (Client-Export oder „Server Files“) oder .mrpack — Minecraft-Version, Loader und RAM werden automatisch erkannt.</p>
+            <button id="pack-upload-goto" type="button" class="btn primary admin-only">Modpack für diesen Server hochladen</button>
           </div>
           <div class="upload-box">
             <h3>Backups</h3>
@@ -1059,12 +1055,8 @@
       <div id="mp-results" class="results"></div>
       <div class="upload-box">
         <h3>Fertiges Modpack hochladen</h3>
-        <div class="upload-row">
-          <input id="mp-upload-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
-          <button id="mp-upload-btn" class="btn primary admin-only" disabled>Installieren</button>
-        </div>
-          <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Mit Ziel-Instanz: MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt · Ohne Ziel: neuer Server direkt aus dem Pack</p>
-          <div id="mp-upload-error" class="err hidden"></div>
+        <p class="muted small">CurseForge-Zip (Client-Export oder „Server Files“) oder .mrpack — Minecraft-Version, Loader und RAM werden automatisch erkannt.</p>
+        <button id="mp-upload-goto" type="button" class="btn primary admin-only">Zum Modpack-Upload</button>
       </div>
     </div>
   </section>
@@ -1074,59 +1066,72 @@
     <div class="card">
       <h2>Modpack hochladen</h2>
       <p class="muted small">
-        Unterstützt: <strong>.mrpack</strong> (Modrinth-Export) und
-        <strong>.zip</strong> (CurseForge-Export mit <code>manifest.json</code> —
-        auch Server-Pack-Zips). CurseForge-Mods werden ohne API-Key über den
-        öffentlichen Website-Redirect nachgeladen; bekannte Client-only-Mods
-        (Sodium/Iris/Dark Mode Everywhere/…) werden automatisch übersprungen.
-        Details: SERVER-SETUP.md §2.
+        Einfach die Zip von CurseForge ablegen — am besten die <strong>„Server Files“</strong>
+        des Packs (CurseForge-Projektseite › Files › Additional Files), sonst den normalen
+        Client-Export (mit <code>manifest.json</code>) — oder eine <strong>.mrpack</strong> von
+        Modrinth. Minecraft-Version, Loader, Java und RAM werden automatisch erkannt;
+        vor der Installation siehst du, was erkannt wurde. Details: SERVER-SETUP.md §2.
       </p>
-      <div class="upload-row">
-        <input id="up-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
-        <button id="up-install-btn" class="btn primary admin-only" disabled>Installieren</button>
+      <label id="up-drop" class="dropzone admin-only" for="up-file">
+        <input id="up-file" class="file-input" type="file" accept=".mrpack,.zip">
+        <span class="dropzone-title">Modpack hierher ziehen</span>
+        <span class="muted small">oder klicken zum Auswählen · .zip oder .mrpack, max. 4 GiB</span>
+      </label>
+      <div id="up-analyze" class="hidden">
+        <div class="metric-head"><span id="up-analyze-phase" class="muted small"></span><span id="up-analyze-pct" class="muted small"></span></div>
+        <div class="bar"><div id="up-analyze-bar" class="bar-fill" style="width:0%"></div></div>
       </div>
-      <p id="up-file-info" class="muted small hidden"></p>
-      <div class="form-grid">
-        <label>Installationsziel
-          <select id="up-target-select">
-            <option value="">Neuen Server aus dem Pack erstellen</option>
-          </select>
-          <span class="muted small">Instanz wählen = Modpack in dieser Instanz ersetzen/aktualisieren · leer = neuer Server direkt aus dem Pack</span>
-        </label>
-        <div id="up-existing-opts">
-          <label class="check">
-            <input type="checkbox" id="up-auto-version" checked>
-            MC-Version/Loader automatisch anpassen (sonst Abbruch bei Abweichung)
-          </label>
-          <label class="check">
-            <input type="checkbox" id="up-force">
-            Bestehendes Modpack ohne Nachfrage überschreiben
-          </label>
-        </div>
-        <div id="up-new-opts" class="hidden">
-          <label>Servername
-            <input id="up-name" type="text" maxlength="64" autocomplete="off"
-                   placeholder="wird aus dem Dateinamen abgeleitet">
-          </label>
-          <label>RAM
-            <select id="up-memory">
-              <option value="">Standard (2G)</option>
-              <option value="1G">1G</option>
-              <option value="2G">2G</option>
-              <option value="4G">4G</option>
-              <option value="6G">6G</option>
-              <option value="8G">8G</option>
-              <option value="12G">12G</option>
-              <option value="16G">16G</option>
+      <div id="up-preview" class="pack-preview hidden">
+        <h3 id="up-pv-title"></h3>
+        <dl id="up-pv-facts" class="kv"></dl>
+        <ul id="up-pv-warnings" class="pv-warnings small hidden"></ul>
+        <div id="up-pv-errors" class="err hidden"></div>
+        <div class="form-grid">
+          <label>Installationsziel
+            <select id="up-target-select">
+              <option value="">Neuen Server aus dem Pack erstellen</option>
             </select>
-            <span class="muted small">Richtwerte: leichte Modpacks 4–6G · mittlere 6–10G ·
-              schwere (ATM, GT:NH) 10–16G+
-            </span>
+            <span class="muted small">Instanz wählen = Modpack in dieser Instanz ersetzen/aktualisieren · leer = neuer Server direkt aus dem Pack</span>
           </label>
-          <label class="check">
-            <input type="checkbox" id="up-eula">
-            Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
-          </label>
+          <div id="up-existing-opts">
+            <label class="check">
+              <input type="checkbox" id="up-auto-version" checked>
+              MC-Version/Loader automatisch anpassen (sonst Abbruch bei Abweichung)
+            </label>
+            <label class="check">
+              <input type="checkbox" id="up-force">
+              Bestehendes Modpack ohne Nachfrage überschreiben
+            </label>
+          </div>
+          <div id="up-new-opts" class="hidden">
+            <label>Servername
+              <input id="up-name" type="text" maxlength="64" autocomplete="off"
+                     placeholder="wird aus dem Pack abgeleitet">
+            </label>
+            <label>RAM
+              <select id="up-memory">
+                <option value="">Standard</option>
+                <option value="1G">1G</option>
+                <option value="2G">2G</option>
+                <option value="4G">4G</option>
+                <option value="6G">6G</option>
+                <option value="8G">8G</option>
+                <option value="12G">12G</option>
+                <option value="16G">16G</option>
+              </select>
+              <span id="up-memory-hint" class="muted small">Richtwerte: leichte Modpacks 4–6G · mittlere 6–10G ·
+                schwere (ATM, GT:NH) 10–16G+
+              </span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="up-eula">
+              Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
+            </label>
+          </div>
+        </div>
+        <div class="upload-row">
+          <button id="up-install-btn" class="btn primary admin-only" disabled>Installieren</button>
+          <button id="up-reset-btn" type="button" class="btn">Andere Datei</button>
         </div>
       </div>
       <div id="up-progress" class="hidden">
@@ -1141,6 +1146,7 @@
         <div id="up-failed-box" class="err hidden">
           <p id="up-failed-text" class="small"></p>
           <ul id="up-failed-list" class="small"></ul>
+          <button id="up-retry-btn" type="button" class="btn admin-only hidden">Nur fehlende Mods erneut laden</button>
         </div>
       </div>
     </div>

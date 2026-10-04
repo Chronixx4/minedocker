@@ -15,10 +15,13 @@ Fehlerfälle (landen alle im Job als status="error"):
 """
 import asyncio
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
+import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -238,7 +241,7 @@ async def _resolve_pack_version(client: httpx.AsyncClient, instance: dict,
 def _check_compatibility(instance: dict, pack: dict) -> dict:
     """Prüft MC-Version und Loader-Abhängigkeit (normalisiertes Index-Format);
     gibt die Loader-Abhängigkeit zurück."""
-    if not isinstance(pack, dict) or not pack.get("files"):
+    if not isinstance(pack, dict) or not (pack.get("files") or pack.get("server_pack")):
         raise HTTPException(status_code=400, detail="Modpack-Index ist leer oder beschädigt")
     pack_game_version = pack.get("game_version")
     if not pack_game_version:
@@ -368,10 +371,19 @@ def _extract_index(pack_path: Path) -> tuple:
             if "manifest.json" in names:
                 with archive.open("manifest.json") as fh:
                     return "curseforge", json.loads(fh.read().decode("utf-8"))
+            server_pack = _detect_server_pack(archive)
+            if server_pack is not None:
+                return "serverpack", server_pack
+            if any(n.lower().endswith((".zip", ".mrpack")) for n in names):
+                raise HTTPException(
+                    status_code=400,
+                    detail=("Im Archiv steckt ein weiteres Archiv — bitte die "
+                            "innere .zip/.mrpack direkt hochladen"))
             raise HTTPException(
                 status_code=400,
-                detail=("Kein bekanntes Modpack-Format gefunden "
-                        "(modrinth.index.json oder manifest.json fehlen)"))
+                detail=("Kein Modpack erkannt: weder manifest.json "
+                        "(CurseForge-Export), modrinth.index.json (Modrinth) "
+                        "noch ein mods/-Ordner (Server Files) gefunden"))
     except (zipfile.BadZipFile, ValueError) as exc:
         raise HTTPException(status_code=400,
                             detail=f"Modpack-Archiv beschädigt: {exc}") from exc
@@ -380,12 +392,315 @@ def _extract_index(pack_path: Path) -> tuple:
                             detail=f"Modpack nicht entpackbar: {exc}") from exc
 
 
+# ---------------------------------------------------------------------------
+# Server Files (fertiger Server-Ordner als Zip, z. B. ATM10 "ServerFiles-x.zip")
+# ---------------------------------------------------------------------------
+
+# Zusätzlich zu _ALLOWED_TOP_DIRS übernommene Ordner aus Server Files
+_SERVER_PACK_EXTRA_DIRS = ("scripts", "global_packs", "paxi")
+_SERVER_PACK_SCAN_JARS = 40          # Fallback: so viele Mods werden gelesen
+_SERVER_PACK_MAX_JAR = 32 * 1024 * 1024
+_LOADER_NAMES = {"neoforge": "neoforge", "forge": "forge",
+                 "fabric": "fabric", "quilt": "quilt"}
+_MC_VERSION_RE = re.compile(r"(?:1|2\d)\.\d+(?:\.\d+)?")
+_NEOFORGE_INSTALLER_RE = re.compile(
+    r"^neoforge-(\d+)\.(\d+)\.(\d+[\w.\-]*?)-installer\.jar$", re.I)
+_FORGE_JAR_RE = re.compile(
+    r"^forge-(1\.\d+(?:\.\d+)?)-([\d.]+)(?:-(?:installer|universal|server|shim))?\.jar$", re.I)
+_FABRIC_LAUNCHER_RE = re.compile(
+    r"^fabric-server-mc\.(1\.\d+(?:\.\d+)?)-loader\.([\d.]+)-launcher\.[\d.]+\.jar$", re.I)
+
+
+def _server_pack_prefix(names: list) -> str | None:
+    """Wurzel des Server-Ordners im Zip: "" oder genau ein Unterordner
+    (z. B. "Server-Files-2.1/"), in dem ein mods/-Ordner mit .jar liegt."""
+    prefixes = set()
+    for name in names:
+        parts = name.split("/")
+        if len(parts) >= 2 and parts[-1].lower().endswith(".jar"):
+            if parts[0].lower() == "mods":
+                prefixes.add("")
+            elif len(parts) >= 3 and parts[1].lower() == "mods":
+                prefixes.add(parts[0] + "/")
+    if "" in prefixes:
+        return ""
+    return sorted(prefixes)[0] if len(prefixes) == 1 else None
+
+
+def _neoforge_mc(version: str) -> str | None:
+    """NeoForge-Version → Minecraft-Version.
+
+    20.2 bis 21.x: 21.1.x → 1.21.1, 21.0.x → 1.21. Ab Minecraft 26.1
+    (Jahres-Versionen) beginnt die NeoForge-Version mit der MC-Version:
+    26.1.0.x → 26.1, 26.1.1.x → 26.1.1. Ältere (47.x für 1.20.1) tragen
+    die MC-Version selbst im Dateinamen → None."""
+    parts = str(version or "").split("-", 1)[0].split(".")
+    if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+        return None
+    major, minor = int(parts[0]), int(parts[1])
+    if 20 <= major <= 21:
+        return f"1.{major}" if minor == 0 else f"1.{major}.{minor}"
+    if 26 <= major < 40 and len(parts) >= 4:
+        patch = parts[2]
+        return f"{major}.{minor}" if patch in ("", "0") else f"{major}.{minor}.{patch}"
+    return None
+
+
+def _parse_variables(text: str) -> dict:
+    """KEY=VALUE-Zeilen (variables.txt der ATM-/All-the-Mods-Server-Files)."""
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip().upper()] = value.strip().strip("\"'")
+    return out
+
+
+def _server_pack_from_files(archive: zipfile.ZipFile, prefix: str,
+                            names: list) -> dict:
+    """Loader/MC-Version aus Begleitdateien der Server Files (ohne Mods zu lesen)."""
+    found: dict = {}
+
+    def read_text(rel: str, limit: int = 256 * 1024) -> str | None:
+        try:
+            info = archive.getinfo(prefix + rel)
+        except KeyError:
+            return None
+        if info.file_size > limit:
+            return None
+        with archive.open(info) as fh:
+            return fh.read().decode("utf-8", "replace")
+
+    # 1) variables.txt (ATM-Server-Files, ServerPackCreator)
+    text = read_text("variables.txt")
+    if text:
+        var = _parse_variables(text)
+        loader = _LOADER_NAMES.get(var.get("MODLOADER", "").lower())
+        if loader:
+            found = {"loader": loader,
+                     "loader_version": var.get("MODLOADER_VERSION") or None,
+                     "game_version": var.get("MINECRAFT_VERSION") or None,
+                     "detected_by": "variables.txt"}
+            if found["game_version"]:
+                return found
+
+    # 2) ServerStarter (server-setup-config.yaml, ältere ATM-Packs)
+    text = read_text("server-setup-config.yaml")
+    if text:
+        mc = re.search(r"^\s*mcVersion:\s*['\"]?([\d.]+)", text, re.M)
+        lv = re.search(r"^\s*loaderVersion:\s*['\"]?([\w.\-]+)", text, re.M)
+        url = re.search(r"^\s*installerUrl:\s*['\"]?(\S+)", text, re.M)
+        url_text = (url.group(1).lower() if url else "")
+        loader = ("neoforge" if "neoforge" in url_text else
+                  "fabric" if "fabric" in url_text else
+                  "forge" if "forge" in url_text else None)
+        if loader and mc:
+            return {"loader": loader,
+                    "loader_version": lv.group(1) if lv else None,
+                    "game_version": mc.group(1),
+                    "detected_by": "server-setup-config.yaml"}
+
+    # 3) Installer-/Launcher-Jars im Server-Ordner
+    for name in names:
+        rel = name[len(prefix):]
+        if "/" in rel:
+            continue
+        m = _NEOFORGE_INSTALLER_RE.match(rel)
+        if m:
+            version = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+            installer_mc = _neoforge_mc(version)
+            if installer_mc:
+                return {"loader": "neoforge", "loader_version": version,
+                        "game_version": installer_mc, "detected_by": rel}
+        m = _FORGE_JAR_RE.match(rel)
+        if m:
+            return {"loader": "forge", "loader_version": m.group(2),
+                    "game_version": m.group(1), "detected_by": rel}
+        m = _FABRIC_LAUNCHER_RE.match(rel)
+        if m:
+            return {"loader": "fabric", "loader_version": m.group(2),
+                    "game_version": m.group(1), "detected_by": rel}
+
+    # 4) libraries/ (bereits installierter Server)
+    lib = prefix + "libraries/"
+    neo, forge, fabric_loader, intermediary, mc_server = None, None, None, None, None
+    for name in names:
+        if not name.startswith(lib):
+            continue
+        parts = name[len(lib):].split("/")
+        if len(parts) < 4:
+            continue
+        group = "/".join(parts[:3])
+        if group == "net/neoforged/neoforge":
+            neo = parts[3]
+        elif group in ("net/minecraftforge/forge", "net/neoforged/forge") and "-" in parts[3]:
+            forge = (parts[3], "neoforge" if "neoforged" in group else "forge")
+        elif group == "net/fabricmc/fabric-loader":
+            fabric_loader = parts[3]
+        elif group == "net/fabricmc/intermediary":
+            intermediary = parts[3]
+        elif group == "net/minecraft/server" and "-" in parts[3]:
+            mc_server = parts[3].split("-", 1)[0]
+    if neo:
+        neo_mc = _neoforge_mc(neo) or mc_server
+        if neo_mc:
+            return {"loader": "neoforge", "loader_version": neo,
+                    "game_version": neo_mc, "detected_by": "libraries/"}
+    if forge:
+        mc, version = forge[0].split("-", 1)
+        return {"loader": forge[1], "loader_version": version,
+                "game_version": mc, "detected_by": "libraries/"}
+    if fabric_loader and (intermediary or mc_server):
+        return {"loader": "fabric", "loader_version": fabric_loader,
+                "game_version": intermediary or mc_server,
+                "detected_by": "libraries/"}
+    return found
+
+
+def _mod_jar_hint(data: bytes) -> tuple:
+    """(loader, Minecraft-Version) aus einer Mod-.jar (nur Metadaten)."""
+    import tomllib
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as jar:
+            names = set(jar.namelist())
+            if "fabric.mod.json" in names or "quilt.mod.json" in names:
+                kind = "fabric" if "fabric.mod.json" in names else "quilt"
+                obj = json.loads(jar.read(f"{kind}.mod.json").decode("utf-8", "replace"),
+                                 strict=False)
+                if kind == "fabric":
+                    dep = (obj.get("depends") or {}).get("minecraft")
+                else:
+                    dep = next((d.get("versions") for d in
+                                ((obj.get("quilt_loader") or {}).get("depends") or [])
+                                if isinstance(d, dict) and d.get("id") == "minecraft"), None)
+                dep = " ".join(dep) if isinstance(dep, list) else str(dep or "")
+                m = _MC_VERSION_RE.search(dep)
+                return kind, m.group(0) if m else None
+            for meta, kind in (("META-INF/neoforge.mods.toml", "neoforge"),
+                               ("META-INF/mods.toml", "forge")):
+                if meta not in names:
+                    continue
+                obj = tomllib.loads(jar.read(meta).decode("utf-8", "replace"))
+                mc = None
+                for entries in (obj.get("dependencies") or {}).values():
+                    for dep in entries if isinstance(entries, list) else []:
+                        if isinstance(dep, dict) and dep.get("modId") == "minecraft":
+                            m = _MC_VERSION_RE.search(str(dep.get("versionRange") or ""))
+                            mc = mc or (m.group(0) if m else None)
+                return kind, mc
+    except (zipfile.BadZipFile, ValueError, KeyError, TypeError, AttributeError,
+            OSError, tomllib.TOMLDecodeError):
+        pass
+    return None, None
+
+
+def _server_pack_from_mods(archive: zipfile.ZipFile, jars: list) -> dict:
+    """Fallback: Loader/MC-Version per Mehrheit aus den Mod-Metadaten."""
+    from collections import Counter
+    loaders: Counter[str] = Counter()
+    versions: Counter[str] = Counter()
+    for info in jars[:_SERVER_PACK_SCAN_JARS]:
+        if info.file_size > _SERVER_PACK_MAX_JAR:
+            continue
+        with archive.open(info) as fh:
+            loader, mc = _mod_jar_hint(fh.read())
+        if loader:
+            loaders[loader] += 1
+        if mc:
+            versions[mc] += 1
+    if not loaders:
+        return {}
+    return {"loader": loaders.most_common(1)[0][0], "loader_version": None,
+            "game_version": versions.most_common(1)[0][0] if versions else None,
+            "detected_by": "Mod-Metadaten"}
+
+
+def _detect_server_pack(archive: zipfile.ZipFile) -> dict | None:
+    """Erkennt Server Files (Zip mit mods/-Ordner, ohne manifest.json).
+    Rückgabe: Rohinfo für _normalize_index("serverpack", …) oder None."""
+    names = archive.namelist()
+    prefix = _server_pack_prefix(names)
+    if prefix is None:
+        return None
+    jars = [i for i in archive.infolist()
+            if not i.is_dir() and i.filename.startswith(prefix + "mods/")
+            and i.filename.lower().endswith(".jar")
+            and i.filename.count("/") == prefix.count("/") + 1]
+    info = _server_pack_from_files(archive, prefix, names)
+    if not info.get("loader") or not info.get("game_version"):
+        fallback = _server_pack_from_mods(archive, jars)
+        info = {**fallback, **{k: v for k, v in info.items() if v}}
+    return {"prefix": prefix, "mod_count": len(jars),
+            "title": prefix.rstrip("/"), **info}
+
+
+def _extract_server_pack(pack_path: Path, root: Path, prefix: str,
+                         progress=None) -> tuple:
+    """Entpackt die serverrelevanten Ordner der Server Files nach root.
+    Startskripte, Installer, libraries/ usw. braucht der Container nicht
+    (itzg installiert die Server-Software selbst). Rückgabe: (dateien, mods,
+    skipped[]); progress(bytes) wird je Datei aufgerufen."""
+    allowed = set(_ALLOWED_TOP_DIRS) | set(_SERVER_PACK_EXTRA_DIRS)
+    extracted, mods, skipped_tops = 0, 0, []
+    with zipfile.ZipFile(pack_path) as archive:
+        for info in archive.infolist():
+            if info.is_dir() or not info.filename.startswith(prefix):
+                continue
+            rel = info.filename[len(prefix):]
+            if not rel:
+                continue
+            top = rel.split("/", 1)[0]
+            if top.lower() not in allowed:
+                if top not in skipped_tops:
+                    skipped_tops.append(top)
+                continue
+            try:
+                dest = _safe_pack_path(root, rel)
+            except HTTPException:
+                skipped_tops.append(f"{rel} (unsicherer Pfad)")
+                continue
+            if "__skipped__" in dest.parts:
+                dest = root / rel  # Zusatzordner (scripts/, global_packs/ …)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as src, open(dest, "wb") as fh:
+                shutil.copyfileobj(src, fh)
+            extracted += 1
+            if top.lower() == "mods" and rel.lower().endswith(".jar"):
+                mods += 1
+            if progress:
+                progress(info.file_size)
+    skipped = [f"{t} (vom Server nicht benötigt)" for t in skipped_tops]
+    return extracted, mods, skipped
+
+
+def _server_pack_bytes(pack_path: Path, prefix: str) -> int:
+    allowed = set(_ALLOWED_TOP_DIRS) | set(_SERVER_PACK_EXTRA_DIRS)
+    with zipfile.ZipFile(pack_path) as archive:
+        return sum(i.file_size for i in archive.infolist()
+                   if i.filename.startswith(prefix)
+                   and i.filename[len(prefix):].split("/", 1)[0].lower() in allowed)
+
+
 def _normalize_index(fmt: str, index: dict) -> dict:
     """Vereinheitlicht mrpack- und CurseForge-Index auf ein internes Schema:
     {title, game_version, loader, loader_version,
      files: [{path, downloads, fileSize, sha1}]}"""
     if not isinstance(index, dict):
         raise HTTPException(status_code=400, detail="Modpack-Index ist beschädigt")
+    if fmt == "serverpack":
+        return {
+            "title": index.get("title") or "",
+            "game_version": index.get("game_version"),
+            "loader": index.get("loader"),
+            "loader_version": index.get("loader_version"),
+            "files": [],
+            "server_pack": True,
+            "prefix": index.get("prefix") or "",
+            "mod_count": int(index.get("mod_count") or 0),
+            "detected_by": index.get("detected_by"),
+        }
     if fmt == "modrinth":
         deps = index.get("dependencies") or {}
         loader_map = {"fabric-loader": "fabric", "forge": "forge",
@@ -865,6 +1180,71 @@ def _adapt_phase_note(adapted: dict) -> str:
     return f"Instanz umgestellt auf Minecraft {a['game_version']} ({a['loader']})"
 
 
+def _failure_summary(failures: list) -> str:
+    shown = "; ".join(failures[:5])
+    more = f" … +{len(failures) - 5} weitere" if len(failures) > 5 else ""
+    return f"{len(failures)} Mod-Datei(en) fehlgeschlagen: {shown}{more}"
+
+
+async def _download_entries(job: dict, root: Path, entries: list) -> tuple:
+    """Lädt Pack-Dateien parallel. entries: [{kind: "mr"|"cf", url, path,
+    size, sha1, label}]. Rückgabe: (installiert, skipped[], fehler[], offen[])
+    — offen = Einträge, die fehlgeschlagen sind (für „erneut versuchen“)."""
+    mods_root = root / "mods"
+    sem = asyncio.Semaphore(_CONCURRENCY)
+    installed = {"n": 0, "done": 0}
+    skipped: list[str] = []
+    failures: list[str] = []
+    missing: list[dict] = []
+    total = len(entries)
+
+    async def worker(entry):
+        async with sem:
+            try:
+                if entry["kind"] == "mr":
+                    await _download_one(dl_client, entry["url"],
+                                        root / entry["path"],
+                                        int(entry.get("size") or 0), entry.get("sha1"))
+                    job["downloaded"] += int(entry.get("size") or 0)
+                    installed["n"] += 1
+                else:
+                    name = await _download_cf_one(dl_client, entry["url"], mods_root)
+                    if name is None:
+                        skipped.append(f"CurseForge-Datei {entry['label']} "
+                                       f"(kein .jar oder bekannte Client-only-Mod)")
+                    else:
+                        installed["n"] += 1
+                        try:
+                            job["downloaded"] += (mods_root / name).stat().st_size
+                        except OSError:
+                            pass
+            except Exception as exc:
+                failures.append(f"{entry['label']}: {exc}")
+                missing.append(entry)
+            finally:
+                installed["done"] += 1
+                job["phase"] = f"Mods installieren ({installed['done']}/{total})"
+
+    async with _new_client() as dl_client:
+        await asyncio.gather(*(worker(e) for e in entries))
+    return installed["n"], skipped, failures, missing
+
+
+def _plan_entries(fmt: str, root: Path, pack: dict) -> tuple:
+    """Download-Einträge für _download_entries + übersprungene Dateien."""
+    if fmt == "modrinth":
+        plan, skipped = _file_plan(root, pack)
+        entries = [{"kind": "mr", "url": u, "path": str(d.relative_to(root)),
+                    "size": s, "sha1": h, "label": d.name} for u, d, s, h in plan]
+        return entries, skipped
+    entries = []
+    for f in pack["files"]:
+        url = (f.get("downloads") or [""])[0]
+        entries.append({"kind": "cf", "url": url,
+                        "label": url.rsplit("/", 1)[-1] if url else "?"})
+    return entries, []
+
+
 async def _run_upload_install(job: dict, instance: dict, dest: Path,
                               source: str = "upload",
                               auto_version: bool = False) -> None:
@@ -872,12 +1252,18 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
 
     auto_version=True: Bei abweichender MC-Version/Loader-Kombination wird die
     Instanz automatisch umgestellt (nur Upload-Pfad; CF-Suche bleibt streng).
+
+    Einzelne fehlgeschlagene Downloads brechen die Installation nicht ab:
+    Der Rest wird installiert, die fehlenden Dateien landen in
+    modpack["failed"] und lassen sich mit retry_failed nachladen.
     """
     root = instance_dir(instance["id"])
-    mods_root = root / "mods"
     failures: list[str] = []
     try:
         job["phase"] = "Prüfung (Kompatibilität)"
+        # Index lesen ist billig (zentrales Verzeichnis + JSON/variables.txt);
+        # nur bei Server Files ohne Begleitdateien werden bis zu
+        # _SERVER_PACK_SCAN_JARS Mod-Metadaten gelesen.
         fmt, raw_index = _extract_index(dest)
         pack = _normalize_index(fmt, raw_index)
         adapted = None
@@ -888,80 +1274,40 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
         else:
             loader_dep = _check_compatibility(instance, pack)
 
-        skipped, plan, total_bytes, jobs_total = [], [], 0, 0
-        if fmt == "modrinth":
-            plan, skipped = _file_plan(root, pack)
-            total_bytes = sum(size for _, _, size, _ in plan)
-            jobs_total = len(plan)
-        else:
-            job["phase"] = "Overrides extrahieren"
-            _, over_skip = await asyncio.to_thread(_extract_overrides, dest, root)
+        skipped, entries, missing, installed = [], [], [], 0
+        if fmt == "serverpack":
+            job["phase"] = "Prüfung (Speicherplatz)"
+            unpacked = await asyncio.to_thread(_server_pack_bytes, dest, pack["prefix"])
+            _check_disk_space_job(root, unpacked)
+            job["status"] = "installing"
+            job["downloaded"], job["total"] = 0, unpacked
+            job["phase"] = "Server Files entpacken"
+
+            def _progress(nbytes: int) -> None:
+                job["downloaded"] += nbytes
+
+            _, installed, over_skip = await asyncio.to_thread(
+                _extract_server_pack, dest, root, pack["prefix"], _progress)
             skipped.extend(over_skip)
-            jobs_total = len(pack["files"])
-
-        job["phase"] = "Prüfung (Speicherplatz)"
-        _check_disk_space_job(root, total_bytes)
-
-        job["status"] = "installing"
-        if fmt == "modrinth":
-            # Archiv-Größe bereits erledigt (Upload) + bekannte Mod-Größe
-            job["total"] = job["downloaded"] + total_bytes
         else:
-            job["total"] = 0  # CurseForge: Mod-Größen unbekannt → nur Phase zeigen
-        job["phase"] = f"Mods installieren (0/{jobs_total})"
-
-        sem = asyncio.Semaphore(_CONCURRENCY)
-        completed = {"count": 0}
-        installed = {"n": 0}
-
-        def _progress():
-            completed["count"] += 1
-            job["phase"] = f"Mods installieren ({completed['count']}/{jobs_total})"
-
-        async def mr_worker(item):
-            u, d, s, h = item
-            async with sem:
-                try:
-                    await _download_one(dl_client, u, d, s, h)
-                    job["downloaded"] += s
-                    installed["n"] += 1
-                except Exception as exc:
-                    failures.append(f"{d.name}: {exc}")
-                finally:
-                    _progress()
-
-        async def cf_worker(entry):
-            url = (entry.get("downloads") or [""])[0]
-            async with sem:
-                try:
-                    name = await _download_cf_one(dl_client, url, mods_root)
-                    if name is None:
-                        skipped.append(f"CurseForge-Datei {url.rsplit('/', 1)[-1] if url else '?'} "
-                                       f"(kein .jar oder bekannte Client-only-Mod)")
-                    else:
-                        installed["n"] += 1
-                        try:
-                            job["downloaded"] += (mods_root / name).stat().st_size
-                        except OSError:
-                            pass
-                except Exception as exc:
-                    label = url.rsplit("/", 1)[-1] or url or "?"
-                    failures.append(
-                        f"CurseForge-Download fehlgeschlagen ({label}): {exc}")
-                finally:
-                    _progress()
-
-        async with _new_client() as dl_client:
-            if fmt == "modrinth":
-                await asyncio.gather(*(mr_worker(item) for item in plan))
-            else:
-                await asyncio.gather(*(cf_worker(f) for f in pack["files"]))
-        if failures:
-            shown = "; ".join(failures[:5])
-            more = (f" … +{len(failures) - 5} weitere"
-                    if len(failures) > 5 else "")
-            raise RuntimeError(f"{len(failures)} Mod-Datei(en) fehlgeschlagen: "
-                               f"{shown}{more}")
+            entries, skipped = _plan_entries(fmt, root, pack)
+            if fmt == "curseforge":
+                job["phase"] = "Overrides extrahieren"
+                _, over_skip = await asyncio.to_thread(_extract_overrides, dest, root)
+                skipped.extend(over_skip)
+            total_bytes = sum(int(e.get("size") or 0) for e in entries)
+            job["phase"] = "Prüfung (Speicherplatz)"
+            _check_disk_space_job(root, total_bytes)
+            job["status"] = "installing"
+            # Modrinth: Archiv-Größe (Upload) + bekannte Mod-Größe ·
+            # CurseForge: Mod-Größen unbekannt → nur Phase zeigen
+            job["total"] = job["downloaded"] + total_bytes if fmt == "modrinth" else 0
+            job["phase"] = f"Mods installieren (0/{len(entries)})"
+            installed, dl_skipped, failures, missing = await _download_entries(
+                job, root, entries)
+            skipped.extend(dl_skipped)
+            if failures and installed == 0:
+                raise RuntimeError(_failure_summary(failures))
 
         # Instanz-Metadaten aktualisieren
         instance = get_instance(instance["id"])
@@ -974,17 +1320,23 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
             "game_version": loader_dep["game_version"],
             "loader": loader_dep["loader"],
             "loader_version": loader_dep["version"] or instance.get("loader_version"),
-            "files": installed["n"],
+            "files": installed,
             "skipped": skipped,
         }
+        if missing:
+            instance["modpack"]["failed"] = missing
         if adapted:
             instance["modpack"]["version_adapted"] = adapted
         if loader_dep["version"]:
             instance["loader_version"] = loader_dep["version"]
         update_instance(instance)
         job["status"] = "done"
-        job["phase"] = "Fertig"
-        job["summary"] = {"files": installed["n"], "skipped": skipped}
+        job["phase"] = ("Fertig — einige Mods fehlen" if missing else "Fertig")
+        job["summary"] = {"files": installed, "skipped": skipped,
+                          "format": fmt}
+        if failures:
+            job["failed"] = failures
+            job["summary"]["failed"] = failures
         if adapted:
             job["summary"]["version_adapted"] = adapted
     except HTTPException as exc:
@@ -1004,6 +1356,79 @@ async def _run_upload_install(job: dict, instance: dict, dest: Path,
             except OSError:
                 pass
         modrinth.persist_job(job)
+
+
+def _valid_failed_entry(root: Path, entry) -> dict | None:
+    """Prüft einen gespeicherten Fehl-Eintrag erneut (stammt aus instance.json)."""
+    if not isinstance(entry, dict) or entry.get("kind") not in ("mr", "cf"):
+        return None
+    url = str(entry.get("url") or "")
+    if not url.startswith("https://"):
+        return None
+    if entry["kind"] == "cf":
+        if not url.startswith(_CF_DL_URL.split("{", 1)[0]):
+            return None
+        return {"kind": "cf", "url": url, "label": str(entry.get("label") or "?")}
+    try:
+        dest = _safe_pack_path(root, str(entry.get("path") or ""))
+    except HTTPException:
+        return None
+    if "__skipped__" in dest.parts:
+        return None
+    return {"kind": "mr", "url": url, "path": str(dest.relative_to(root)),
+            "size": int(entry.get("size") or 0), "sha1": entry.get("sha1"),
+            "label": dest.name}
+
+
+async def retry_failed(instance_id: str) -> dict:
+    """Lädt nur die bei der letzten Pack-Installation fehlgeschlagenen
+    Dateien erneut (Hintergrund-Job)."""
+    instance = get_instance(instance_id)
+    active = _running_pack_job(instance_id)
+    if active:
+        raise HTTPException(status_code=409,
+                            detail=f"Es läuft bereits eine Installation "
+                                   f"({active.get('filename')}) für diese Instanz")
+    root = instance_dir(instance_id)
+    mp = instance.get("modpack") or {}
+    entries = [e for e in (_valid_failed_entry(root, x) for x in mp.get("failed") or [])
+               if e]
+    if not entries:
+        raise HTTPException(status_code=400,
+                            detail="Keine fehlgeschlagenen Modpack-Dateien vorhanden")
+    job = modrinth.create_job(mp.get("title") or "Modpack", 0, kind="pack",
+                              phase=f"Mods installieren (0/{len(entries)})",
+                              instance_id=instance_id, source="retry")
+    job["status"] = "installing"
+
+    async def run():
+        try:
+            installed, skipped, failures, missing = await _download_entries(
+                job, root, entries)
+            inst = get_instance(instance_id)
+            pack_meta = inst.get("modpack") or {}
+            pack_meta["files"] = int(pack_meta.get("files") or 0) + installed
+            if missing:
+                pack_meta["failed"] = missing
+            else:
+                pack_meta.pop("failed", None)
+            inst["modpack"] = pack_meta
+            update_instance(inst)
+            job["status"] = "done"
+            job["phase"] = "Fertig — einige Mods fehlen" if missing else "Fertig"
+            job["summary"] = {"files": installed, "skipped": skipped}
+            if failures:
+                job["failed"] = failures
+                job["summary"]["failed"] = failures
+        except Exception as exc:
+            job["status"] = "error"
+            job["error"] = str(exc) or exc.__class__.__name__
+            job["phase"] = "Fehlgeschlagen"
+        finally:
+            modrinth.persist_job(job)
+
+    modrinth.track_task(asyncio.create_task(run()))
+    return job
 
 
 async def _download_archive(job: dict, url: str, dest: Path,
@@ -1188,7 +1613,7 @@ def staging_dir() -> Path:
 
 
 def _meta_from_archive(archive: Path) -> tuple:
-    """(loader, game_version, title) aus einem hochgeladenen Pack-Archiv."""
+    """(loader, game_version, title, mod_count) aus einem hochgeladenen Pack-Archiv."""
     fmt, raw_index = _extract_index(archive)
     pack = _normalize_index(fmt, raw_index)
     loader, game_version = pack.get("loader"), pack.get("game_version")
@@ -1197,19 +1622,186 @@ def _meta_from_archive(archive: Path) -> tuple:
             status_code=400,
             detail=("Modpack deklariert Loader/Minecraft-Version nicht eindeutig — "
                     "bitte Server manuell erstellen (Tab „Server“)"))
-    return loader, str(game_version), pack.get("title")
+    return loader, str(game_version), pack.get("title"), _mod_count(fmt, pack)
+
+
+# ---------------------------------------------------------------------------
+# Vorschau: Archiv vor der Installation analysieren
+# ---------------------------------------------------------------------------
+
+# (Mods unter Grenze → RAM); darüber _MEMORY_MAX. Werte passen zu den
+# Auswahlfeldern im Dashboard.
+_MEMORY_STEPS = ((60, "4G"), (150, "6G"), (250, "8G"))
+_MEMORY_MAX = "12G"
+_PREVIEW_PREFIX = "preview_"
+_PREVIEW_MAX_AGE = 12 * 3600  # liegengebliebene Vorschau-Uploads aufräumen
+_PREVIEW_TOKEN_RE = re.compile(r"^[0-9a-f]{16}$")
+
+
+def recommend_memory(mod_count: int) -> str | None:
+    """RAM-Empfehlung nach Mod-Anzahl (None = Standard reicht)."""
+    if mod_count <= 0:
+        return None
+    for limit, memory in _MEMORY_STEPS:
+        if mod_count < limit:
+            return memory
+    return _MEMORY_MAX
+
+
+def _memory_bytes(value: str) -> int:
+    value = str(value or "").strip().upper()
+    if not value[:-1].isdigit():
+        return 0
+    return int(value[:-1]) * (1024 ** 3 if value.endswith("G") else 1024 ** 2)
+
+
+def host_memory_bytes() -> int:
+    """Gesamt-RAM des Hosts (bzw. Container-Limit, falls kleiner); 0 = unbekannt."""
+    total = 0
+    try:
+        with open("/proc/meminfo", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    total = int(line.split()[1]) * 1024
+                    break
+    except (OSError, ValueError):
+        pass
+    try:
+        raw = Path("/sys/fs/cgroup/memory.max").read_text().strip()
+        if raw.isdigit() and (not total or int(raw) < total):
+            total = int(raw)
+    except OSError:
+        pass
+    return total
+
+
+def _mod_count(fmt: str, pack: dict) -> int:
+    if fmt == "serverpack":
+        return int(pack.get("mod_count") or 0)
+    if fmt == "curseforge":
+        return len(pack.get("files") or [])
+    return sum(1 for f in pack.get("files") or []
+               if str(f.get("path") or "").replace("\\", "/").startswith("mods/"))
+
+
+def _title_from_filename(filename: str) -> str:
+    stem = re.sub(r"\.(zip|mrpack)$", "", filename or "", flags=re.I)
+    return stem.replace("_", " ").strip()
+
+
+def analyze_archive(archive: Path, filename: str) -> dict:
+    """Liest ein Pack-Archiv (blockierend, im Thread aufrufen) und liefert
+    alles, was die Vorschau zeigt: Format, Titel, Minecraft/Loader, Java,
+    Anzahl Mods, RAM-Empfehlung und Warnungen."""
+    from . import runtime  # lazy, vermeidet Import-Zirkel
+    fmt, raw = _extract_index(archive)
+    pack = _normalize_index(fmt, raw)
+    loader = str(pack.get("loader") or "").strip().lower() or None
+    game_version = str(pack.get("game_version") or "").strip() or None
+    mods = _mod_count(fmt, pack)
+    memory = recommend_memory(mods)
+    warnings: list[str] = []
+    errors: list[str] = []
+    if not loader or not game_version:
+        errors.append("Minecraft-Version/Loader nicht erkennbar — bitte den "
+                      "Server manuell erstellen (Tab „Server“) oder die Server "
+                      "Files über „Server importieren“ einbinden.")
+    elif loader not in ALLOWED_LOADERS:
+        errors.append(f"Loader '{loader}' wird für Server nicht unterstützt "
+                      f"({', '.join(ALLOWED_LOADERS)}).")
+    if fmt == "curseforge" and mods:
+        warnings.append(
+            f"CurseForge-Client-Export: {mods} Mods werden einzeln von "
+            f"CurseForge geladen. Schneller und zuverlässiger sind die "
+            f"„Server Files“ des Packs (CurseForge-Projektseite, Reiter Files, "
+            f"Additional Files).")
+    host = host_memory_bytes()
+    if memory and host and _memory_bytes(memory) + 1024 ** 3 > host:
+        warnings.append(
+            f"Empfohlen sind {memory} RAM für den Server, der Host hat "
+            f"insgesamt nur {host / 1024 ** 3:.1f} GB — der Server könnte "
+            f"abstürzen oder den Host ausbremsen.")
+    try:
+        size = archive.stat().st_size
+        free = shutil.disk_usage(settings.instances_dir).free
+        if free < size * 3 + _SPACE_BUFFER:
+            warnings.append(f"Wenig Speicherplatz: frei sind "
+                            f"{free // 1024 ** 2} MiB, benötigt werden etwa "
+                            f"{(size * 3 + _SPACE_BUFFER) // 1024 ** 2} MiB.")
+    except OSError:
+        size = 0
+    version = None
+    if fmt == "curseforge":
+        version = raw.get("version")
+    elif fmt == "modrinth":
+        version = raw.get("versionId")
+    java = runtime.java_tag({"game_version": game_version}).removeprefix("java") \
+        if game_version else None
+    return {
+        "filename": filename,
+        "size": size,
+        "format": fmt,
+        "title": pack.get("title") or _title_from_filename(filename),
+        "version": str(version) if version else None,
+        "game_version": game_version,
+        "loader": loader,
+        "loader_version": pack.get("loader_version") or None,
+        "detected_by": pack.get("detected_by"),
+        "java": java,
+        "mods": mods,
+        "recommended_memory": memory,
+        "default_memory": settings.instances_memory,
+        "host_memory": host,
+        "warnings": warnings,
+        "errors": errors,
+    }
+
+
+def _cleanup_previews() -> None:
+    now = time.time()
+    for path in staging_dir().glob(f"{_PREVIEW_PREFIX}*"):
+        try:
+            if now - path.stat().st_mtime > _PREVIEW_MAX_AGE:
+                path.unlink()
+        except OSError:
+            pass
+
+
+def preview_path(filename: str) -> tuple:
+    """Neuer Ablageort für einen Vorschau-Upload: (token, Pfad)."""
+    _cleanup_previews()
+    token = uuid.uuid4().hex[:16]
+    return token, staging_dir() / f"{_PREVIEW_PREFIX}{token}_{filename}"
+
+
+def staged_preview(token: str) -> tuple:
+    """(Pfad, Dateiname) eines Vorschau-Uploads; 404, wenn abgelaufen."""
+    token = str(token or "").strip()
+    if not _PREVIEW_TOKEN_RE.match(token):
+        raise HTTPException(status_code=400, detail="Ungültige Upload-Kennung")
+    prefix = f"{_PREVIEW_PREFIX}{token}_"
+    for path in staging_dir().glob(f"{prefix}*"):
+        return path, path.name[len(prefix):]
+    raise HTTPException(status_code=404,
+                        detail="Hochgeladene Datei nicht mehr vorhanden — "
+                               "bitte erneut hochladen")
 
 
 async def create_server_from_upload(archive: Path, filename: str, name: str = None,
                                     memory: str = None, port: int = None,
                                     accept_eula: bool = False) -> dict:
-    """Erstellt aus einem hochgeladenen Modpack-Archiv (.mrpack/.zip) direkt
-    eine neue Server-Instanz und installiert das Pack dort."""
+    """Erstellt aus einem hochgeladenen Modpack-Archiv (.mrpack/.zip/Server
+    Files) direkt eine neue Server-Instanz und installiert das Pack dort.
+    Ohne RAM-Angabe wird die Empfehlung nach Mod-Anzahl genutzt."""
     instance = None
     try:
-        loader, game_version, title = _meta_from_archive(archive)
+        loader, game_version, title, mods = await asyncio.to_thread(
+            _meta_from_archive, archive)
+        if not memory:
+            memory = recommend_memory(mods)
         instance = create_instance(
-            _unique_name(_sanitize_name(name or title or "Hochgeladenes Modpack")),
+            _unique_name(_sanitize_name(name or title or _title_from_filename(filename)
+                                        or "Hochgeladenes Modpack")),
             loader, game_version, loader_version=None, memory=memory,
             port=port, accept_eula=accept_eula)
         dest = pack_dir(instance["id"]) / filename
@@ -1384,6 +1976,7 @@ async def pack_update(instance_id: str, version_id: str = None,
 __all__ = [
     "_check_compatibility",
     "_file_plan",
+    "analyze_archive",
     "create_server_from_pack",
     "create_server_from_upload",
     "install_pack",
@@ -1391,6 +1984,10 @@ __all__ = [
     "list_pack_versions",
     "pack_update",
     "pack_update_check",
+    "preview_path",
+    "recommend_memory",
+    "retry_failed",
     "search_modpacks",
     "search_modpacks_global",
+    "staged_preview",
 ]

@@ -32,7 +32,8 @@ Dashboard.
 - **Mods & Modpacks** — Modrinth- und CurseForge-Suche je Instanz
   (Pflicht-Abhängigkeiten werden mitinstalliert), Mod an/aus-Toggle,
   Update-Check mit Versions-Chips und Mod-Icons, Modpacks als `.mrpack`/
-  CurseForge-`.zip` hochladen oder direkt aus der Suche installieren — auch als
+  CurseForge-`.zip` (Client-Export oder „Server Files“, per Drag & Drop mit
+  Vorschau und RAM-Vorschlag) hochladen oder direkt aus der Suche installieren — auch als
   **neuer Server aus einem Modpack** (Server-Pack bevorzugt, MC-Version/Loader
   automatisch aus dem Pack)
 - **Welt-Verwaltung** — Welt als `.zip` herunterladen/hochladen, bestehende

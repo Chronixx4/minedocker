@@ -685,7 +685,7 @@ class TestUploadInstall:
 
         job = _await_job(packs.install_upload(inst["id"], dest, dest.name))
         assert job["status"] == "error"
-        assert "Modpack-Format" in job["error"]
+        assert "Kein Modpack erkannt" in job["error"]
         assert not dest.exists()  # Archiv wurde aufgeräumt
 
     def test_upload_route_multipart(self, client, monkeypatch):
