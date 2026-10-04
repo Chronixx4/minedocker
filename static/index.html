@@ -464,6 +464,16 @@
             <div id="tags-error" class="err hidden"></div>
           </div>
 
+          <!-- Server endgültig löschen -->
+          <div class="upload-box admin-only">
+            <h3>Server löschen</h3>
+            <p class="muted small">Entfernt den Container und alle Daten dieser Instanz
+              (Welt, Mods, Configs). Backups im Backup-Ordner bleiben erhalten.</p>
+            <div class="row" style="margin-top: 0.4rem;">
+              <button id="inst-delete-btn" class="btn danger admin-only">Server löschen…</button>
+            </div>
+          </div>
+
           <!-- Installiertes Modpack: Update-Prüfung + Pack-Update -->
           <div class="upload-box">
             <h3>Installiertes Modpack
@@ -1376,6 +1386,10 @@
     <h2 id="cd-title"></h2>
     <p id="cd-message"></p>
     <ul id="cd-list" class="cd-list hidden"></ul>
+    <label id="cd-type-wrap" class="lbl-input hidden" for="cd-type">
+      <span id="cd-type-label"></span>
+      <input id="cd-type" type="text" autocomplete="off" spellcheck="false">
+    </label>
     <div class="md-actions">
       <button type="submit" value="cancel" class="btn" id="cd-cancel">Abbrechen</button>
       <button type="submit" value="ok" class="btn primary" id="cd-ok">OK</button>

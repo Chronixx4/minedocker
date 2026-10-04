@@ -220,7 +220,10 @@
 
   // Rückfrage im Dashboard-Stil statt window.confirm: zeigt Titel, Text und
   // optional eine Liste (z. B. betroffene Dateien). Promise<boolean>.
-  function confirmDialog({ title, message = "", list = [], ok = "OK", danger = false }) {
+  // typeToConfirm: Text, den man abtippen muss, bevor OK freigegeben wird
+  // (für nicht rückgängig zu machende Aktionen wie „Server löschen“).
+  function confirmDialog({ title, message = "", list = [], ok = "OK", danger = false,
+    typeToConfirm = "" }) {
     const dlg = $("#confirm-dialog");
     setText($("#cd-title"), title);
     setText($("#cd-message"), message);
@@ -236,11 +239,22 @@
     setText(okBtn, ok);
     okBtn.classList.toggle("danger", danger);
     okBtn.classList.toggle("primary", !danger);
+    const typeWrap = $("#cd-type-wrap");
+    const typeInput = $("#cd-type");
+    show(typeWrap, !!typeToConfirm);
+    typeInput.value = "";
+    typeInput.oninput = null;
+    okBtn.disabled = false;
+    if (typeToConfirm) {
+      setText($("#cd-type-label"), `Zur Bestätigung „${typeToConfirm}“ eintippen:`);
+      okBtn.disabled = true;
+      typeInput.oninput = () => { okBtn.disabled = typeInput.value.trim() !== typeToConfirm; };
+    }
     dlg.returnValue = "";
     return new Promise((resolve) => {
       dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true });
       dlg.showModal();
-      okBtn.focus();
+      (typeToConfirm ? typeInput : okBtn).focus();
     });
   }
 
@@ -2529,10 +2543,16 @@
   }
 
   async function deleteInstance(inst) {
-    const msg = inst.container?.running
-      ? `"${inst.name}" läuft noch.\nStoppen und LÖSCHEN (inkl. aller Daten)?`
-      : `"${inst.name}" inkl. aller Daten (Mods, Welt) wirklich löschen?`;
-    if (!window.confirm(msg)) return;
+    const running = inst.container?.running || inst.status === "running";
+    if (!(await confirmDialog({
+      title: `Server „${inst.name}“ löschen?`,
+      message: (running ? "Der Server läuft noch und wird dafür gestoppt. " : "")
+        + "Welt, Mods und Configs werden endgültig gelöscht und lassen sich "
+        + "nicht wiederherstellen. Vorhandene Backups bleiben erhalten.",
+      ok: "Endgültig löschen",
+      danger: true,
+      typeToConfirm: inst.name,
+    }))) return;
     try {
       await api(`/api/instances/${inst.id}?force=true`, { method: "DELETE" });
       toast(`Server "${inst.name}" gelöscht.`, "success");
@@ -3012,6 +3032,10 @@
     renderInstTabs(state.ovInstances?.instances || []);
   }
   $("#detail-close").addEventListener("click", closeDetail);
+  $("#inst-delete-btn").addEventListener("click", () => {
+    const inst = currentDetailInst() || state.detailData;
+    if (inst) deleteInstance(inst);
+  });
 
   async function loadDetail() {
     if (!state.detailId) return null;
@@ -6540,6 +6564,7 @@
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
       ["#tags-save", "einstellungen"],    // Tags & Port
+      ["#inst-delete-btn", "einstellungen"], // Server löschen
       ["#sched-autostart", "zeitplan"],   // Zeitplan
       ["#console-send", "konsole"],       // RCON-Konsole
       ["#backup-create-btn", "backups"],  // Backup-Verwaltung
