@@ -32,7 +32,7 @@ from starlette.background import BackgroundTask
 
 from . import auth as auth_mod
 from . import backups as backups_mod
-from . import catalog, curseforge, instances, modrinth, packs, runtime, worlds
+from . import catalog, curseforge, instances, modinstall, modrinth, packs, runtime, worlds
 from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
@@ -148,6 +148,22 @@ class DownloadRequest(BaseModel):
 
 class ToggleModRequest(BaseModel):
     enabled: bool
+
+
+class ModItem(BaseModel):
+    """Eine vorgemerkte Mod im Modbrowser (optional mit fester Version)."""
+    source: str = Field(pattern=r"^(modrinth|curseforge)$")
+    project_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    version_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ModPlanRequest(BaseModel):
+    items: list[ModItem] = Field(min_length=1, max_length=modinstall.MAX_ITEMS)
+
+
+class ModInstallRequest(ModPlanRequest):
+    overwrite: bool = False
 
 
 class CreateInstanceRequest(BaseModel):
@@ -1322,6 +1338,45 @@ async def instance_mods(instance_id: str):
     erkannten Problemen (fehlende Abhängigkeit, falscher Loader, …)."""
     instances.get_instance(instance_id)  # 404 wenn unbekannt
     return await asyncio.to_thread(instances.mods_overview, instance_id)
+
+
+@api.get("/instances/{instance_id}/mods/browse/{source}/{project_id}")
+async def instance_mod_browse(instance_id: str, source: str, project_id: str,
+                              all_versions: bool = False):
+    """Modbrowser-Details: Beschreibung und Versionen eines Projekts,
+    standardmäßig gefiltert auf Loader und MC-Version der Instanz."""
+    instance = instances.get_instance(instance_id)
+    return await modinstall.project_details(instance, source, project_id,
+                                            all_versions=all_versions)
+
+
+@api.get("/curseforge/project/{project_id}/files/{file_id}/changelog")
+async def curseforge_file_changelog(project_id: str, file_id: str):
+    return {"changelog": await modinstall.curseforge_changelog(project_id, file_id)}
+
+
+@api.post("/instances/{instance_id}/mods/plan")
+async def instance_mod_plan(instance_id: str, req: ModPlanRequest):
+    """Vorschau: welche Dateien inkl. Pflicht-Abhängigkeiten geladen würden."""
+    instance = instances.get_instance(instance_id)
+    plan = await modinstall.build_plan(instance, [i.model_dump() for i in req.items])
+    return modinstall.public_plan(plan)
+
+
+@api.post("/instances/{instance_id}/mods/install")
+async def instance_mod_install(instance_id: str, req: ModInstallRequest):
+    """Eine oder mehrere Mods samt gemeinsamer Abhängigkeiten installieren
+    (ein Hintergrund-Job, Fortschritt über /api/modrinth/jobs/{id})."""
+    instance = instances.get_instance(instance_id)
+    try:
+        result = await modinstall.start_install(
+            instance, [i.model_dump() for i in req.items], req.overwrite)
+    except modinstall.InstallConflict as exc:
+        return JSONResponse(status_code=409, content={
+            "detail": "Bereits im mods-Ordner: " + ", ".join(exc.conflicts),
+            "conflicts": exc.conflicts})
+    instances.invalidate_disk_cache(instance_id)
+    return result
 
 
 @api.get("/instances/{instance_id}/mod-trash")
