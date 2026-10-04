@@ -50,7 +50,7 @@ metrics: false
 _ACCEPT_RE = re.compile(r"^(\s*accept-download\s*[:=]\s*)false\b", re.M)
 
 
-def supported(loader: str) -> bool:
+def supported(loader: str | None) -> bool:
     return loader in _LOADER_QUERY
 
 
@@ -123,8 +123,9 @@ def _allocate_port(instance: dict) -> int:
             used.add(int(other.get("rcon_port") or int(other["port"]) + 1000))
         except (KeyError, TypeError, ValueError):
             continue
-        if other.get("id") != instance["id"] and map_port(other):
-            used.add(map_port(other))
+        other_map = map_port(other)
+        if other.get("id") != instance["id"] and other_map:
+            used.add(other_map)
     current = map_port(instance)
     if current and current not in used:
         return current

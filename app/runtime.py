@@ -301,8 +301,9 @@ def start_instance(instance: dict) -> None:
     from . import livemap  # lazy, vermeidet Import-Zirkel
     livemap.prepare_start(instance)
     ports = {"25565/tcp": int(instance["port"]), "25575/tcp": rcon_port(instance)}
-    if livemap.enabled(instance) and livemap.map_port(instance):
-        ports[f"{livemap.WEB_PORT}/tcp"] = livemap.map_port(instance)
+    web_port = livemap.map_port(instance)
+    if livemap.enabled(instance) and web_port:
+        ports[f"{livemap.WEB_PORT}/tcp"] = web_port
 
     host_dir = Path(_host_instances_root()) / instance["id"]
     if not host_dir.name:

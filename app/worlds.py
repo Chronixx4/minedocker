@@ -452,7 +452,7 @@ def create_world(instance_id: str, name: str, seed: str = "",
     _patch_properties(instance_id, {
         "level-name": name,
         "level-seed": seed,
-        "level-type": _level_type_value(level_type, instance.get("game_version")),
+        "level-type": _level_type_value(level_type, str(instance.get("game_version") or "")),
     })
     instances.invalidate_disk_cache(instance_id)
     return {"active": name, "pending": True}
