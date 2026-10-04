@@ -224,7 +224,7 @@ class TestPortWechsel:
         runtime.start_instance(meta)
         run_kwargs = fake_docker.containers.run_kwargs
         assert run_kwargs["ports"]["25565/tcp"] == 26200
-        assert run_kwargs["ports"]["25575/tcp"] == 27200
+        assert run_kwargs["ports"]["25575/tcp"] == ("127.0.0.1", 27200)
 
     def test_race_portwechsel_atomar(self, instanz, fake_docker):
         """Zwei gleichzeitige Port-Änderungen erzeugen nie denselben Port

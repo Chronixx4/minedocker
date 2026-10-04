@@ -140,8 +140,10 @@ Dashboard auch bei Crash-Loops automatisch weiter.
 - **Manuell:** JDK-Pfad im Startskript setzen
   (`"/usr/lib/jvm/java-21-openjdk/bin/java" … -jar server.jar nogui`);
   mehrere Server mit verschiedenen MC-Versionen → pro Ordner ein JDK.
-- **Docker/itzg (auch im Dashboard):** Java wird anhand `VERSION` automatisch
-  gewählt; `JAVA_VERSION` erzwingt eine Variante.
+- **Docker/itzg:** Die Java-Version steckt im Image-Tag (`itzg/minecraft-server:java8`,
+  `:java17`, `:java21`, `:latest` = neuestes Java). Das Dashboard wählt den Tag
+  automatisch nach obiger Tabelle (26.x und Snapshots: `latest`); unter
+  Einstellungen → „JVM & RAM“ → „Java“ lässt er sich je Server überschreiben.
 - **Merksatz:** „Server startet nicht / Class-Version-Fehler" = fast immer
   falsches Java.
 
@@ -155,8 +157,9 @@ Dashboard auch bei Crash-Loops automatisch weiter.
 | 25570, 25571, … | TCP | Dashboard-Instanzen (`INSTANCES_PORT_BASE`) | je ja |
 | 19132 | UDP | Bedrock/Geyser (optional) | ja |
 | 25575 | TCP | RCON (optional, **nicht** öffnen) | nein |
+| Spiel-Port + 1000 (z. B. 26570) | TCP | RCON der Dashboard-Instanzen, nur auf `127.0.0.1` gebunden | nein |
 | 8080 | TCP | Dashboard | **nein** — nur LAN/VPN |
-| Spiel-Port + 2000 (z. B. 27570) | TCP | Live-Karte (BlueMap), nur wenn aktiviert | **nein** — ohne Login, nur LAN/VPN |
+| Spiel-Port + 2000 (z. B. 27570) | TCP | Live-Karte (BlueMap), nur auf `127.0.0.1` gebunden; im Browser über das Dashboard | nein |
 
 - **Heimnetz:** feste interne IP für den Server-Host (DHCP-Reservierung) →
   Router-Portweiterleitung 25565/tcp auf diese IP → Host-Firewall:
@@ -171,10 +174,9 @@ Dashboard auch bei Crash-Loops automatisch weiter.
   Host veröffentlicht. Port-Weiterleitung am NAS-Router wie oben.
 - **Dashboard niemals direkt ins Internet** — nur VPN (WireGuard/Tailscale)
   oder Reverse-Proxy mit Auth; optional `DASHBOARD_API_KEY` setzen.
-- **Live-Karte:** Der BlueMap-Webserver hat **keine eigene Anmeldung** — jeder,
-  der den Port erreicht, sieht die ganze Welt (Basen, Koordinaten). Den Port
-  nicht am Router weiterleiten; wer die Karte öffentlich zeigen will, stellt
-  sie hinter einen Reverse-Proxy mit Auth.
+- **Live-Karte:** Der BlueMap-Webserver hat **keine eigene Anmeldung**. Das
+  Dashboard bindet seinen Port deshalb nur an `127.0.0.1` und zeigt die Karte
+  über `/api/instances/{id}/map/view/` — also nur mit Dashboard-Login.
 
 ---
 
@@ -203,9 +205,9 @@ Der Service `backup` (Alpine-Tar-Loop) sichert alle 6 h das gesamte
 `mcdata`-Volume (alle Instanzen + Mods) nach `./backups`, löscht Archive
 älter als 14 Tage und pflegt `latest.tgz` als Symlink auf das Neueste.
 Anpassbar: `sleep 6h` (Intervall), `-mtime +14` (Retention), Backup-Pfad
-(.env: `BACKUPS_DIR`, bei ZimaOS unter `/DATA/`). Für 100 % konsistente
-Weltschnapp-
-schüsse die Instanz vorher im Dashboard stoppen.
+(.env: `BACKUPS_DIR`, bei ZimaOS unter `/DATA/`). Laufende Welten sichert
+dieser Daemon **ohne** `save-off` — für konsistente Weltstände die
+Dashboard-Backups (Zeitplan je Server) nutzen oder die Instanz vorher stoppen.
 ```bash
 # Restore (alle Instanzen) — /data-Quelle analog zum Backup-Kommentar oben:
 #   Named Volume: <projekt>_mcdata, sonst MCDATA_DIR-Pfad aus .env

@@ -107,8 +107,8 @@ SECURITY_HEADERS = {
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data: blob: https:; "
         "connect-src 'self'; "
-        # Live-Karte: BlueMap-Webserver der Instanz läuft auf eigenem Port
-        "frame-src 'self' http: https:; "
+        # Live-Karte: BlueMap kommt über den eigenen Proxy (/api/.../map/view/)
+        "frame-src 'self'; "
         "object-src 'none'; base-uri 'self'; form-action 'self'; "
         "frame-ancestors 'none'"),
     "X-Content-Type-Options": "nosniff",

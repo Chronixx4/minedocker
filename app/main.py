@@ -291,6 +291,8 @@ class UpdateInstanceRequest(BaseModel):
     memory: str | None = Field(default=None, pattern=r"^\d{1,4}[GgMm]$")
     jvm_opts: str | None = Field(default=None, max_length=2000)
     use_aikar: bool | None = None
+    # "auto" = passend zur MC-Version; Prüfung gegen runtime.JAVA_CHOICES
+    java: str | None = Field(default=None, max_length=8)
     # Tag-/Port-Validierung macht das Backend in instances.py
     tags: list[str] | None = None
     port: int | None = Field(default=None, ge=1024, le=65535)
@@ -1176,7 +1178,7 @@ async def instance_update(instance_id: str, req: UpdateInstanceRequest):
     if not body and schedule is None:
         raise HTTPException(status_code=400,
                             detail="Keine Änderungen übergeben "
-                                   "(name/memory/jvm_opts/use_aikar/tags/port/schedule)")
+                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule)")
     result = {"instance": instances.get_instance(instance_id), "changed": []}
     if schedule is not None:
         result = instances.update_schedule(
@@ -1863,6 +1865,14 @@ async def instance_map_status(instance_id: str):
     result["reachable"] = (result["enabled"] and result["server_running"]
                            and await livemap_mod.reachable(instance))
     return result
+
+
+@api.api_route("/instances/{instance_id}/map/view/{path:path}", methods=["GET", "HEAD"])
+async def instance_map_view(instance_id: str, path: str, request: Request):
+    """BlueMap-Web-App der Instanz hinter dem Dashboard-Login (Reverse-Proxy)."""
+    instance = instances.get_instance(instance_id)
+    return await livemap_mod.proxy(instance, path, request.url.query,
+                                   request.method, request.headers)
 
 
 @api.put("/instances/{instance_id}/map")

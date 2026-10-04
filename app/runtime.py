@@ -23,11 +23,19 @@ from .config import settings
 
 logger = logging.getLogger("dashboard.runtime")
 
-IMAGE = "itzg/minecraft-server:latest"
+IMAGE_REPO = "itzg/minecraft-server"
+IMAGE = f"{IMAGE_REPO}:latest"
 
-# RCON-Port im Container (itzg-Standard); wird als port+1000 auf den Host
-# gemappt, damit der Dashboard-Container auch außerhalb von Docker RCON nutzt
+# Java-Varianten des itzg-Images, die sich je Instanz wählen lassen
+# ("auto" = aus der Minecraft-Version ableiten, siehe java_tag)
+JAVA_CHOICES = ("auto", "8", "11", "17", "21", "25")
+
+# RCON-Port im Container (itzg-Standard); wird als port+1000 nur auf
+# 127.0.0.1 des Hosts gemappt — für ein Dashboard außerhalb von Docker.
+# Im Docker-Betrieb läuft RCON über den Container-Namen (rcon_target).
 _RCON_PORT = 25575
+
+_RELEASE_RE = re.compile(r"^1\.(\d+)(?:\.(\d+))?$")
 
 # Loader → itzg/minecraft-server TYPE-Env
 _ITYZG_TYPE = {
@@ -109,6 +117,33 @@ def rcon_target(instance: dict) -> tuple:
     if Path("/.dockerenv").exists():
         return container_name(instance["id"]), _RCON_PORT
     return "127.0.0.1", rcon_port(instance)
+
+
+def java_tag(instance: dict) -> str:
+    """Image-Tag mit passender Java-Version zur Minecraft-Version.
+
+    itzg:latest bringt immer das neueste Java mit — ältere Server (z. B.
+    Forge 1.12/1.16) starten damit nicht. Mojang-Vorgaben: bis 1.16 Java 8,
+    1.17 bis 1.20.4 Java 17, ab 1.20.5 Java 21. Neuere Versionsschemata
+    (26.x), Snapshots und Unbekanntes bleiben auf latest. Eine Wahl je
+    Instanz (instance["java"], z. B. "17") hat Vorrang.
+    """
+    choice = str(instance.get("java") or "auto")
+    if choice != "auto" and choice in JAVA_CHOICES:
+        return f"java{choice}"
+    match = _RELEASE_RE.match(str(instance.get("game_version") or ""))
+    if not match:
+        return "latest"
+    minor, patch = int(match.group(1)), int(match.group(2) or 0)
+    if minor <= 16:
+        return "java8"
+    if minor < 20 or (minor == 20 and patch <= 4):
+        return "java17"
+    return "java21"
+
+
+def image_for(instance: dict) -> str:
+    return f"{IMAGE_REPO}:{java_tag(instance)}"
 
 
 def _env(instance: dict) -> list:
@@ -300,17 +335,21 @@ def start_instance(instance: dict) -> None:
     # Live-Karte: accept-download sicherstellen, nach Welt-Wechsel neu rendern
     from . import livemap  # lazy, vermeidet Import-Zirkel
     livemap.prepare_start(instance)
-    ports = {"25565/tcp": int(instance["port"]), "25575/tcp": rcon_port(instance)}
+    # Nur der Spiel-Port ist von außen erreichbar. RCON und Karten-Webserver
+    # binden auf 127.0.0.1: das Dashboard erreicht sie im Docker-Netz über
+    # den Container-Namen, die Karte liefert es selbst hinter dem Login aus.
+    ports: dict = {"25565/tcp": int(instance["port"]),
+                   "25575/tcp": ("127.0.0.1", rcon_port(instance))}
     web_port = livemap.map_port(instance)
     if livemap.enabled(instance) and web_port:
-        ports[f"{livemap.WEB_PORT}/tcp"] = web_port
+        ports[f"{livemap.WEB_PORT}/tcp"] = ("127.0.0.1", web_port)
 
     host_dir = Path(_host_instances_root()) / instance["id"]
     if not host_dir.name:
         raise RuntimeError("Instanz-Host-Pfad ergibt kein gültiges Verzeichnis")
     network = _network_of_dashboard(client)
     kwargs = {
-        "image": IMAGE,
+        "image": image_for(instance),
         "name": name,
         "detach": True,
         "environment": _env(instance),

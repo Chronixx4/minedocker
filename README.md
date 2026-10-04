@@ -77,7 +77,7 @@ Dashboard.
 |---|---|
 | 8080 | Dashboard (LAN/VPN — **nie** direkt ins Internet!) |
 | 25570+ | Minecraft-Spielports der Instanzen (auf dem Host veröffentlicht) |
-| port+1000 | RCON-Endpunkt der Instanz (vom Dashboard genutzt) |
+| port+1000 | RCON-Endpunkt der Instanz (nur `127.0.0.1`, vom Dashboard genutzt) |
 
 ## Schnellstart (Docker Compose — Server/NAS)
 

@@ -333,8 +333,8 @@ def set_status(instance_id: str, status: str, error: str | None = None) -> None:
 
 def update_settings(instance_id: str, *, name=None, memory=None,
                     jvm_opts=None, use_aikar=None,
-                    tags=None, port=None) -> dict:
-    """Ändert Instanz-Einstellungen (Name, RAM, JVM-Flags, Tags, Port).
+                    tags=None, port=None, java=None) -> dict:
+    """Ändert Instanz-Einstellungen (Name, RAM, JVM-Flags, Java, Tags, Port).
     Nur übergebene Felder werden geändert; JVM-/Port-Änderungen wirken
     beim nächsten (Neu-)Start. Port nur bei gestoppter Instanz änderbar."""
     instance = _load_meta(instance_id)
@@ -357,6 +357,14 @@ def update_settings(instance_id: str, *, name=None, memory=None,
     if use_aikar is not None:
         instance["use_aikar"] = bool(use_aikar)
         changed.append("use_aikar")
+    if java is not None:
+        from . import runtime  # lazy, vermeidet Import-Zirkel
+        if java not in runtime.JAVA_CHOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Java-Version muss eine von {', '.join(runtime.JAVA_CHOICES)} sein")
+        instance["java"] = java
+        changed.append("java")
     if tags is not None:
         instance["tags"] = _validate_tags(tags)
         changed.append("tags")

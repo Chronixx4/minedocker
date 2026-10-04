@@ -5,7 +5,9 @@
   der Minecraft-Client-Ressourcen (accept-download — nur nach ausdrücklicher
   Zustimmung im Dashboard) und reserviert einen Host-Port für den BlueMap-
   Webserver (Container-Port 8100).
-- Beim (Neu-)Start veröffentlicht runtime.start_instance den Port; vorher
+- Beim (Neu-)Start veröffentlicht runtime.start_instance den Port nur auf
+  127.0.0.1; der Browser sieht die Karte ausschließlich über proxy() unter
+  /api/instances/{id}/map/view/ — also nur mit Dashboard-Login. Vorher
   sorgt prepare_start() dafür, dass accept-download gesetzt ist und die Karte
   nach einem Welt-Wechsel neu gerendert wird.
 - Ausschalten entfernt nur die BlueMap-Datei; gerenderte Kartendaten bleiben.
@@ -15,9 +17,12 @@ import logging
 import re
 import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from . import instances, modrinth
 
@@ -292,12 +297,19 @@ def status(instance: dict) -> dict:
     }
 
 
-def _probe_url(instance: dict) -> str | None:
+def _upstream_base(instance: dict) -> str | None:
+    """Basis-URL des BlueMap-Webservers aus Sicht des Dashboards: im
+    Docker-Netz über den Container-Namen, sonst über den lokalen Host-Port."""
     from . import runtime
     if Path("/.dockerenv").exists():
-        return f"http://{runtime.container_name(instance['id'])}:{WEB_PORT}/settings.json"
+        return f"http://{runtime.container_name(instance['id'])}:{WEB_PORT}"
     port = map_port(instance)
-    return f"http://127.0.0.1:{port}/settings.json" if port else None
+    return f"http://127.0.0.1:{port}" if port else None
+
+
+def _probe_url(instance: dict) -> str | None:
+    base = _upstream_base(instance)
+    return f"{base}/settings.json" if base else None
 
 
 async def reachable(instance: dict) -> bool:
@@ -311,3 +323,71 @@ async def reachable(instance: dict) -> bool:
         return resp.status_code == 200
     except httpx.HTTPError:
         return False
+
+
+# Durchgereichte Header (Kartenkacheln kommen gzip-komprimiert und werden
+# unverändert weitergegeben, daher auch Content-Encoding/-Length)
+_PROXY_REQUEST_HEADERS = ("accept", "accept-encoding", "if-none-match",
+                          "if-modified-since", "range")
+_PROXY_RESPONSE_HEADERS = ("content-type", "content-encoding", "content-length",
+                           "content-range", "accept-ranges", "cache-control",
+                           "last-modified", "etag", "expires")
+# Eigene CSP für die eingebettete BlueMap-Web-App (WebGL, Worker, Inline-
+# Styles); Einbetten nur im Dashboard selbst (frame-ancestors 'self').
+MAP_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob: https:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "worker-src 'self' blob:; "
+        "object-src 'none'; base-uri 'self'; form-action 'self'; "
+        "frame-ancestors 'self'"),
+    "X-Frame-Options": "SAMEORIGIN",
+}
+
+
+async def proxy(instance: dict, path: str, query: str, method: str,
+                headers) -> StreamingResponse:
+    """Reicht eine Anfrage an den BlueMap-Webserver der Instanz durch.
+
+    Der Karten-Port ist nur auf 127.0.0.1 veröffentlicht; so ist die Karte
+    ausschließlich mit Dashboard-Login erreichbar (Route hängt am /api-Router).
+    """
+    if not enabled(instance):
+        raise HTTPException(status_code=404, detail="Live-Karte ist nicht aktiviert")
+    base = _upstream_base(instance)
+    if not base:
+        raise HTTPException(status_code=404, detail="Live-Karte hat keinen Port")
+    url = f"{base}/{quote(path, safe='/-._~')}"
+    if query:
+        url = f"{url}?{query}"
+    forward = {k: v for k, v in headers.items() if k.lower() in _PROXY_REQUEST_HEADERS}
+    client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=3.0))
+    try:
+        resp = await client.send(client.build_request(method, url, headers=forward),
+                                 stream=True)
+    except httpx.HTTPError as exc:
+        await client.aclose()
+        raise HTTPException(status_code=502,
+                            detail="Karte nicht erreichbar — läuft der Server?") from exc
+
+    async def close():
+        await resp.aclose()
+        await client.aclose()
+
+    async def body():
+        try:
+            async for chunk in resp.aiter_raw():
+                yield chunk
+        finally:
+            await close()
+
+    out = {k: v for k, v in resp.headers.items() if k.lower() in _PROXY_RESPONSE_HEADERS}
+    out.update(MAP_HEADERS)
+    # close() auch als Hintergrund-Task: greift, wenn der Body nie gelesen
+    # wird (HEAD, abgebrochene Verbindung); doppeltes aclose ist harmlos
+    return StreamingResponse(body(), status_code=resp.status_code, headers=out,
+                             background=BackgroundTask(close))

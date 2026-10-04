@@ -67,15 +67,50 @@ class TestEnvMapping:
         assert env["MEMORY"] == settings.instances_memory
 
 
+class TestJavaVersion:
+    @pytest.mark.parametrize("version,tag", [
+        ("1.7.10", "java8"),
+        ("1.12.2", "java8"),
+        ("1.16.5", "java8"),
+        ("1.17.1", "java17"),
+        ("1.18", "java17"),
+        ("1.20.4", "java17"),
+        ("1.20.5", "java21"),
+        ("1.21.4", "java21"),
+        ("26.1", "latest"),
+        ("25w14a", "latest"),
+        ("", "latest"),
+    ])
+    def test_automatisch_nach_mc_version(self, version, tag):
+        assert runtime.java_tag({"game_version": version}) == tag
+
+    def test_wahl_je_instanz_hat_vorrang(self):
+        assert runtime.java_tag({"game_version": "1.12.2", "java": "11"}) == "java11"
+        assert runtime.java_tag({"game_version": "1.12.2", "java": "auto"}) == "java8"
+        assert runtime.java_tag({"game_version": "1.12.2", "java": "kaputt"}) == "java8"
+
+    def test_start_nutzt_gewaehlte_java_version(self, fake_docker, instanz):
+        instances.update_settings(instanz["id"], java="25")
+        runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert fake_docker.containers.run_kwargs["image"] == "itzg/minecraft-server:java25"
+
+    def test_ungueltige_java_version_abgelehnt(self, instanz):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc:
+            instances.update_settings(instanz["id"], java="7")
+        assert exc.value.status_code == 400
+
+
 class TestStartStop:
     def test_start_erstellt_container(self, fake_docker, instanz):
         runtime.start_instance(instanz)
         cname = runtime.container_name(instanz["id"])
         assert cname in fake_docker.containers._items
         kwargs = fake_docker.containers.run_kwargs
-        assert kwargs["image"] == runtime.IMAGE
+        assert kwargs["image"] == "itzg/minecraft-server:java21"  # MC 1.21.4
+        # Nur der Spiel-Port ist offen; RCON bleibt auf dem Host lokal
         assert kwargs["ports"] == {"25565/tcp": instanz["port"],
-                                   "25575/tcp": instanz["rcon_port"]}
+                                   "25575/tcp": ("127.0.0.1", instanz["rcon_port"])}
         assert kwargs["labels"]["mc-dashboard.instance"] == instanz["id"]
         volumes = kwargs["volumes"]
         bind = next(iter(volumes.values()))
