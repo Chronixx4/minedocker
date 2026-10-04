@@ -258,6 +258,11 @@ class TestUpdateJob:
         assert not (d / "sodium-fabric-0.15.0.jar").exists()
         assert (d / "sodium-fabric-0.16.0.jar").read_bytes() == \
             b"NEW-JAR-BYTES"
+        # alte Version liegt als Sicherung im Papierkorb
+        trash = instances.list_trash(instanz["id"])
+        assert [(e["filename"], e["reason"]) for e in trash] == \
+            [("sodium-fabric-0.15.0.jar", "update")]
+        assert job["results"][0]["backup"] == trash[0]["id"]
 
     def test_deaktivierter_zustand_bleibt(self, instanz, _modrinth_mock):
         d = _mods_dir(instanz)
@@ -318,9 +323,10 @@ class TestUpdateJob:
         assert job["status"] == "done"
         assert job["summary"]["failed"] == 1
         assert job["summary"]["updated"] == 0
-        # alte Datei blieb erhalten
+        # alte Datei blieb erhalten, keine verwaiste Sicherung
         assert (d / "sodium-fabric-0.15.0.jar").is_file()
         assert not (d / "sodium-fabric-0.16.0.jar").exists()
+        assert instances.list_trash(instanz["id"]) == []
 
 
 # ---------------------------------------------------------------------------

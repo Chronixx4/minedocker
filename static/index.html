@@ -847,6 +847,14 @@
                     title="Mod-Liste ein-/ausklappen">Einklappen</button>
           </div>
           <p class="mods-summary muted small" id="mods-summary"></p>
+          <div id="mods-restart-note" class="mods-note hidden" role="status">
+            <span>Server läuft · Änderungen an den Mods greifen erst nach einem Neustart.</span>
+            <button id="mods-restart-btn" class="btn small-btn admin-only">Jetzt neu starten</button>
+          </div>
+          <div id="mods-problems" class="mods-note is-err hidden" role="alert">
+            <b id="mods-problems-title"></b>
+            <ul id="mods-problems-list"></ul>
+          </div>
           <div class="row mods-update-row">
             <button id="mods-update-check" class="btn small-btn admin-only">Updates prüfen</button>
             <button id="mods-update-all" class="btn primary small-btn hidden admin-only"
@@ -860,6 +868,13 @@
           <div id="mods-update-error" class="err hidden"></div>
           <ul id="detail-mods" class="mod-list compact"></ul>
           <p id="detail-mods-empty" class="empty muted hidden">Keine Mods/Modpacks installiert.</p>
+          <details id="mods-trash" class="mods-trash hidden">
+            <summary>Papierkorb <span id="mods-trash-count" class="muted"></span></summary>
+            <p class="muted small">Gelöschte und per Update ersetzte Mods bleiben
+              <span id="mods-trash-days">7</span> Tage wiederherstellbar.</p>
+            <ul id="mods-trash-list" class="mod-list compact"></ul>
+            <button id="mods-trash-empty" class="btn danger small-btn admin-only">Papierkorb leeren</button>
+          </details>
         </div>
         <div class="ws-logcol">
           <h3>Live-Log
@@ -873,17 +888,19 @@
 
   <!-- Mods suchen -->
   <section id="tab-search" class="panel">
-    <div class="card">
+    <div class="card" id="search-card">
       <div class="search-target-row">
         <label for="search-source">Quelle</label>
         <select id="search-source">
           <option value="modrinth">Modrinth</option>
           <option value="curseforge">CurseForge</option>
         </select>
-        <label for="search-target-select">Installieren in Instanz</label>
-        <select id="search-target-select">
-          <option value="">Instanz wählen…</option>
-        </select>
+        <span class="search-target-pick">
+          <label for="search-target-select">Installieren in Instanz</label>
+          <select id="search-target-select">
+            <option value="">Instanz wählen…</option>
+          </select>
+        </span>
       </div>
       <div class="search-target-row search-filters">
         <label for="search-filter-sort">Sortierung</label>
@@ -910,6 +927,7 @@
         <label for="search-filter-environment">Server/Client</label>
         <select id="search-filter-environment" title="Nur bei Modrinth verfügbar">
           <option value="">Alle Mods</option>
+          <option value="server_ok" selected>Läuft auf dem Server</option>
           <option value="server_required">Server: nötig</option>
           <option value="server">Server: nötig/optional</option>
           <option value="client_required">Client: nötig</option>
@@ -919,11 +937,10 @@
       <input id="search-input" class="search-input" type="search"
              placeholder="Mods suchen (z. B. Lithium, Sodium, JEI …)" autocomplete="off">
       <p class="muted small" id="search-target"></p>
-      <p class="muted small">Bereits installierte Mods sind grün hervorgehoben
-        (per Datei-Hash erkannt — auch wenn der Dateiname abweicht) und lassen sich
-        nicht doppelt installieren. Pflicht-Abhängigkeiten werden automatisch
-        mitinstalliert (Modrinth aus den Versions-Metadaten, CurseForge best
-        effort) und während der Installation angezeigt.</p>
+      <p class="muted small">Bereits installierte Mods sind grün hervorgehoben.
+        „Details“ zeigt Versionen, Changelog und welche Abhängigkeiten mitkommen.
+        Mit dem Häkchen merkst du mehrere Mods vor und installierst sie zusammen;
+        gemeinsame Abhängigkeiten werden dabei nur einmal geladen.</p>
       <div id="search-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
       <div id="search-error" class="err hidden"></div>
       <div id="search-results" class="results"></div>
@@ -931,6 +948,19 @@
         <button id="search-prev" class="btn" disabled>Zurück</button>
         <span id="search-page" class="muted small"></span>
         <button id="search-next" class="btn" disabled>Weiter</button>
+      </div>
+      <div id="mod-cart" class="mod-cart hidden" role="region" aria-label="Vorgemerkte Mods">
+        <div class="mod-cart-info">
+          <b id="mod-cart-title"></b>
+          <span id="mod-cart-detail" class="muted small"></span>
+        </div>
+        <div class="row">
+          <button id="mod-cart-clear" type="button" class="btn small-btn">Leeren</button>
+          <button id="mod-cart-install" type="button" class="btn primary small-btn admin-only">Alle installieren</button>
+        </div>
+        <div id="mod-cart-progress" class="mod-cart-progress hidden">
+          <div class="bar"><div id="mod-cart-bar" class="bar-fill" style="width:0%"></div></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1283,6 +1313,59 @@
   </div>
 </dialog>
 
+<!-- Modbrowser: Details eines Projekts mit Versionswahl -->
+<dialog id="mod-detail" class="modal mod-detail" aria-labelledby="md-title">
+  <div class="modal-body">
+    <div class="modal-head">
+      <div class="md-head">
+        <div id="md-icon" class="result-icon"></div>
+        <div>
+          <h2 id="md-title"></h2>
+          <a id="md-link" class="muted small" target="_blank" rel="noopener"></a>
+        </div>
+      </div>
+      <button id="md-close" type="button" class="btn">Schließen</button>
+    </div>
+    <p id="md-desc" class="muted"></p>
+    <p id="md-meta" class="muted small"></p>
+    <div id="md-loading" class="loading hidden"><span class="spinner"></span> Lade Versionen…</div>
+    <div id="md-error" class="err hidden"></div>
+    <div class="md-section">
+      <div class="md-section-head">
+        <h3 id="md-versions-title">Versionen</h3>
+        <label class="small muted"><input id="md-all-versions" type="checkbox"> Alle Versionen zeigen</label>
+      </div>
+      <ul id="md-versions" class="md-versions" role="listbox" aria-labelledby="md-versions-title"></ul>
+      <p id="md-versions-empty" class="muted small hidden"></p>
+    </div>
+    <div class="md-section">
+      <h3>Änderungen</h3>
+      <pre id="md-changelog" class="md-changelog">–</pre>
+    </div>
+    <div class="md-section">
+      <h3>Wird mitinstalliert</h3>
+      <div id="md-plan" class="muted small">–</div>
+    </div>
+    <div class="md-actions">
+      <button id="md-cart" type="button" class="btn admin-only">Vormerken</button>
+      <button id="md-install" type="button" class="btn primary admin-only">Installieren</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Rückfragen im Dashboard-Stil (statt window.confirm) -->
+<dialog id="confirm-dialog" class="modal confirm-dialog" aria-labelledby="cd-title">
+  <form method="dialog" class="modal-body">
+    <h2 id="cd-title"></h2>
+    <p id="cd-message"></p>
+    <ul id="cd-list" class="cd-list hidden"></ul>
+    <div class="md-actions">
+      <button type="submit" value="cancel" class="btn" id="cd-cancel">Abbrechen</button>
+      <button type="submit" value="ok" class="btn primary" id="cd-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="toasts" aria-live="polite"></div>
 
 <template id="tpl-result">
@@ -1299,7 +1382,13 @@
         <div class="dl-deps muted small"></div>
       </div>
     </div>
-    <button class="btn primary install admin-only">Installieren</button>
+    <div class="result-actions">
+      <button class="btn primary install admin-only">Installieren</button>
+      <button class="btn small-btn details" type="button">Details</button>
+      <label class="result-pick admin-only small" title="Zum gemeinsamen Installieren vormerken">
+        <input type="checkbox" class="pick"> Vormerken
+      </label>
+    </div>
   </article>
 </template>
 
@@ -1311,12 +1400,13 @@
     </span>
     <div class="mod-info">
       <span class="mod-name"></span>
+      <span class="mod-tags"></span>
       <span class="mod-meta muted small"></span>
     </div>
     <div class="row">
       <button class="btn primary small-btn update hidden admin-only" title="Auf neueste Version aktualisieren">Update</button>
       <button class="btn toggle admin-only" title="Mod aktivieren/deaktivieren (wird beim Serverstart berücksichtigt)"></button>
-      <button class="btn danger delete admin-only">Löschen</button>
+      <button class="btn danger delete admin-only" title="In den Papierkorb verschieben">Löschen</button>
     </div>
   </li>
 </template>

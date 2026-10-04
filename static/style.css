@@ -630,6 +630,45 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .mod-list.compact .btn.toggle { min-width: 2.4rem; }
 .mod-list.collapsed { display: none; }
 
+/* Hinweise über der Mod-Liste (Neustart nötig / erkannte Probleme) */
+.mods-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  margin: 0.35rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(246, 197, 68, 0.35);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 0.82rem;
+}
+.mods-note.is-err {
+  display: block;
+  border-color: rgba(255, 91, 79, 0.35);
+  background: var(--err-soft);
+  color: #fca5a5;
+}
+.mods-note ul { margin: 0.25rem 0 0; padding-left: 1.1rem; }
+.mods-note li { overflow-wrap: anywhere; }
+.mod-tags { display: inline-flex; gap: 0.25rem; flex: none; }
+.mod-tags:empty { display: none; }
+.mod-tag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: help;
+}
+.mod-tag.is-err { background: var(--err-soft); color: var(--err); }
+.mod-row.has-problem { border-color: rgba(255, 91, 79, 0.4); }
+.mods-trash { margin-top: 0.6rem; }
+.mods-trash summary { cursor: pointer; font-size: 0.85rem; color: var(--text-2); }
+.mods-trash .mod-list { margin-bottom: 0.5rem; }
+
 /* ---------- Detail: Spieler-Verwaltung (RCON) ---------- */
 .rcon-actions {
   display: flex;
@@ -2848,3 +2887,132 @@ kbd {
   .world-form .toolbar-field { width: 100%; }
   .map-frame { height: 60vh; }
 }
+
+/* ---------- Modbrowser: Server-Bereich, Details, Vormerken ---------- */
+.ws-mods-seg { margin-bottom: 0.8rem; }
+#search-card.embedded { box-shadow: none; border: 0; padding: 0; background: none; }
+#search-card.embedded .search-target-pick { display: none; }
+.search-target-pick { display: contents; }
+.result-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+  flex: none;
+}
+.result-pick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+.result.is-client-only .side { color: var(--warn); }
+.mod-cart {
+  position: sticky;
+  bottom: 0.75rem;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 1rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--surface-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.mod-cart.hidden { display: none; }
+.mod-cart-info { min-width: 0; flex: 1 1 260px; overflow-wrap: anywhere; }
+.mod-cart-info b { margin-right: 0.35rem; }
+.mod-cart-progress { flex: 1 0 100%; }
+
+.mod-detail { width: min(720px, calc(100vw - 2rem)); }
+.md-head { display: flex; gap: 0.8rem; align-items: center; min-width: 0; }
+.md-head h2 { margin: 0; overflow-wrap: anywhere; }
+.md-head a { color: var(--text-2); }
+.md-head a[href] { color: var(--accent-2); }
+#md-desc { margin: 0.6rem 0 0.2rem; }
+.md-section { margin-top: 1rem; }
+.md-section h3 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+.md-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.md-section-head label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+.md-versions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+  max-height: 210px;
+  overflow-y: auto;
+}
+.md-version {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.2rem 0.8rem;
+  padding: 0.4rem 0.65rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.md-version:hover { border-color: var(--border-strong); }
+.md-version:focus-visible { outline: none; box-shadow: var(--ring); }
+.md-version.active { border-color: var(--accent); background: var(--accent-soft); }
+.md-vnum { font-family: var(--mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.md-version.is-pre .md-vnum { color: var(--warn); }
+.md-changelog {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#md-plan ul { margin: 0; padding-left: 1.1rem; overflow-wrap: anywhere; }
+.md-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+}
+.confirm-dialog { width: min(460px, calc(100vw - 2rem)); }
+.confirm-dialog h2 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.confirm-dialog p { margin: 0; color: var(--text-2); }
+.cd-list {
+  margin: 0.6rem 0 0;
+  padding-left: 1.1rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow-y: auto;
+}
+@media (max-width: 560px) {
+  .result-actions { flex-direction: row; flex-wrap: wrap; width: 100%; }
+}
+/* Eingebettet: Leiste über der Hotbar halten */
+#search-card.embedded .mod-cart { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }

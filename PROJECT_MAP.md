@@ -69,6 +69,22 @@ Checkliste, Dashboard-Schnellstart).
   - catalog.py – Katalog: Mojang-Versionen (Releases/Snapshots) + Loader-Versionen
     (Fabric/Quilt-Meta, Forge-Promotions, NeoForge-Maven, Paper Fill-API v3,
     Bukkit/Spigot-BuildTools-Hinweis); 10-min-Cache, nie werfend je Loader
+  - modmeta.py – Mod-Metadaten aus der .jar (fabric.mod.json, quilt.mod.json,
+    (neoforge.)mods.toml; Jar-in-Jar eine Ebene tief) + Problem-Erkennung
+    (fehlende/deaktivierte Pflicht-Abhängigkeit, falscher Loader, reine
+    Client-Mod, doppelte Mod-ID); instances.mods_overview() liefert Mods +
+    Probleme + mods_changed_at (Hinweis „Neustart nötig“). Mod-Papierkorb
+    unter {INSTANCES_DIR}/../mod-trash/{id}/ (Löschen und Mod-Updates legen
+    die alte .jar dort ab, 7 Tage, Routen /instances/{id}/mod-trash)
+  - modinstall.py – Modbrowser: Projekt-Details mit Versionsliste
+    (Modrinth/CurseForge, gefiltert auf Loader+MC-Version der Instanz oder
+    alle), Installationsplan für eine oder mehrere vorgemerkte Mods mit
+    gemeinsam aufgelösten Pflicht-Abhängigkeiten (/instances/{id}/mods/plan),
+    gebündelte Installation als ein Job (/instances/{id}/mods/install; 409
+    bei vorhandenen Dateien, mit overwrite landen die alten im Papierkorb);
+    Frontend: Suche im Server-Bereich unter Mods › Hinzufügen (Karte wird
+    zwischen Tab „Mods suchen“ und Workspace verschoben), Detail-Dialog,
+    Vormerk-Leiste, eigene Rückfragen (confirmDialog statt window.confirm)
   - packs.py – Modpack-Installer: Modrinth-Suche, mrpack-Download+Entpacken,
     Upload-Installation (.mrpack + CurseForge-.zip mit manifest.json),
     Index-Normalisierung (mrpack/CF -> internes Schema: title, game_version,

@@ -615,13 +615,27 @@ async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
                     raise RuntimeError(f"Zieldatei '{target_name}' existiert bereits")
                 headers = curseforge._headers() \
                     if item["source"] == "curseforge" else modrinth._headers()
-                await _download_to(
-                    client, latest["url"], new_path, latest["size"],
-                    sha1=latest["sha1"], headers=headers,
-                    verify_url=item["source"] == "curseforge")
+                # Alte Version vorher in den Papierkorb sichern (Rückweg,
+                # falls die neue Version Probleme macht)
+                backup = None
+                if old_path.is_file():
+                    backup = await asyncio.to_thread(
+                        instances.move_to_trash, instance["id"], old_path,
+                        "update", True)
+                try:
+                    await _download_to(
+                        client, latest["url"], new_path, latest["size"],
+                        sha1=latest["sha1"], headers=headers,
+                        verify_url=item["source"] == "curseforge")
+                except Exception:
+                    if backup:
+                        instances.discard_trash_entry(instance["id"], backup)
+                    raise
                 if new_path.resolve() != old_path.resolve() and old_path.is_file():
                     old_path.unlink()
                 entry["new_filename"] = target_name
+                if backup:
+                    entry["backup"] = backup
             except Exception as exc:
                 entry["status"] = S_ERROR
                 entry["error"] = str(exc) or exc.__class__.__name__

@@ -48,7 +48,7 @@
     if (!res.ok) {
       throw Object.assign(
         new Error(data.detail || `HTTP-Fehler ${res.status}`),
-        { status: res.status, filename: data.filename }
+        { status: res.status, filename: data.filename, data }
       );
     }
     return data;
@@ -218,8 +218,34 @@
       { once: true });
   }
 
-  // ESC schließt die drei Modal-Dialoge ebenfalls animiert
-  ["users-dialog", "password-dialog", "fb-editor"].forEach((id) => {
+  // Rückfrage im Dashboard-Stil statt window.confirm: zeigt Titel, Text und
+  // optional eine Liste (z. B. betroffene Dateien). Promise<boolean>.
+  function confirmDialog({ title, message = "", list = [], ok = "OK", danger = false }) {
+    const dlg = $("#confirm-dialog");
+    setText($("#cd-title"), title);
+    setText($("#cd-message"), message);
+    const ul = $("#cd-list");
+    ul.textContent = "";
+    for (const item of list) {
+      const li = document.createElement("li");
+      li.textContent = item;
+      ul.appendChild(li);
+    }
+    show(ul, list.length > 0);
+    const okBtn = $("#cd-ok");
+    setText(okBtn, ok);
+    okBtn.classList.toggle("danger", danger);
+    okBtn.classList.toggle("primary", !danger);
+    dlg.returnValue = "";
+    return new Promise((resolve) => {
+      dlg.addEventListener("close", () => resolve(dlg.returnValue === "ok"), { once: true });
+      dlg.showModal();
+      okBtn.focus();
+    });
+  }
+
+  // ESC schließt die Modal-Dialoge ebenfalls animiert
+  ["users-dialog", "password-dialog", "fb-editor", "mod-detail"].forEach((id) => {
     const dlg = document.getElementById(id);
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(dlg); });
   });
@@ -603,12 +629,18 @@
       } else {
         applyTabUi();
       }
-      if (state.tab === "servers") loadInstances();
+      if (state.tab === "servers") {
+        loadInstances();
+        // Mod-Suche zurück in den Server-Bereich holen, falls dort offen
+        if (state.detailId && state.wsTab === "mods" && state.modsView === "add") {
+          mountSearch(true);
+        }
+      }
       if (state.tab === "search") {
         // Erst Ziele (und Filter) laden, dann direkt suchen — sonst läuft
         // die Suche ins Leere, bevor die Instanz-Ziele da sind.
         loadInstanceTargets().then(() => {
-          if (!$("#search-results").childElementCount) doSearch(0); // direkt laden
+          if (!mountSearch(false) && !$("#search-results").childElementCount) doSearch(0);
         });
         loadSearchFilters(); // Filter-Optionen (MC-Versionen) einmalig laden
       }
@@ -1546,7 +1578,39 @@
   }
 
   function searchTarget() {
+    // Im Server-Bereich eingebettet: Ziel ist immer der geöffnete Server
+    if (state.searchEmbedded) {
+      if (!state.detailId) return null;
+      const d = state.detailData?.id === state.detailId ? state.detailData
+        : currentDetailInst();
+      if (!d) return null;
+      return { instanceId: d.id, label: d.name, isInstance: true,
+        loader: d.loader, game_version: d.game_version };
+    }
     return targetFromSelect($("#search-target-select"));
+  }
+
+  // Die Mod-Suche gibt es einmal: im Tab „Mods suchen“ (mit Zielauswahl)
+  // oder im Server-Bereich unter Mods › Hinzufügen (Ziel = offener Server).
+  // Die Karte wird dafür zwischen beiden Orten verschoben.
+  function mountSearch(embedded) {
+    const card = $("#search-card");
+    const host = embedded ? $("#ws-mods-add") : $("#tab-search");
+    if (!card || !host) return;
+    if (card.parentElement !== host) host.appendChild(card);
+    card.classList.toggle("embedded", embedded);
+    state.searchEmbedded = embedded;
+    const id = searchTarget()?.instanceId || null;
+    const changed = state.searchMountedFor !== `${embedded}:${id}`;
+    state.searchMountedFor = `${embedded}:${id}`;
+    cartSyncTarget();
+    renderCart();
+    updateSearchHint();
+    if (changed) {
+      loadSearchFilters();
+      doSearch(0);
+    }
+    return changed;
   }
 
   function mpTarget() {
@@ -1555,9 +1619,11 @@
 
   function updateSearchHint() {
     const target = searchTarget();
-    setText($("#search-target"), target
-      ? `Installationsziel: ${target.label} · Mods landen im mods-Ordner dieser Instanz`
-      : "Keine Ziel-Instanz ausgewählt — Suche deaktiviert.");
+    setText($("#search-target"), !target
+      ? "Keine Ziel-Instanz ausgewählt — Suche deaktiviert."
+      : state.searchEmbedded
+        ? `Mods für ${target.label} · ${target.loader} ${target.game_version}`
+        : `Installationsziel: ${target.label} · Mods landen im mods-Ordner dieser Instanz`);
   }
 
   function updateMpHint() {
@@ -1568,6 +1634,8 @@
   }
 
   $("#search-target-select").addEventListener("change", () => {
+    cartSyncTarget();
+    renderCart();
     updateSearchHint();
     doSearch(0); // Suche passend zum neuen Ziel neu ausführen
   });
@@ -1597,7 +1665,8 @@
   state.searchFilterSort = "relevance";
   state.searchFilterLoader = "";     // "" = wie Instanz, "any" = alle Loader
   state.searchFilterVersion = "";    // "" = wie Instanz, "any" = alle Versionen
-  state.searchFilterEnvironment = ""; // "" = alle Mods (nur Modrinth)
+  // Standard: reine Client-Mods ausblenden (nur Modrinth kennt die Angabe)
+  state.searchFilterEnvironment = "server_ok";
   state.searchFiltersLoaded = false;
 
   for (const [sel, key] of [
@@ -1608,6 +1677,7 @@
   ]) {
     $(sel).addEventListener("change", (e) => {
       state[key] = e.target.value;
+      if (key === "searchFilterEnvironment") state.searchEnvironmentTouched = true;
       doSearch(0);
     });
   }
@@ -1621,6 +1691,9 @@
     if (disabled) {
       sel.value = "";
       state.searchFilterEnvironment = "";
+    } else if (!state.searchFilterEnvironment && !state.searchEnvironmentTouched) {
+      sel.value = "server_ok";
+      state.searchFilterEnvironment = "server_ok";
     }
   }
   updateEnvironmentFilter();
@@ -1709,30 +1782,21 @@
       hit._source = data.source || "modrinth"; // Quelle pro Treffer merken
       const node = tpl.content.cloneNode(true);
       const icon = node.querySelector(".result-icon");
-      if (hit.icon_url && hit.icon_url.startsWith("https://")) {
-        const img = document.createElement("img");
-        img.src = hit.icon_url;
-        img.alt = "";
-        img.loading = "lazy";
-        icon.appendChild(img);
-      } else {
-        icon.textContent = (hit.title || "?").charAt(0).toUpperCase();
-      }
+      fillModIcon(icon, hit.icon_url, hit.title);
       setText(node.querySelector(".name"), hit.title || hit.slug);
       setText(node.querySelector(".author"), hit.author ? "von " + hit.author : "");
       setText(node.querySelector(".desc"), hit.description || "");
       setText(node.querySelector(".version"),
-        hit.latest_version ? `Version ${hit.latest_version}` : "Version unbekannt");
+        hit.latest_version ? `Version ${hit.latest_version}` : "");
       setText(node.querySelector(".downloads"), `${fmtNumber(hit.downloads)} Downloads`);
-      const sideMap = { required: "Server: nötig", optional: "Server: optional" };
-      const side = sideMap[hit.server_side]
-        ?? (hit.server_side === null ? "Server: unbekannt" : "Server: client-seitig");
-      setText(node.querySelector(".side"), side);
+      setText(node.querySelector(".side"), sideLabel(hit.server_side));
+      const card = node.querySelector(".result");
+      if (hit.server_side === "unsupported") card.classList.add("is-client-only");
       // „Installiert“-Markierung: Mod liegt bereits in der Ziel-Instanz
       // (per Datei-Hash erkannt, auch bei abweichendem Dateinamen) —
       // Karte grün hervorheben + Tag prominent neben dem Titel
       if (hit.installed) {
-        node.querySelector(".result").classList.add("is-installed");
+        card.classList.add("is-installed");
         const tag = document.createElement("span");
         tag.className = "installed-tag";
         tag.textContent = "Installiert";
@@ -1741,13 +1805,22 @@
       const btn = node.querySelector(".install");
       const progressBox = node.querySelector(".dl-progress");
       const bar = node.querySelector(".dl-bar");
+      const pick = node.querySelector(".pick");
       if (hit.installed) {
         btn.disabled = true;
         btn.textContent = "Installiert ✓";
         btn.classList.add("installed");
         btn.title = "Bereits in der Ziel-Instanz installiert";
+        pick.disabled = true;
       }
+      pick.checked = state.cart.has(cartKey(hit._source, hit.project_id));
+      pick.addEventListener("change", () => {
+        if (pick.checked) cartAdd(hit, null);
+        else cartRemove(hit._source, hit.project_id);
+      });
+      card.dataset.cartKey = cartKey(hit._source, hit.project_id);
       btn.addEventListener("click", () => installMod(hit, btn, progressBox, bar));
+      node.querySelector(".details").addEventListener("click", () => openModDetail(hit));
       container.appendChild(node);
     }
     setText($("#search-page"), `Seite ${Math.floor(state.offset / 20) + 1} · ${fmtNumber(state.total)} Treffer`);
@@ -1755,79 +1828,491 @@
     $("#search-next").disabled = state.offset + 20 >= state.total;
   }
 
-  /* ---------- One-Click-Download mit Fortschritt ---------- */
-  async function installMod(hit, btn, progressBox, bar) {
+  // Modrinth: required/optional/unsupported/unknown; CurseForge: null
+  function sideLabel(side) {
+    const map = { required: "Server: nötig", optional: "Server: optional",
+      unsupported: "Nur Client" };
+    return map[side] ?? "Server: unbekannt";
+  }
+
+  function fillModIcon(box, url, title) {
+    box.textContent = "";
+    if (url && String(url).startsWith("https://")) {
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = "";
+      img.loading = "lazy";
+      box.appendChild(img);
+    } else {
+      box.textContent = (title || "?").charAt(0).toUpperCase();
+    }
+  }
+
+  /* ---------- Installation (einzeln, aus den Details oder vorgemerkt) ---------- */
+  // Reine Client-Mods (Sodium, Iris …) lassen den Server oft abstürzen
+  async function confirmClientOnly(entries) {
+    const names = entries.filter((e) => e.server_side === "unsupported")
+      .map((e) => e.title || e.project_id);
+    if (!names.length) return true;
+    return confirmDialog({
+      title: names.length === 1 ? "Reine Client-Mod installieren?" : "Reine Client-Mods installieren?",
+      message: "Laut Modrinth laufen diese Mods nur im Spiel-Client und können den "
+        + "Serverstart verhindern.",
+      list: names,
+      ok: "Trotzdem installieren",
+      danger: true,
+    });
+  }
+
+  // Startet eine Installation über /mods/install (ein Job für alle Dateien).
+  // ui: {btn, bar} für den Fortschritt. Rückgabe: finaler Job oder null
+  // (abgebrochen). Wirft bei Fehlern.
+  async function runModInstall(items, target, ui) {
+    const start = (overwrite) => api(`/api/instances/${target.instanceId}/mods/install`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, overwrite }),
+    });
+    let job;
+    try {
+      job = await start(false);
+    } catch (e) {
+      if (e.status !== 409) throw e;
+      const ok = await confirmDialog({
+        title: "Dateien ersetzen?",
+        message: "Diese Dateien liegen schon im mods-Ordner. Die bisherigen Versionen "
+          + "kommen beim Ersetzen in den Papierkorb.",
+        list: e.data?.conflicts || [],
+        ok: "Ersetzen",
+      });
+      if (!ok) return null;
+      job = await start(true);
+    }
+    if (ui.onStart) ui.onStart(job);
+    const finalJob = await pollJob(job, ui.bar, ui.btn);
+    const deps = (job.dependencies || []).length;
+    const done = (job.items || []).length - (finalJob.item_errors || []).length;
+    const what = done === 1 && items.length === 1
+      ? `"${items[0].title || job.items[0].filename}"`
+      : `${done} Mod${done === 1 ? "" : "s"}`;
+    toast(`${what} installiert${deps ? ` (+${deps} Abhängigkeit${deps === 1 ? "" : "en"})` : ""} → ${target.label}.`,
+      "success");
+    const problems = [...(finalJob.item_errors || []),
+      ...(job.errors || []).map((e) => `${e.project_id}: ${e.detail}`)];
+    if (problems.length) toast(`Nicht installiert: ${problems.join(" · ")}`, "error");
+    if (Array.isArray(finalJob.dep_errors) && finalJob.dep_errors.length) {
+      toast(`Abhängigkeiten fehlgeschlagen: ${finalJob.dep_errors.join(", ")}`, "error");
+    }
+    // Mod-Liste des Servers auffrischen, falls gerade geöffnet
+    if (state.detailId === target.instanceId) loadDetail();
+    return finalJob;
+  }
+
+  function markInstalled(source, projectId) {
+    const card = document.querySelector(
+      `#search-results .result[data-cart-key="${CSS.escape(cartKey(source, projectId))}"]`);
+    if (!card) return;
+    card.classList.add("is-installed");
+    const btn = card.querySelector(".install");
     btn.disabled = true;
-    btn.textContent = "Starte…";
+    btn.classList.add("installed");
+    btn.textContent = "Installiert ✓";
+    const pick = card.querySelector(".pick");
+    pick.checked = false;
+    pick.disabled = true;
+  }
+
+  async function installMod(hit, btn, progressBox, bar) {
     const target = searchTarget();
     if (!target) {
       toast("Keine Ziel-Instanz ausgewählt.", "error");
-      btn.disabled = false;
-      btn.textContent = "Installieren";
       return;
     }
-    // Quelle des Treffers nutzen, nicht den aktuell gewählten Suchfilter
-    // (verhindert Verwechslungen nach einem Quellenwechsel bei noch
-    // sichtbaren Treffern der vorherigen Quelle)
-    const endpoint = (hit._source || state.searchSource) === "curseforge"
-      ? "/api/curseforge/download" : "/api/modrinth/download";
-    const start = (overwrite) => api(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        project_id: hit.project_id,
-        overwrite,
-        instance_id: target.instanceId,
-      }),
-    });
+    const source = hit._source || state.searchSource;
+    if (!(await confirmClientOnly([hit]))) return;
+    btn.disabled = true;
+    btn.textContent = "Starte…";
     try {
-      let job;
-      try {
-        job = await start(false);
-      } catch (e) {
-        if (e.status !== 409) throw e;
-        const name = e.filename || hit.title || "Mod";
-        if (!window.confirm(`"${name}" existiert bereits am gewählten Ziel.\nÜberschreiben?`)) {
-          btn.disabled = false;
-          btn.textContent = "Installieren";
-          return;
-        }
-        job = await start(true);
+      const job = await runModInstall(
+        [{ source, project_id: hit.project_id, title: hit.title || null }], target, {
+          btn, bar,
+          onStart: (started) => {
+            show(progressBox, true);
+            // Abhängigkeiten vorab anzeigen (welche Dateien mit geladen werden)
+            const depNames = (started.dependencies || []).map((d) => d.filename).filter(Boolean);
+            setText(progressBox.querySelector(".dl-deps"), depNames.length
+              ? `Mit installiert: ${depNames.slice(0, 3).join(", ")}`
+                + (depNames.length > 3 ? ` (+${depNames.length - 3})` : "")
+              : "");
+          },
+        });
+      if (!job) {
+        btn.disabled = false;
+        btn.textContent = "Installieren";
+        return;
       }
-      show(progressBox, true);
-      // Abhängigkeiten vorab anzeigen (welche Dateien mit geladen werden)
-      const depsBox = progressBox.querySelector(".dl-deps");
-      const depNames = (Array.isArray(job.dependencies) ? job.dependencies : [])
-        .map((d) => d.filename).filter(Boolean);
-      if (depNames.length) {
-        const shown = depNames.slice(0, 3).join(", ");
-        setText(depsBox, `Mit installiert: ${shown}` +
-          (depNames.length > 3 ? ` (+${depNames.length - 3})` : ""));
-      } else {
-        setText(depsBox, "");
-      }
-      const finalJob = await pollJob(job, bar, btn);
-      hit.installed = true; // lokal markieren (kein erneutes Installieren möglich)
-      const card = btn.closest(".result");
-      if (card) card.classList.add("is-installed");
-      btn.disabled = true;
-      btn.classList.add("installed");
-      btn.textContent = "Installiert ✓";
-      const deps = Array.isArray(finalJob.dependencies) ? finalJob.dependencies.length
-        : Array.isArray(job.dependencies) ? job.dependencies.length : 0;
-      toast(`"${hit.title}" installiert${deps ? ` (+${deps} Abhängigkeit${deps === 1 ? "" : "en"})` : ""} → ${target.label}.`,
-        "success");
-      if (Array.isArray(finalJob.dep_errors) && finalJob.dep_errors.length) {
-        toast(`Abhängigkeiten fehlgeschlagen: ${finalJob.dep_errors.join(", ")}`, "error");
-      }
+      hit.installed = true;
+      cartRemove(source, hit.project_id);
+      markInstalled(source, hit.project_id);
     } catch (e) {
-      toast(`Download fehlgeschlagen: ${e.message}`, "error");
+      toast(`Installation fehlgeschlagen: ${e.message}`, "error");
       btn.disabled = false;
       btn.textContent = "Installieren";
     } finally {
       show(progressBox, false);
     }
   }
+
+  /* ---------- Vormerken: mehrere Mods gemeinsam installieren ---------- */
+  state.cart = new Map();    // "quelle:projekt" → {source, project_id, version_id, title, server_side}
+  state.cartTarget = null;   // Instanz, für die vorgemerkt wurde
+  state.cartPlanSeq = 0;
+
+  function cartKey(source, projectId) {
+    return `${source}:${projectId}`;
+  }
+
+  function cartSyncTarget() {
+    const id = searchTarget()?.instanceId || null;
+    if (state.cartTarget !== id) {
+      state.cart.clear();
+      state.cartTarget = id;
+    }
+  }
+
+  function cartAdd(hit, version) {
+    cartSyncTarget();
+    const source = hit._source || state.searchSource;
+    state.cart.set(cartKey(source, hit.project_id), {
+      source,
+      project_id: hit.project_id,
+      version_id: version?.id || null,
+      version_label: version?.version_number || null,
+      title: hit.title || hit.slug || hit.project_id,
+      server_side: hit.server_side,
+    });
+    renderCart();
+  }
+
+  function cartRemove(source, projectId) {
+    if (!state.cart.delete(cartKey(source, projectId))) return;
+    renderCart();
+  }
+
+  function cartClear() {
+    state.cart.clear();
+    document.querySelectorAll("#search-results .pick").forEach((p) => { p.checked = false; });
+    renderCart();
+  }
+
+  function renderCart() {
+    const n = state.cart.size;
+    show($("#mod-cart"), n > 0);
+    document.querySelectorAll("#search-results .result").forEach((card) => {
+      const pick = card.querySelector(".pick");
+      if (pick && !pick.disabled) pick.checked = state.cart.has(card.dataset.cartKey);
+    });
+    if (!n) return;
+    const entries = [...state.cart.values()];
+    setText($("#mod-cart-title"), n === 1 ? "1 Mod vorgemerkt" : `${n} Mods vorgemerkt`);
+    const names = entries.map((e) => e.title + (e.version_label ? ` ${e.version_label}` : ""));
+    setText($("#mod-cart-detail"), `· ${names.join(", ")} · Abhängigkeiten werden geprüft…`);
+    // Vorschau (Abhängigkeiten + Größe) kurz verzögert, damit schnelles
+    // Anhaken nicht für jeden Klick eine Anfrage auslöst
+    clearTimeout(state.cartPlanTimer);
+    const seq = ++state.cartPlanSeq;
+    state.cartPlanTimer = setTimeout(async () => {
+      const target = searchTarget();
+      if (!target) return;
+      try {
+        const plan = await api(`/api/instances/${target.instanceId}/mods/plan`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: cartItems() }),
+        });
+        if (seq !== state.cartPlanSeq) return;
+        const deps = plan.dependencies.length;
+        const parts = [names.join(", ")];
+        parts.push(deps === 0 ? "keine zusätzlichen Abhängigkeiten"
+          : deps === 1 ? "1 Abhängigkeit kommt dazu" : `${deps} Abhängigkeiten kommen dazu`);
+        parts.push(fmtBytes(plan.total_size));
+        if (plan.errors.length) parts.push(`${plan.errors.length} nicht installierbar`);
+        setText($("#mod-cart-detail"), `· ${parts.join(" · ")}`);
+      } catch (e) {
+        if (seq === state.cartPlanSeq) {
+          setText($("#mod-cart-detail"), `· ${names.join(", ")} · Vorschau nicht möglich: ${e.message}`);
+        }
+      }
+    }, 500);
+  }
+
+  function cartItems() {
+    return [...state.cart.values()].map((e) => ({
+      source: e.source, project_id: e.project_id,
+      version_id: e.version_id, title: e.title,
+    }));
+  }
+
+  $("#mod-cart-clear").addEventListener("click", cartClear);
+  $("#mod-cart-install").addEventListener("click", async () => {
+    const target = searchTarget();
+    if (!target || !state.cart.size) return;
+    const entries = [...state.cart.values()];
+    if (!(await confirmClientOnly(entries))) return;
+    const btn = $("#mod-cart-install");
+    btn.disabled = true;
+    btn.textContent = "Starte…";
+    $("#mod-cart-bar").style.width = "0%";
+    try {
+      const job = await runModInstall(cartItems(), target, {
+        btn, bar: $("#mod-cart-bar"),
+        onStart: () => show($("#mod-cart-progress"), true),
+      });
+      if (job) {
+        const failed = new Set((job.bundle || [])
+          .filter((e) => e.kind === "item" && e.status !== "fertig")
+          .map((e) => cartKey(e.source, e.project_id)));
+        for (const e of entries) {
+          const key = cartKey(e.source, e.project_id);
+          if (!failed.has(key)) {
+            state.cart.delete(key);
+            markInstalled(e.source, e.project_id);
+          }
+        }
+        renderCart();
+      }
+    } catch (e) {
+      toast(`Installation fehlgeschlagen: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Alle installieren";
+      show($("#mod-cart-progress"), false);
+    }
+  });
+
+  /* ---------- Details: Versionen, Changelog, Abhängigkeits-Vorschau ---------- */
+  state.md = null; // {hit, source, data, version, seq}
+
+  function openModDetail(hit) {
+    const target = searchTarget();
+    if (!target) {
+      toast("Keine Ziel-Instanz ausgewählt.", "error");
+      return;
+    }
+    // loadSeq/planSeq verwerfen veraltete Antworten (schnelles Umschalten)
+    state.md = { hit, source: hit._source || state.searchSource, target, data: null,
+      version: null, loadSeq: 0, planSeq: 0 };
+    fillModIcon($("#md-icon"), hit.icon_url, hit.title);
+    setText($("#md-title"), hit.title || hit.slug || hit.project_id);
+    setText($("#md-desc"), hit.description || "");
+    setText($("#md-meta"), "");
+    $("#md-link").removeAttribute("href");
+    setText($("#md-link"), hit.author ? `von ${hit.author}` : "");
+    $("#md-all-versions").checked = false;
+    $("#md-versions").textContent = "";
+    setText($("#md-changelog"), "–");
+    setText($("#md-plan"), "–");
+    $("#md-install").disabled = true;
+    $("#md-cart").disabled = true;
+    setText($("#md-install"), hit.installed ? "Andere Version installieren" : "Installieren");
+    $("#mod-detail").showModal();
+    loadModDetail();
+  }
+
+  async function loadModDetail() {
+    const md = state.md;
+    if (!md) return;
+    const seq = ++md.loadSeq;
+    show($("#md-loading"), true);
+    show($("#md-error"), false);
+    show($("#md-versions-empty"), false);
+    $("#md-versions").textContent = "";
+    try {
+      const all = $("#md-all-versions").checked ? "true" : "false";
+      const data = await api(`/api/instances/${md.target.instanceId}/mods/browse/`
+        + `${md.source}/${encodeURIComponent(md.hit.project_id)}?all_versions=${all}`);
+      if (state.md !== md || seq !== md.loadSeq) return;
+      md.data = data;
+      const p = data.project;
+      setText($("#md-title"), p.title);
+      if (p.description) setText($("#md-desc"), p.description);
+      fillModIcon($("#md-icon"), p.icon_url || md.hit.icon_url, p.title);
+      if (p.page_url && p.page_url.startsWith("https://")) {
+        $("#md-link").href = p.page_url;
+        setText($("#md-link"), `${md.hit.author ? `von ${md.hit.author} · ` : ""}`
+          + `auf ${md.source === "curseforge" ? "CurseForge" : "Modrinth"} öffnen ↗`);
+      }
+      const meta = [`${fmtNumber(p.downloads)} Downloads`];
+      if (p.server_side !== null && p.server_side !== undefined) meta.push(sideLabel(p.server_side));
+      if (p.categories?.length) meta.push(p.categories.join(", "));
+      setText($("#md-meta"), meta.join(" · "));
+      setText($("#md-versions-title"), data.filtered
+        ? `Versionen für ${data.loader} ${data.game_version}` : "Alle Versionen");
+      renderModVersions(data.versions);
+    } catch (e) {
+      if (state.md !== md || seq !== md.loadSeq) return;
+      const hint = md.source === "curseforge" ? cfNoKeyHint(e) : null;
+      setText($("#md-error"), hint || `Details nicht abrufbar: ${e.message}`);
+      show($("#md-error"), true);
+    } finally {
+      if (state.md === md && seq === md.loadSeq) show($("#md-loading"), false);
+    }
+  }
+
+  const VERSION_TYPE_LABELS = { release: "", beta: "Beta", alpha: "Alpha" };
+
+  function renderModVersions(versions) {
+    const list = $("#md-versions");
+    list.textContent = "";
+    const md = state.md;
+    if (!versions.length) {
+      setText($("#md-versions-empty"), md.data.filtered
+        ? `Keine Version für ${md.data.loader} ${md.data.game_version}. `
+          + "„Alle Versionen zeigen“ listet auch unpassende."
+        : "Keine Versionen gefunden.");
+      show($("#md-versions-empty"), true);
+      setText($("#md-changelog"), "–");
+      setText($("#md-plan"), "–");
+      $("#md-install").disabled = true;
+      $("#md-cart").disabled = true;
+      return;
+    }
+    versions.forEach((v, i) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "md-version";
+      btn.setAttribute("role", "option");
+      const num = document.createElement("span");
+      num.className = "md-vnum";
+      num.textContent = v.version_number || v.name || v.filename;
+      const info = document.createElement("span");
+      info.className = "md-vinfo muted small";
+      const date = v.date ? new Date(v.date) : null;
+      const parts = [];
+      if (VERSION_TYPE_LABELS[v.type]) parts.push(VERSION_TYPE_LABELS[v.type]);
+      if (date && !Number.isNaN(date.getTime())) parts.push(date.toLocaleDateString("de-DE"));
+      if (!md.data.filtered && v.game_versions?.length) parts.push(v.game_versions.join(", "));
+      if (!md.data.filtered && v.loaders?.length) parts.push(v.loaders.join("/"));
+      parts.push(fmtBytes(v.size));
+      info.textContent = parts.join(" · ");
+      if (v.type !== "release") btn.classList.add("is-pre");
+      btn.append(num, info);
+      btn.addEventListener("click", () => selectModVersion(v, btn));
+      li.appendChild(btn);
+      list.appendChild(li);
+      if (i === 0) selectModVersion(v, btn);
+    });
+  }
+
+  async function selectModVersion(v, btn) {
+    const md = state.md;
+    if (!md) return;
+    md.version = v;
+    const seq = ++md.planSeq;
+    document.querySelectorAll("#md-versions .md-version").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+      b.setAttribute("aria-selected", b === btn ? "true" : "false");
+    });
+    $("#md-install").disabled = false;
+    $("#md-cart").disabled = false;
+    setText($("#md-install"), `${v.version_number || "Version"} installieren`);
+    // Changelog: Modrinth liefert ihn mit, CurseForge nur einzeln
+    if (v.changelog !== null && v.changelog !== undefined) {
+      setText($("#md-changelog"), v.changelog || "Kein Changelog angegeben.");
+    } else {
+      setText($("#md-changelog"), "Lade Changelog…");
+      api(`/api/curseforge/project/${encodeURIComponent(md.data.project.project_id)}`
+        + `/files/${encodeURIComponent(v.id)}/changelog`)
+        .then((data) => {
+          if (state.md === md && md.version === v) {
+            v.changelog = data.changelog || "";
+            setText($("#md-changelog"), v.changelog || "Kein Changelog angegeben.");
+          }
+        })
+        .catch((e) => {
+          if (state.md === md && md.version === v) {
+            setText($("#md-changelog"), `Changelog nicht abrufbar: ${e.message}`);
+          }
+        });
+    }
+    // Vorschau: welche Dateien diese Version mitbringt
+    setText($("#md-plan"), "Prüfe Abhängigkeiten…");
+    try {
+      const plan = await api(`/api/instances/${md.target.instanceId}/mods/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: [{ source: md.source,
+          project_id: md.data.project.project_id, version_id: v.id }] }),
+      });
+      if (state.md !== md || seq !== md.planSeq) return;
+      renderModPlan(plan);
+    } catch (e) {
+      if (state.md === md && seq === md.planSeq) {
+        setText($("#md-plan"), `Vorschau nicht möglich: ${e.message}`);
+      }
+    }
+  }
+
+  function renderModPlan(plan) {
+    const box = $("#md-plan");
+    box.textContent = "";
+    if (plan.errors.length) {
+      box.textContent = plan.errors.map((e) => e.detail).join(" · ");
+      return;
+    }
+    const lines = [];
+    for (const d of plan.dependencies) lines.push(`${d.filename} (${fmtBytes(d.size)})`);
+    if (!lines.length) lines.push("Keine zusätzlichen Pflicht-Abhängigkeiten.");
+    const installed = plan.skipped.filter((s) => /installiert|existiert/.test(s.reason || "")).length;
+    if (installed) lines.push(`${installed} Abhängigkeit(en) sind schon installiert.`);
+    if (plan.conflicts.length) {
+      lines.push(`${plan.conflicts.join(", ")} liegt schon im mods-Ordner und wird ersetzt.`);
+    }
+    const ul = document.createElement("ul");
+    for (const line of lines) {
+      const li = document.createElement("li");
+      li.textContent = line;
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+
+  $("#md-all-versions").addEventListener("change", loadModDetail);
+  $("#md-close").addEventListener("click", () => closeDialog($("#mod-detail")));
+  $("#mod-detail").addEventListener("close", () => { state.md = null; });
+  $("#md-cart").addEventListener("click", () => {
+    const md = state.md;
+    if (!md?.version) return;
+    cartAdd({ ...md.hit, _source: md.source, project_id: md.data.project.project_id },
+      md.version);
+    toast(`"${md.data.project.title}" ${md.version.version_number} vorgemerkt.`, "success");
+    closeDialog($("#mod-detail"));
+  });
+  $("#md-install").addEventListener("click", async () => {
+    const md = state.md;
+    if (!md?.version) return;
+    const hit = md.hit;
+    if (!(await confirmClientOnly([{ ...hit, server_side: md.data.project.server_side }]))) return;
+    const btn = $("#md-install");
+    btn.disabled = true;
+    try {
+      const job = await runModInstall([{ source: md.source,
+        project_id: md.data.project.project_id, version_id: md.version.id,
+        title: md.data.project.title }], md.target, { btn, bar: null });
+      if (job) {
+        hit.installed = true;
+        cartRemove(md.source, hit.project_id);
+        markInstalled(md.source, hit.project_id);
+        closeDialog($("#mod-detail"));
+      }
+    } catch (e) {
+      toast(`Installation fehlgeschlagen: ${e.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      if (md.version) setText(btn, `${md.version.version_number || "Version"} installieren`);
+    }
+  });
 
   function pollJob(job, bar, btn) {
     // resolve(finaler Job-Datenstand) — u. a. für dep_errors des Bundles
@@ -1837,7 +2322,7 @@
           const data = await api(`/api/modrinth/jobs/${job.job_id}`);
           if (data.total > 0) {
             const pct = Math.min(100, Math.round((data.downloaded / data.total) * 100));
-            bar.style.width = pct + "%";
+            if (bar) bar.style.width = pct + "%";
             btn.textContent = pct + " %";
           } else {
             btn.textContent = fmtBytes(data.downloaded);
@@ -2467,8 +2952,12 @@
       badge.classList.add(stateBadgeClass(detail));
       setText($("#detail-state-text"), OV_STATE_LABELS[instStateKey(detail)]);
       state.detailData = detail;
+      // Eingebettete Mod-Suche: Ziel steht erst jetzt sicher fest
+      if (state.searchEmbedded && state.wsTab === "mods" && state.modsView === "add") {
+        mountSearch(true);
+      }
       renderDetailInfo(detail);
-      renderDetailMods(detail.mods || []);
+      renderDetailMods(detail.mods || [], detail);
       if (!$("#detail-icon").src.startsWith("blob:")) $("#detail-icon").src = serverBlockIcon(detail.name);
       updateHotbarCounts();
       updateWsOverview();
@@ -2553,9 +3042,39 @@
     box.appendChild(dl);
   }
 
-  function renderDetailMods(mods) {
+  function renderDetailMods(mods, detail) {
     state.detailMods = mods || [];
+    renderModNotes(detail);
     applyModFilter();
+    loadModTrash();
+  }
+
+  // Hinweise über der Mod-Liste: erkannte Probleme + „Neustart nötig“
+  function renderModNotes(detail) {
+    const problems = Array.isArray(detail?.mod_problems) ? detail.mod_problems : [];
+    const list = $("#mods-problems-list");
+    list.textContent = "";
+    for (const p of problems.slice(0, 8)) {
+      const li = document.createElement("li");
+      li.textContent = p.message;
+      list.appendChild(li);
+    }
+    if (problems.length > 8) {
+      const li = document.createElement("li");
+      li.textContent = `… und ${problems.length - 8} weitere (in der Liste markiert)`;
+      list.appendChild(li);
+    }
+    setText($("#mods-problems-title"), problems.length === 1
+      ? "1 Problem erkannt:" : `${problems.length} Probleme erkannt:`);
+    show($("#mods-problems"), problems.length > 0);
+
+    // Läuft der Server und wurde der mods-Ordner nach dem Start geändert
+    // (Installieren, Löschen, An/Aus), wirkt das erst nach einem Neustart
+    const started = Date.parse(detail?.container?.started_at || "");
+    const changed = Number(detail?.mods_changed_at) * 1000;
+    const pending = !!detail?.container?.running && Number.isFinite(started)
+      && Number.isFinite(changed) && changed > started + 30000;
+    show($("#mods-restart-note"), pending);
   }
 
   // Lesbarer Anzeigename: Version-/Loader-Suffixe aus dem Dateinamen entfernen
@@ -2587,7 +3106,8 @@
     list.textContent = "";
     const all = state.detailMods;
     const q = ($("#mods-filter-input").value || "").trim().toLowerCase();
-    const mods = q ? all.filter((m) => m.filename.toLowerCase().includes(q)) : all;
+    const mods = q ? all.filter((m) => [m.filename, m.meta?.name, m.meta?.mod_id]
+      .some((v) => (v || "").toLowerCase().includes(q))) : all;
 
     const active = all.filter((m) => m.enabled).length;
     const bytes = all.reduce((s, m) => s + (m.size_bytes || 0), 0);
@@ -2603,10 +3123,30 @@
 
     for (const mod of mods) {
       const node = $("#tpl-mod-row").content.cloneNode(true);
-      const display = modDisplayName(mod.filename);
+      const meta = mod.meta || null;
+      const display = meta?.name || modDisplayName(mod.filename);
       const nameEl = node.querySelector(".mod-name");
       nameEl.textContent = display;
-      nameEl.title = mod.filename; // volle Nummer bei Abschneiden per Tooltip
+      // Tooltip: Beschreibung, Mod-ID und voller Dateiname
+      nameEl.title = [meta?.description, meta?.mod_id ? `Mod-ID: ${meta.mod_id}` : "",
+        mod.filename].filter(Boolean).join("\n");
+      const tags = node.querySelector(".mod-tags");
+      const problems = Array.isArray(mod.problems) ? mod.problems : [];
+      const tagLabels = {
+        missing_dependency: "Abhängigkeit fehlt",
+        disabled_dependency: "Abhängigkeit aus",
+        wrong_loader: "falscher Loader",
+        client_only: "nur Client",
+        duplicate: "doppelt",
+      };
+      for (const type of new Set(problems.map((p) => p.type))) {
+        const tag = document.createElement("span");
+        tag.className = "mod-tag is-err";
+        tag.textContent = tagLabels[type] || "Problem";
+        tag.title = problems.filter((p) => p.type === type).map((p) => p.message).join("\n");
+        tags.appendChild(tag);
+      }
+      if (problems.length) node.querySelector(".mod-row").classList.add("has-problem");
       // Icon: Logo aus der .jar (Backend-Endpoint); ohne Logo Platzhalter-
       // kachel mit den Anfangsbuchstaben in stabiler Zufallsfarbe
       const img = node.querySelector(".mod-icon");
@@ -2626,7 +3166,8 @@
       const updateItem = state.detailUpdates?.[mod.filename];
       const updateAvailable = updateItem?.status === "update_available";
       setText(node.querySelector(".mod-meta"),
-        `${fmtBytes(mod.size_bytes)}${mod.enabled ? "" : " · deaktiviert"}`
+        `${meta?.version ? `${meta.version} · ` : ""}${fmtBytes(mod.size_bytes)}`
+        + `${mod.enabled ? "" : " · deaktiviert"}`
         + (updateAvailable
           ? ` · Update: ${updateItem.latest?.version_number || "?"}`
           : ""));
@@ -2644,10 +3185,18 @@
       toggleBtn.addEventListener("click", () =>
         toggleInstanceMod(mod.filename, !mod.enabled, toggleBtn));
       node.querySelector(".delete").addEventListener("click", async () => {
-        if (!window.confirm(`"${mod.filename}" löschen?`)) return;
+        if (!(await confirmDialog({
+          title: `„${display}“ löschen?`,
+          message: "Die Datei kommt in den Papierkorb und lässt sich dort "
+            + `${state.trashDays || 7} Tage lang wiederherstellen.`,
+          list: [mod.filename],
+          ok: "In den Papierkorb",
+          danger: true,
+        }))) return;
         try {
           await api(`/api/instances/${state.detailId}/mods/${encodeURIComponent(mod.filename)}`,
             { method: "DELETE" });
+          toast(`"${display}" in den Papierkorb verschoben.`, "success");
           loadDetail();
         } catch (e) {
           toast(`Löschen fehlgeschlagen: ${e.message}`, "error");
@@ -2656,6 +3205,94 @@
       list.appendChild(node);
     }
   }
+
+  /* ---------- Mod-Papierkorb ---------- */
+  async function loadModTrash() {
+    const id = state.detailId;
+    if (!id) return;
+    let data;
+    try {
+      data = await api(`/api/instances/${id}/mod-trash`);
+    } catch (e) {
+      show($("#mods-trash"), false);
+      return;
+    }
+    if (state.detailId !== id) return;
+    const entries = data.entries || [];
+    setText($("#mods-trash-count"), `(${entries.length})`);
+    state.trashDays = data.keep_days ?? 7;
+    setText($("#mods-trash-days"), String(state.trashDays));
+    show($("#mods-trash"), entries.length > 0);
+    const list = $("#mods-trash-list");
+    list.textContent = "";
+    for (const entry of entries) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = entry.filename;
+      name.title = entry.filename;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      const when = new Date(entry.trashed_at * 1000).toLocaleString("de-DE",
+        { dateStyle: "short", timeStyle: "short" });
+      meta.textContent = `${entry.reason === "update" ? "vor Update gesichert" : "gelöscht"}`
+        + ` · ${when} · ${fmtBytes(entry.size_bytes)}`;
+      info.append(name, meta);
+      const btn = document.createElement("button");
+      btn.className = "btn small-btn admin-only";
+      btn.textContent = "Wiederherstellen";
+      btn.addEventListener("click", () => restoreModFromTrash(entry, btn));
+      const row = document.createElement("div");
+      row.className = "row";
+      row.appendChild(btn);
+      li.append(info, row);
+      list.appendChild(li);
+    }
+  }
+
+  async function restoreModFromTrash(entry, btn) {
+    const id = state.detailId;
+    if (!id) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/instances/${id}/mod-trash/${encodeURIComponent(entry.id)}/restore`,
+        { method: "POST" });
+      toast(`"${entry.filename}" wiederhergestellt.`, "success");
+      loadDetail();
+    } catch (e) {
+      btn.disabled = false;
+      const hint = e.status === 409
+        ? " Eine Datei mit diesem Namen liegt schon im mods-Ordner." : "";
+      toast(`Wiederherstellen fehlgeschlagen: ${e.message}${hint}`, "error");
+    }
+  }
+
+  $("#mods-trash-empty").addEventListener("click", async () => {
+    const id = state.detailId;
+    if (!id || !(await confirmDialog({
+      title: "Papierkorb leeren?",
+      message: "Die Dateien werden endgültig gelöscht und lassen sich nicht wiederherstellen.",
+      ok: "Endgültig löschen",
+      danger: true,
+    }))) return;
+    try {
+      const data = await api(`/api/instances/${id}/mod-trash`, { method: "DELETE" });
+      toast(`${data.removed} Datei(en) endgültig gelöscht.`, "success");
+      loadModTrash();
+    } catch (e) {
+      toast(`Leeren fehlgeschlagen: ${e.message}`, "error");
+    }
+  });
+
+  $("#mods-restart-btn").addEventListener("click", async () => {
+    const detail = state.detailData;
+    if (!detail) return;
+    await instAction({ id: detail.id, name: detail.name }, "restart");
+    loadDetail();
+  });
 
   async function toggleInstanceMod(filename, enabled, btn) {
     const id = state.detailId;
@@ -5700,6 +6337,8 @@
       if (key === "konsole") document.querySelector('.ws-panel[data-ws-panel="konsole"]')?.prepend(logs);
       else if (logs.parentElement?.id !== "ws-ov-main") $("#ws-ov-main")?.append(logs);
     }
+    // Mods › Hinzufügen: Suche in den Server-Bereich holen (Ziel = dieser Server)
+    if (key === "mods" && state.modsView === "add" && state.detailId) mountSearch(true);
     // Welt-Slot: Welten + Karte laden; beim Verlassen die Karte entladen
     if (key === "welt" && state.detailId) loadWorldInfo();
     else if (typeof resetMapFrame === "function") resetMapFrame();
@@ -5744,13 +6383,66 @@
     }
   }
 
+  /* Mods-Bereich: drei Ansichten (Installiert · Hinzufügen · Modpack) */
+  const MODS_VIEWS = [["installed", "Installiert"], ["add", "Hinzufügen"], ["packs", "Modpack"]];
+  state.modsView = "installed";
+  try {
+    const saved = localStorage.getItem("md_mods_view");
+    if (MODS_VIEWS.some(([k]) => k === saved)) state.modsView = saved;
+  } catch (e) { /* optional */ }
+
+  function buildModsViews() {
+    const panel = document.querySelector('.ws-panel[data-ws-panel="mods"]');
+    if (!panel || $("#ws-mods-seg")) return;
+    const seg = document.createElement("div");
+    seg.id = "ws-mods-seg";
+    seg.className = "seg ws-mods-seg";
+    seg.setAttribute("role", "tablist");
+    seg.setAttribute("aria-label", "Mods-Bereich");
+    for (const [key, label] of MODS_VIEWS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "seg-btn";
+      b.dataset.modsView = key;
+      b.setAttribute("role", "tab");
+      b.textContent = label;
+      b.addEventListener("click", () => activateModsView(key));
+      seg.appendChild(b);
+      const view = document.createElement("div");
+      view.id = `ws-mods-${key}`;
+      view.className = "ws-mods-view";
+      view.dataset.modsView = key;
+      panel.appendChild(view);
+    }
+    panel.prepend(seg);
+    applyModsView();
+  }
+
+  function applyModsView() {
+    document.querySelectorAll("#ws-mods-seg .seg-btn").forEach((b) => {
+      const on = b.dataset.modsView === state.modsView;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    document.querySelectorAll(".ws-mods-view").forEach((v) =>
+      show(v, v.dataset.modsView === state.modsView));
+  }
+
+  function activateModsView(key) {
+    state.modsView = key;
+    try { localStorage.setItem("md_mods_view", key); } catch (e) { /* optional */ }
+    applyModsView();
+    if (key === "add" && state.wsTab === "mods" && state.detailId) mountSearch(true);
+  }
+
   /* Sortiert die Detail-Boxen einmalig in die Workspace-Panels um.
      Anker = stabile IDs innerhalb der jeweiligen Box. */
   function organizeWorkspace() {
+    buildModsViews();
     const mapping = [
-      ["#mp-update-check", "mods"],       // Installiertes Modpack
-      ["#pack-search-input", "mods"],     // Modpack installieren (Suche)
-      ["#pack-upload-file", "mods"],      // Modpack hochladen
+      ["#mp-update-check", "mods-packs"],   // Installiertes Modpack
+      ["#pack-search-input", "mods-packs"], // Modpack installieren (Suche)
+      ["#pack-upload-file", "mods-packs"],  // Modpack hochladen
       ["#world-reload", "welt"],          // Welten
       ["#map-reload", "welt"],            // Live-Karte
       ["#icon-reload", "welt"],           // Server-Icon
@@ -5768,17 +6460,17 @@
     ];
     for (const [anchorSel, target] of mapping) {
       const anchor = document.querySelector(anchorSel);
-      const panel = document.querySelector(`.ws-panel[data-ws-panel="${target}"]`);
+      const panel = target === "mods-packs" ? $("#ws-mods-packs")
+        : document.querySelector(`.ws-panel[data-ws-panel="${target}"]`);
       if (!anchor || !panel) continue;
       const box = anchor.closest(".upload-box");
       if (box) panel.appendChild(box);
     }
     // Mods-/Logs-Spalte aus dem alten Detail-Grid einsortieren
     const modsBox = document.querySelector("#detail-mods")?.closest("div");
-    const modsPanel = document.querySelector('.ws-panel[data-ws-panel="mods"]');
-    if (modsBox && modsPanel) {
+    if (modsBox) {
       modsBox.classList.add("ws-modsbox");
-      modsPanel.prepend(modsBox); // installierte Mods vor Modpack-Kästen
+      $("#ws-mods-installed").prepend(modsBox);
     }
     const logsBox = document.querySelector(".ws-logcol");
     const logsTarget = $("#ws-ov-main"); // Live-Log unter Aktivität & Chat
