@@ -108,7 +108,8 @@ def _scan() -> list:
 
 
 def _used_port_sets(existing: list) -> tuple:
-    """Belegte Spiel- und RCON-Ports aller Instanzen (RCON = port+1000)."""
+    """Belegte Spiel- und RCON-Ports aller Instanzen (RCON = port+1000;
+    Karten-Ports zählen als belegte Spiel-Ports)."""
     game, rcon = set(), set()
     for i in existing:
         try:
@@ -116,6 +117,13 @@ def _used_port_sets(existing: list) -> tuple:
             rcon.add(int(i.get("rcon_port") or int(i["port"]) + 1000))
         except (KeyError, TypeError, ValueError):
             continue
+        # Port der Live-Karte (BlueMap-Webserver) ist ebenfalls belegt
+        try:
+            map_port = int((i.get("map") or {}).get("port") or 0)
+        except (AttributeError, TypeError, ValueError):
+            map_port = 0
+        if map_port:
+            game.add(map_port)
     return game, rcon
 
 

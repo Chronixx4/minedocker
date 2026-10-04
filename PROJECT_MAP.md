@@ -132,7 +132,27 @@ Checkliste, Dashboard-Schnellstart).
     und markiert dabei aktive Jobs als 'Abgebrochen (Neustart)'; MAX_JOBS-
     Verwerfen löscht die Spiegeldatei, Spiegel älter als 7 Tage werden beim
     Snapshot aufgeräumt; /api/jobs/{id} liefert auch nach Neustarts Status
-  - worlds.py – Welt-Verwaltung + Server-Import: world_info/create_world_zip
+  - worlds.py – Mehrere Welten je Instanz (/api/instances/{id}/worlds*):
+    list_worlds (aktive Welt aus level-name, noch nicht erzeugte = pending,
+    Paper-Nether/End-Geschwister '<welt>_nether'/'_the_end' gehören zur Welt),
+    create_world (level-name/-seed/-type, Typ je MC-Version mit/ohne
+    Namespace; Welt entsteht beim Start), switch_world, copy_world (ohne
+    session.lock/uid.dat), rename_world, delete_world (nie die aktive),
+    import_world (Archiv als ZUSÄTZLICHE Welt, optional aktivieren),
+    create_named_world_zip; Wechsel/Anlegen/Umbenennen der aktiven Welt nur
+    bei gestopptem Server (409); Namen validiert (reservierte Ordner wie
+    mods/config/plugins und *_nether/*_the_end verboten)
+  - livemap.py – Live-Karte (BlueMap) je Instanz: enable() lädt BlueMap von
+    Modrinth (Mod + Pflicht-Deps wie Fabric API, vorhandene nicht doppelt;
+    Paper/Spigot/Bukkit als Plugin), setzt accept-download in core.conf nur
+    nach Zustimmung im Dashboard, reserviert Host-Port (Spiel-Port + 2000,
+    zählt in _used_port_sets als belegt); runtime.start_instance
+    veröffentlicht Container-Port 8100 und ruft prepare_start() (accept-
+    download sicherstellen, nach Welt-Wechsel Karten-Config/-Daten
+    zurücksetzen → Neu-Rendern); disable() entfernt nur die BlueMap-Datei;
+    status()/reachable() (GET settings.json am Container); Einbettung im
+    Welt-Slot per iframe (CSP frame-src http:/https:)
+  - worlds.py (Fortsetzung) – Welt-Verwaltung + Server-Import: world_info/create_world_zip
     (Welt-Ordner als .zip in _staging, level.dat-Erkennung), restore_world_upload
     (.zip/.tar.gz ersetzt Welt; Layouts 'level.dat am Anfang' → Inhalt in den
     bestehenden Welt-Ordner bzw. 'Welt als Unterordner' → Ordner-Name wird

@@ -2371,10 +2371,13 @@
     show($("#upload-error"), false);
     $("#pack-upload-file").value = "";
     $("#pack-upload-btn").disabled = true;
-    // Welt-Upload zurücksetzen
+    // Welten/Karte zurücksetzen
     show($("#world-error"), false);
     $("#world-upload-file").value = "";
     $("#world-upload-btn").disabled = true;
+    $("#worlds-list").textContent = "";
+    show($("#map-error"), false);
+    resetMapFrame();
     // Server-Icon zurücksetzen
     iconSetError("");
     $("#icon-upload-file").value = "";
@@ -3815,33 +3818,34 @@
   $("#backup-reload-btn").addEventListener("click", loadBackups);
 
   /* ---------- Welt je Instanz (Info, Download, Upload) ---------- */
-  async function loadWorldInfo() {
-    if (!state.detailId) return;
+  /* ---------- Welten je Instanz: Liste, neu, wechseln, kopieren, … ---------- */
+  function worldError(msg) {
+    setText($("#world-error"), msg || "");
+    show($("#world-error"), !!msg);
+  }
+
+  async function worldAction(path, body, okText) {
+    worldError("");
     try {
-      const info = await api(`/api/instances/${state.detailId}/world`);
-      setText($("#world-info"), info.exists
-        ? `Welt "${info.world_dir}" · ${fmtBytes(info.size_bytes)}`
-        : "Keine Welt gefunden (Server einmal starten oder Welt hochladen).");
-      $("#world-download-btn").disabled = !info.exists;
-      $("#world-upload-btn").disabled = !$("#world-upload-file").files.length
-        || state.detailRunning;
-      if (state.detailRunning) {
-        setText($("#world-info"),
-          `${$("#world-info").textContent} — Upload nur bei gestoppter Instanz`);
-      }
+      const res = await api(`/api/instances/${state.detailId}/worlds${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (okText) toast(typeof okText === "function" ? okText(res) : okText, "success");
+      await loadWorlds();
+      return res;
     } catch (e) {
-      setText($("#world-info"), "–");
-      setText($("#world-error"), `Welt-Info nicht abrufbar: ${e.message}`);
-      show($("#world-error"), true);
+      worldError(e.message);
+      return null;
     }
   }
-  $("#world-reload").addEventListener("click", loadWorldInfo);
 
-  async function downloadWorld(btn) {
-    btn.disabled = true;
+  async function downloadNamedWorld(name, btn) {
+    if (btn) btn.disabled = true;
     try {
       const res = await fetch(
-        `/api/instances/${state.detailId}/world/download`,
+        `/api/instances/${state.detailId}/worlds/download?name=${encodeURIComponent(name)}`,
         { headers: state.apiKey ? { "X-API-Key": state.apiKey } : {} });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
@@ -3850,47 +3854,285 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = match ? match[1] : `welt-${state.detailId}.zip`;
+      a.download = match ? match[1] : `${name}.zip`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
       toast(`Welt-Download fehlgeschlagen: ${e.message}`, "error");
     } finally {
-      btn.disabled = false;
-      loadWorldInfo();
+      if (btn) btn.disabled = false;
     }
   }
-  $("#world-download-btn").addEventListener("click", (e) => downloadWorld(e.target));
 
-  $("#world-upload-file").addEventListener("change", () => {
-    $("#world-upload-btn").disabled = !$("#world-upload-file").files.length
-      || state.detailRunning;
-    show($("#world-error"), false);
+  function askWorldName(title, current) {
+    const name = window.prompt(title, current || "");
+    return name === null ? null : name.trim() || null;
+  }
+
+  async function loadWorlds() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    let data;
+    try {
+      data = await api(`/api/instances/${id}/worlds`);
+    } catch (e) {
+      worldError(`Welten nicht abrufbar: ${e.message}`);
+      return;
+    }
+    if (state.detailId !== id) return;
+    const running = !!state.detailRunning;
+    const list = $("#worlds-list");
+    list.textContent = "";
+    const worlds = data.worlds || [];
+    const real = worlds.filter((w) => !w.pending).length;
+    setText($("#worlds-count"), real ? `(${real})` : "");
+    setText($("#world-info"), running
+      ? "Server läuft — Wechseln, Anlegen und Umbenennen der aktiven Welt gehen nur bei gestopptem Server."
+      : "Aktiv ist die markierte Welt. Ein Wechsel wirkt beim nächsten Start.");
+    for (const w of worlds) {
+      const li = document.createElement("li");
+      li.className = "world-row" + (w.active ? " active" : "");
+      const img = document.createElement("img");
+      img.src = SLOT_ICONS.globe;
+      img.alt = "";
+      const info = document.createElement("div");
+      info.className = "world-info";
+      const head = document.createElement("div");
+      head.className = "world-head";
+      const nm = document.createElement("span");
+      nm.className = "world-name";
+      nm.textContent = w.name;
+      nm.title = w.name;
+      head.appendChild(nm);
+      if (w.active) {
+        const b = document.createElement("span");
+        b.className = `badge ${w.pending ? "starting" : "on"}`;
+        b.textContent = w.pending ? "neu · entsteht beim Start" : "aktiv";
+        head.appendChild(b);
+      }
+      const meta = document.createElement("span");
+      meta.className = "muted small";
+      const parts = [];
+      if (!w.pending) parts.push(fmtBytes(w.size_bytes));
+      if (w.modified) parts.push(`zuletzt gespielt ${fmtDate(w.modified)}`);
+      if (w.dimensions?.length) parts.push("inkl. Nether/End");
+      meta.textContent = parts.join(" · ");
+      info.append(head, meta);
+
+      const actions = document.createElement("div");
+      actions.className = "world-actions";
+      const mk = (label, title, fn, opts = {}) => {
+        const b = document.createElement("button");
+        b.className = `btn small-btn${opts.cls ? ` ${opts.cls}` : ""}${opts.admin === false ? "" : " admin-only"}`;
+        b.textContent = label;
+        b.title = title;
+        b.disabled = !!opts.disabled;
+        b.addEventListener("click", () => fn(b));
+        actions.appendChild(b);
+        return b;
+      };
+      if (!w.active) {
+        mk("Aktivieren", running ? "Erst den Server stoppen" : "Diese Welt beim nächsten Start laden",
+          () => worldAction("/activate", { name: w.name }, `Welt „${w.name}“ ist aktiv — wirkt beim nächsten Start.`),
+          { cls: "primary", disabled: running });
+      }
+      if (!w.pending) {
+        mk("Download", "Als .zip herunterladen", (b) => downloadNamedWorld(w.name, b), { admin: false });
+        mk("Kopieren", w.active && running ? "Aktive Welt nur bei gestopptem Server kopieren" : "Kopie unter neuem Namen anlegen",
+          () => {
+            const nn = askWorldName(`Name der Kopie von „${w.name}“:`, `${w.name}-kopie`);
+            if (nn) worldAction("/copy", { name: w.name, new_name: nn }, `Kopie „${nn}“ angelegt.`);
+          }, { disabled: w.active && running });
+        mk("Umbenennen", w.active && running ? "Aktive Welt nur bei gestopptem Server umbenennen" : "Welt umbenennen",
+          () => {
+            const nn = askWorldName(`Neuer Name für „${w.name}“:`, w.name);
+            if (nn && nn !== w.name) worldAction("/rename", { name: w.name, new_name: nn }, `Umbenannt in „${nn}“.`);
+          }, { disabled: w.active && running });
+      }
+      if (!w.active) {
+        mk("Löschen", "Welt endgültig löschen", () => {
+          if (!window.confirm(`Welt „${w.name}“ endgültig löschen?\n\nDas kann nicht rückgängig gemacht werden — vorher ggf. herunterladen oder ein Backup machen.`)) return;
+          worldAction("/delete", { name: w.name }, `Welt „${w.name}“ gelöscht.`);
+        }, { cls: "danger" });
+      }
+      li.append(img, info, actions);
+      list.appendChild(li);
+    }
+    $("#world-new-btn").disabled = running;
+    updateWorldUploadBtn();
+  }
+
+  // Wird beim Öffnen einer Instanz und beim Wechsel in den Welt-Slot aufgerufen
+  function loadWorldInfo() {
+    worldError("");
+    loadWorlds();
+    loadMapStatus();
+  }
+  $("#world-reload").addEventListener("click", loadWorldInfo);
+
+  $("#world-new-btn").addEventListener("click", async () => {
+    const name = $("#world-new-name").value.trim();
+    if (!name) { worldError("Bitte einen Namen für die neue Welt eingeben."); return; }
+    const res = await worldAction("", {
+      name, seed: $("#world-new-seed").value.trim(), level_type: $("#world-new-type").value,
+    }, `Welt „${name}“ angelegt — sie entsteht beim nächsten Start.`);
+    if (res) {
+      $("#world-new-name").value = "";
+      $("#world-new-seed").value = "";
+      $("#world-new-box").open = false;
+    }
   });
+
+  function updateWorldUploadBtn() {
+    const activate = $("#world-import-activate").checked;
+    $("#world-upload-btn").disabled = !$("#world-upload-file").files.length
+      || (activate && state.detailRunning);
+  }
+  $("#world-upload-file").addEventListener("change", () => { updateWorldUploadBtn(); worldError(""); });
+  $("#world-import-activate").addEventListener("change", updateWorldUploadBtn);
   $("#world-upload-btn").addEventListener("click", async () => {
     const file = $("#world-upload-file").files[0];
     if (!file || !state.detailId) return;
-    if (!window.confirm(
-      `Welt wirklich ersetzen?\n\nDer aktuelle Welt-Ordner der Instanz wird\ndurch "${file.name}" ersetzt!\nWeiter?`)) return;
     const form = new FormData();
     form.append("file", file);
+    form.append("name", $("#world-import-name").value.trim());
+    form.append("activate", $("#world-import-activate").checked ? "true" : "false");
     const btn = $("#world-upload-btn");
     btn.disabled = true;
-    btn.textContent = "Lade hoch…";
-    show($("#world-error"), false);
+    worldError("");
     try {
-      const result = await api(`/api/instances/${state.detailId}/world/upload`,
-        { method: "POST", body: form });
-      toast(`Welt "${result.world_dir}" ersetzt.`, "success");
+      const result = await apiUpload(`/api/instances/${state.detailId}/worlds/import`, form,
+        (pct) => { btn.textContent = `Lade hoch… ${pct} %`; });
+      toast(result.active
+        ? `Welt „${result.name}“ importiert und aktiviert.`
+        : `Welt „${result.name}“ importiert.`, "success");
       $("#world-upload-file").value = "";
-      loadWorldInfo();
+      $("#world-import-name").value = "";
+      $("#world-import-activate").checked = false;
+      loadWorlds();
     } catch (e) {
-      setText($("#world-error"), `Welt-Upload fehlgeschlagen: ${e.message}`);
-      show($("#world-error"), true);
+      worldError(`Import fehlgeschlagen: ${e.message}`);
     } finally {
-      btn.disabled = false;
-      btn.textContent = "Welt hochladen";
+      btn.textContent = "Importieren";
+      updateWorldUploadBtn();
     }
+  });
+
+  /* ---------- Live-Karte (BlueMap) ---------- */
+  function mapError(msg) {
+    setText($("#map-error"), msg || "");
+    show($("#map-error"), !!msg);
+  }
+
+  function mapUrl(port) {
+    return `http://${location.hostname || "localhost"}:${port}/`;
+  }
+
+  function resetMapFrame() {
+    const frame = $("#map-frame");
+    if (frame.getAttribute("src")) frame.removeAttribute("src");
+    show($("#map-frame-wrap"), false);
+  }
+
+  async function loadMapStatus() {
+    if (!state.detailId) return;
+    const id = state.detailId;
+    let st;
+    try {
+      st = await api(`/api/instances/${id}/map`);
+    } catch (e) {
+      mapError(`Karten-Status nicht abrufbar: ${e.message}`);
+      return;
+    }
+    if (state.detailId !== id) return;
+    state.mapStatus = st;
+    mapError("");
+    const info = $("#map-info");
+    show($("#map-setup"), st.supported && !st.enabled);
+    show($("#map-disable"), st.enabled);
+    show($("#map-restart"), false);
+    const open = $("#map-open");
+    show(open, !!(st.enabled && st.reachable));
+    if (st.port) open.href = mapUrl(st.port);
+    if (!st.supported) {
+      setText(info, "Für diesen Server-Typ nicht verfügbar (braucht Fabric, Quilt, Forge, NeoForge, Paper, Spigot oder Bukkit).");
+    } else if (!st.enabled) {
+      setText(info, "Zeigt die Welt als 3D-Karte im Browser — mit Spielern in Echtzeit. BlueMap wird als "
+        + (st.kind === "plugin" ? "Plugin" : "Mod") + " installiert und rendert im Hintergrund (kostet etwas CPU).");
+    } else if (!st.server_running) {
+      setText(info, `Aktiv — startet mit dem Server auf Port ${st.port}.`);
+    } else if (!st.reachable) {
+      setText(info, `Server läuft, aber die Karte antwortet noch nicht (Port ${st.port}). `
+        + "Nach dem Aktivieren einmal neu starten — beim ersten Start lädt BlueMap außerdem die Texturen, das dauert kurz.");
+      show($("#map-restart"), true);
+    } else {
+      setText(info, `Läuft auf Port ${st.port}. Das erste Rendern dauert je nach Weltgröße eine Weile — die Karte füllt sich nach und nach.`);
+    }
+    // Einbetten nur, wenn erreichbar, der Welt-Slot sichtbar ist und kein
+    // HTTPS-Dashboard eine HTTP-Karte blockieren würde (Mixed Content)
+    const embed = st.enabled && st.reachable && state.wsTab === "welt"
+      && location.protocol !== "https:";
+    if (embed) {
+      const frame = $("#map-frame");
+      const url = mapUrl(st.port);
+      if (frame.getAttribute("src") !== url) frame.setAttribute("src", url);
+      show($("#map-frame-wrap"), true);
+    } else {
+      resetMapFrame();
+      if (st.enabled && st.reachable && location.protocol === "https:") {
+        setText(info, `${info.textContent} Über HTTPS lässt sich die Karte nicht einbetten — „In neuem Tab öffnen“ nutzen.`);
+      }
+    }
+  }
+  $("#map-reload").addEventListener("click", loadMapStatus);
+  $("#map-accept").addEventListener("change", () => {
+    $("#map-enable").disabled = !$("#map-accept").checked;
+  });
+  $("#map-enable").addEventListener("click", async () => {
+    const btn = $("#map-enable");
+    btn.disabled = true;
+    btn.textContent = "Installiere BlueMap…";
+    mapError("");
+    try {
+      await api(`/api/instances/${state.detailId}/map`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true, accept_download: $("#map-accept").checked }),
+      });
+      toast(state.detailRunning
+        ? "Live-Karte installiert — wirkt nach einem Neustart des Servers."
+        : "Live-Karte installiert — sie startet mit dem Server.", "success");
+      $("#map-accept").checked = false;
+      await loadMapStatus();
+      if (state.detailRunning) show($("#map-restart"), true);
+    } catch (e) {
+      mapError(`Aktivieren fehlgeschlagen: ${e.message}`);
+    } finally {
+      btn.textContent = "Karte aktivieren";
+      btn.disabled = !$("#map-accept").checked;
+    }
+  });
+  $("#map-disable").addEventListener("click", async () => {
+    if (!window.confirm("Live-Karte deaktivieren?\n\nBlueMap wird entfernt (wirkt nach Neustart). Bereits gerenderte Kartendaten bleiben erhalten.")) return;
+    mapError("");
+    try {
+      await api(`/api/instances/${state.detailId}/map`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      toast("Live-Karte deaktiviert — wirkt nach dem nächsten Neustart.", "success");
+      resetMapFrame();
+      loadMapStatus();
+    } catch (e) {
+      mapError(`Deaktivieren fehlgeschlagen: ${e.message}`);
+    }
+  });
+  $("#map-restart").addEventListener("click", async () => {
+    const inst = currentDetailInst() || state.detailData;
+    if (!inst) return;
+    await instAction(inst, "restart");
+    setTimeout(loadMapStatus, 20000); // BlueMap braucht nach dem Start etwas
   });
 
   /* ---------- Server-Icon je Instanz (server-icon.png) ---------- */
@@ -5445,6 +5687,9 @@
       if (key === "konsole") document.querySelector('.ws-panel[data-ws-panel="konsole"]')?.prepend(logs);
       else if (logs.parentElement?.id !== "ws-ov-main") $("#ws-ov-main")?.append(logs);
     }
+    // Welt-Slot: Welten + Karte laden; beim Verlassen die Karte entladen
+    if (key === "welt" && state.detailId) loadWorldInfo();
+    else if (typeof resetMapFrame === "function") resetMapFrame();
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
         && instStateKey(currentDetailInst() || state.detailData || {}) === "running") {
@@ -5493,7 +5738,8 @@
       ["#mp-update-check", "mods"],       // Installiertes Modpack
       ["#pack-search-input", "mods"],     // Modpack installieren (Suche)
       ["#pack-upload-file", "mods"],      // Modpack hochladen
-      ["#world-reload", "welt"],          // Welt
+      ["#world-reload", "welt"],          // Welten
+      ["#map-reload", "welt"],            // Live-Karte
       ["#icon-reload", "welt"],           // Server-Icon
       ["#dp-reload", "welt"],             // Datapacks
       ["#fb-reload", "dateien"],          // Datei-Browser

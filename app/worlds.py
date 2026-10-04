@@ -303,3 +303,296 @@ def import_server(src: Path, original_name: str, *, name: str, loader: str,
                             detail=f"Import fehlgeschlagen: {exc}") from exc
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Mehrere Welten je Instanz: auflisten, neu anlegen, wechseln, kopieren,
+# umbenennen, löschen, als zusätzliche Welt importieren.
+#
+# Eine Welt ist ein Unterordner des Instanz-Ordners mit level.dat. Aktiv ist
+# die Welt aus level-name (server.properties). Paper/Spigot/Bukkit legen
+# Nether/End als Geschwister-Ordner '<welt>_nether' / '<welt>_the_end' an —
+# die gehören zur Welt und werden bei allen Operationen mitgenommen.
+# ---------------------------------------------------------------------------
+
+_WORLD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-]{0,47}$")
+_COMPANION_SUFFIXES = ("_nether", "_the_end")
+# Ordner, die nie als Welt-Name taugen (Server-Struktur)
+_RESERVED_DIRS = frozenset({
+    "mods", "config", "plugins", "logs", "crash-reports", "libraries",
+    "packs", "versions", "defaultconfigs", "kubejs", "bluemap", "backups",
+    "datapacks", "resourcepacks", "world-backups", "cache", ".fabric",
+    "_staging",
+})
+_LEVEL_TYPES = ("normal", "flat", "large_biomes", "amplified")
+# Vor 1.19 hießen die Welt-Typen ohne Namespace (largeBiomes in CamelCase)
+_LEGACY_LEVEL_TYPES = {"normal": "default", "flat": "flat",
+                       "large_biomes": "largeBiomes", "amplified": "amplified"}
+
+
+def validate_world_name(name: str) -> str:
+    name = (name or "").strip()
+    if not _WORLD_NAME_RE.match(name) or ".." in name:
+        raise HTTPException(
+            status_code=400,
+            detail="Ungültiger Welt-Name — 1-48 Zeichen: Buchstaben, Ziffern, "
+                   "Leerzeichen, _ . -")
+    lower = name.lower()
+    if lower in _RESERVED_DIRS or lower.endswith(_COMPANION_SUFFIXES):
+        raise HTTPException(status_code=400,
+                            detail=f"„{name}“ ist als Welt-Name reserviert")
+    return name
+
+
+def _active_level_name(directory: Path) -> str:
+    props = directory / "server.properties"
+    try:
+        for line in props.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("level-name="):
+                return line.split("=", 1)[1].strip() or "world"
+    except OSError:
+        pass
+    return "world"
+
+
+def _world_parts(directory: Path, name: str) -> list[Path]:
+    """Welt-Ordner plus vorhandene Paper-Geschwister (Nether/End)."""
+    parts = [directory / name]
+    for suffix in _COMPANION_SUFFIXES:
+        sibling = directory / f"{name}{suffix}"
+        if sibling.is_dir() and not sibling.is_symlink():
+            parts.append(sibling)
+    return parts
+
+
+def _is_world(path: Path) -> bool:
+    return path.is_dir() and not path.is_symlink() and (path / "level.dat").is_file()
+
+
+def _game_minor(game_version: str) -> int:
+    match = re.match(r"^1\.(\d+)", str(game_version or ""))
+    return int(match.group(1)) if match else 99  # Snapshots/unbekannt = neu
+
+
+def _level_type_value(level_type: str, game_version: str) -> str:
+    if level_type not in _LEVEL_TYPES:
+        raise HTTPException(status_code=400,
+                            detail=f"Welt-Typ muss einer von {', '.join(_LEVEL_TYPES)} sein")
+    if _game_minor(game_version) >= 19:
+        return f"minecraft:{level_type}"
+    return _LEGACY_LEVEL_TYPES[level_type]
+
+
+def _ensure_stopped(instance: dict, what: str) -> None:
+    from . import runtime  # lazy, vermeidet Import-Zirkel
+    if runtime.is_running(instance):
+        raise HTTPException(status_code=409,
+                            detail=f"Instanz läuft — {what} nur bei gestopptem Server")
+
+
+def list_worlds(instance_id: str) -> dict:
+    """Alle Welten der Instanz: Name, Größe, letzte Änderung, aktiv-Flag.
+    Ist die aktive Welt noch nicht erzeugt (neu angelegt, Server nie
+    gestartet), erscheint sie mit pending=True."""
+    directory = instances.instance_dir(instance_id)
+    active = _active_level_name(directory)
+    names = []
+    try:
+        entries = sorted(directory.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        entries = []
+    all_names = {e.name for e in entries}
+    for entry in entries:
+        if not _is_world(entry):
+            continue
+        base = next((entry.name[: -len(s)] for s in _COMPANION_SUFFIXES
+                     if entry.name.endswith(s)), None)
+        if base and base in all_names:
+            continue  # Paper-Nether/End gehören zur Basis-Welt
+        names.append(entry.name)
+    worlds_out = []
+    for name in names:
+        parts = _world_parts(directory, name)
+        try:
+            modified = int((directory / name / "level.dat").stat().st_mtime)
+        except OSError:
+            modified = None
+        worlds_out.append({
+            "name": name,
+            "active": name == active,
+            "pending": False,
+            "size_bytes": sum(instances._dir_size(p) for p in parts),
+            "modified": modified,
+            "dimensions": [p.name for p in parts[1:]],
+        })
+    if active not in names:
+        worlds_out.insert(0, {"name": active, "active": True, "pending": True,
+                              "size_bytes": 0, "modified": None, "dimensions": []})
+    worlds_out.sort(key=lambda w: (not w["active"], w["name"].lower()))
+    return {"active": active, "worlds": worlds_out}
+
+
+def _world_exists(directory: Path, name: str) -> bool:
+    return (directory / name).exists()
+
+
+def create_world(instance_id: str, name: str, seed: str = "",
+                 level_type: str = "normal") -> dict:
+    """Legt eine neue Welt an: setzt level-name/-seed/-type, die Welt wird
+    beim nächsten Start erzeugt. Die bisherige Welt bleibt erhalten."""
+    instance = instances.get_instance(instance_id)
+    _ensure_stopped(instance, "eine neue Welt anlegen")
+    name = validate_world_name(name)
+    seed = (seed or "").strip()
+    if len(seed) > 64 or any(ord(c) < 32 for c in seed):
+        raise HTTPException(status_code=400, detail="Ungültiger Seed (max. 64 Zeichen)")
+    directory = instances.instance_dir(instance_id)
+    if _world_exists(directory, name):
+        raise HTTPException(status_code=409, detail=f"„{name}“ existiert bereits")
+    _patch_properties(instance_id, {
+        "level-name": name,
+        "level-seed": seed,
+        "level-type": _level_type_value(level_type, instance.get("game_version")),
+    })
+    instances.invalidate_disk_cache(instance_id)
+    return {"active": name, "pending": True}
+
+
+def switch_world(instance_id: str, name: str) -> dict:
+    """Aktiviert eine vorhandene Welt (wirksam beim nächsten Start)."""
+    instance = instances.get_instance(instance_id)
+    _ensure_stopped(instance, "der Welt-Wechsel")
+    directory = instances.instance_dir(instance_id)
+    name = validate_world_name(name)
+    if not _is_world(directory / name):
+        raise HTTPException(status_code=404, detail=f"Welt „{name}“ nicht gefunden")
+    _patch_properties(instance_id, {"level-name": name})
+    instances.invalidate_disk_cache(instance_id)
+    return {"active": name}
+
+
+def _check_target_free(directory: Path, new: str) -> None:
+    for path in _world_parts_names(new):
+        if (directory / path).exists():
+            raise HTTPException(status_code=409, detail=f"„{path}“ existiert bereits")
+
+
+def _world_parts_names(name: str) -> list[str]:
+    return [name] + [f"{name}{s}" for s in _COMPANION_SUFFIXES]
+
+
+def copy_world(instance_id: str, name: str, new_name: str) -> dict:
+    """Kopiert eine Welt (inkl. Nether/End-Geschwister) unter neuem Namen."""
+    instance = instances.get_instance(instance_id)
+    directory = instances.instance_dir(instance_id)
+    name = validate_world_name(name)
+    new_name = validate_world_name(new_name)
+    if not _is_world(directory / name):
+        raise HTTPException(status_code=404, detail=f"Welt „{name}“ nicht gefunden")
+    if name == _active_level_name(directory):
+        # Kopie einer laufenden Welt wäre inkonsistent (Region-Dateien offen)
+        _ensure_stopped(instance, "das Kopieren der aktiven Welt")
+    _check_target_free(directory, new_name)
+    created = []
+    try:
+        for part in _world_parts(directory, name):
+            target = directory / (new_name + part.name[len(name):])
+            shutil.copytree(part, target, ignore=shutil.ignore_patterns("session.lock"))
+            created.append(target)
+            # Paper erkennt Welten an uid.dat — die Kopie bekommt eine neue
+            (target / "uid.dat").unlink(missing_ok=True)
+    except OSError as exc:
+        for path in created:
+            shutil.rmtree(path, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Kopieren fehlgeschlagen: {exc}") from exc
+    instances.invalidate_disk_cache(instance_id)
+    return {"name": new_name}
+
+
+def rename_world(instance_id: str, name: str, new_name: str) -> dict:
+    instance = instances.get_instance(instance_id)
+    directory = instances.instance_dir(instance_id)
+    name = validate_world_name(name)
+    new_name = validate_world_name(new_name)
+    if not _is_world(directory / name):
+        raise HTTPException(status_code=404, detail=f"Welt „{name}“ nicht gefunden")
+    active = name == _active_level_name(directory)
+    if active:
+        _ensure_stopped(instance, "das Umbenennen der aktiven Welt")
+    _check_target_free(directory, new_name)
+    for part in _world_parts(directory, name):
+        part.rename(directory / (new_name + part.name[len(name):]))
+    if active:
+        _patch_properties(instance_id, {"level-name": new_name})
+    instances.invalidate_disk_cache(instance_id)
+    return {"name": new_name, "active": active}
+
+
+def delete_world(instance_id: str, name: str) -> dict:
+    """Löscht eine nicht aktive Welt endgültig (inkl. Nether/End)."""
+    instances.get_instance(instance_id)
+    directory = instances.instance_dir(instance_id)
+    name = validate_world_name(name)
+    if name == _active_level_name(directory):
+        raise HTTPException(status_code=409,
+                            detail="Die aktive Welt kann nicht gelöscht werden — "
+                                   "erst zu einer anderen Welt wechseln")
+    if not _is_world(directory / name):
+        raise HTTPException(status_code=404, detail=f"Welt „{name}“ nicht gefunden")
+    for part in _world_parts(directory, name):
+        shutil.rmtree(part, ignore_errors=True)
+    instances.invalidate_disk_cache(instance_id)
+    return {"deleted": name}
+
+
+def import_world(instance_id: str, src: Path, original_name: str,
+                 name: str | None = None, activate: bool = False) -> dict:
+    """Fügt ein Welt-Archiv als ZUSÄTZLICHE Welt hinzu (die aktive Welt
+    bleibt unangetastet). Name: Parameter, sonst Ordnername im Archiv bzw.
+    Archivname."""
+    instance = instances.get_instance(instance_id)
+    if activate:
+        _ensure_stopped(instance, "der Welt-Wechsel")
+    directory = instances.instance_dir(instance_id)
+    staging = Path(tempfile.mkdtemp(prefix="world_", dir=staging_dir()))
+    try:
+        _extract_archive(src, staging, original_name)
+        found_name, world_path = _detect_world(staging)
+        if world_path is None:
+            raise HTTPException(status_code=400,
+                                detail="Kein Welt-Ordner gefunden (level.dat fehlt)")
+        if not name:
+            stem = re.sub(r"\.(zip|tar\.gz)$", "", original_name, flags=re.I)
+            name = found_name or stem
+            name = re.sub(r"[^A-Za-z0-9 _.\-]", "_", name).strip(" ._-")[:48] or "welt"
+        name = validate_world_name(name)
+        _check_target_free(directory, name)
+        _move_contents(world_path, directory / name)
+        (directory / name / "session.lock").unlink(missing_ok=True)
+        if activate:
+            _patch_properties(instance_id, {"level-name": name})
+        instances.invalidate_disk_cache(instance_id)
+        return {"name": name, "active": activate}
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def create_named_world_zip(instance_id: str, name: str) -> dict:
+    """Wie create_world_zip, aber für eine bestimmte (nicht aktive) Welt."""
+    directory = instances.instance_dir(instance_id)
+    name = validate_world_name(name)
+    world = directory / name
+    if not _is_world(world):
+        raise HTTPException(status_code=404, detail=f"Welt „{name}“ nicht gefunden")
+    safe = _ZIP_NAME_RE.sub("_", name) or "world"
+    dest = staging_dir() / f"{safe}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}.zip"
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for root, _dirs, files in os.walk(world):
+            for file in files:
+                path = Path(root) / file
+                try:
+                    zf.write(path, arcname=str(path.relative_to(world)))
+                except OSError:
+                    continue
+    return {"name": dest.name, "path": dest, "world": name,
+            "size_bytes": dest.stat().st_size}

@@ -297,6 +297,13 @@ def start_instance(instance: dict) -> None:
             raise RuntimeError("Instanz läuft bereits")
         existing.remove(force=True)  # gestoppten Rest entfernen und neu erstellen
 
+    # Live-Karte: accept-download sicherstellen, nach Welt-Wechsel neu rendern
+    from . import livemap  # lazy, vermeidet Import-Zirkel
+    livemap.prepare_start(instance)
+    ports = {"25565/tcp": int(instance["port"]), "25575/tcp": rcon_port(instance)}
+    if livemap.enabled(instance) and livemap.map_port(instance):
+        ports[f"{livemap.WEB_PORT}/tcp"] = livemap.map_port(instance)
+
     host_dir = Path(_host_instances_root()) / instance["id"]
     if not host_dir.name:
         raise RuntimeError("Instanz-Host-Pfad ergibt kein gültiges Verzeichnis")
@@ -306,8 +313,7 @@ def start_instance(instance: dict) -> None:
         "name": name,
         "detach": True,
         "environment": _env(instance),
-        "ports": {"25565/tcp": int(instance["port"]),
-                  "25575/tcp": rcon_port(instance)},
+        "ports": ports,
         "volumes": {str(host_dir): {"bind": "/data", "mode": "rw"}},
         "restart_policy": {"Name": "unless-stopped"},
         "labels": {"mc-dashboard.instance": instance["id"],
