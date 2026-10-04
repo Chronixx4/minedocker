@@ -3040,12 +3040,27 @@
         `Ziel: ${detail.loader} ${detail.game_version}${detail.loader_version ? ` (${detail.loader_version})` : ""}`);
       if (detail.container?.running) openDetailLogStream();
       else if (!state.detailLogStream) startDetailLogPolling(); // gestoppt: Polling halten
+      if (detail.disk_pending) loadDetailDisk(id);
       return detail;
     } catch (e) {
       if (e.status === 404) { closeDetail(); return null; }
       setText($("#detail-error"), `Details nicht abrufbar: ${e.message}`);
       show($("#detail-error"), true);
       return null;
+    }
+  }
+
+  /* Speicher nachladen: Die Detail-Antwort wartet nicht auf die Zählung
+     großer Welten ("disk_pending"), der Wert kommt hier nach. */
+  async function loadDetailDisk(id) {
+    try {
+      const disk = await api(`/api/instances/${id}/disk`);
+      if (state.detailId !== id || !state.detailData) return;
+      state.detailData.disk = disk;
+      state.detailData.disk_pending = false;
+      renderDetailInfo(state.detailData);
+    } catch (e) {
+      /* Speicher bleibt „wird berechnet…“; nächstes Neuladen versucht es erneut */
     }
   }
 
@@ -3067,7 +3082,7 @@
       + (disk.total_bytes ? ` · Mods ${fmtBytes(disk.mods_bytes)}`
         + ` · Welt ${fmtBytes(disk.world_bytes)}`
         + ` · Packs ${fmtBytes(disk.packs_bytes)}` : "")
-      : null;
+      : (detail.disk_pending ? "wird berechnet…" : null);
     const items = [
       ["Status", OV_STATE_LABELS[instStateKey(detail)]],
       ["Docker", detail.container?.state || "–"],

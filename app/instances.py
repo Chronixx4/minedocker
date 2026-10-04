@@ -672,29 +672,62 @@ def _dir_sizes(path: Path, buckets: dict) -> dict:
     return sizes
 
 
-# Kurzer Cache für disk_usage: Welten mit vielen Dateien sind teuer zu
-# vermessen; das Öffnen/Neuladen des Workspace darf nicht jedes Mal den
-# kompletten Instanz-Ordner durchwandern.
+# Cache für disk_usage: Welten mit vielen Dateien sind teuer zu vermessen
+# (auf einer HDD/NAS mehrere Sekunden). Ein Wert gilt 60 s als frisch; ältere
+# Werte darf die Detail-Ansicht weiter anzeigen, während im Hintergrund neu
+# gezählt wird (disk_usage_cached). Pro Instanz zählt immer nur ein Thread —
+# Detail-Ansicht und Welt-Info warten sonst beide einen eigenen Durchlauf ab.
 _DISK_CACHE: dict = {}
-_DISK_CACHE_TTL = 30.0
+_DISK_CACHE_TTL = 60.0
+_DISK_GEN: dict = {}
+_DISK_LOCKS: dict = {}
+_DISK_LOCKS_GUARD = threading.Lock()
 
 
 def invalidate_disk_cache(instance_id: str | None = None) -> None:
     """Vergessenen Speicher-Cache ungültig machen (nach Uploads/Installation)."""
-    if instance_id is None:
-        _DISK_CACHE.clear()
-    else:
-        _DISK_CACHE.pop(instance_id, None)
+    with _DISK_LOCKS_GUARD:
+        if instance_id is None:
+            _DISK_CACHE.clear()
+            for key in list(_DISK_GEN):
+                _DISK_GEN[key] += 1
+        else:
+            _DISK_CACHE.pop(instance_id, None)
+            _DISK_GEN[instance_id] = _DISK_GEN.get(instance_id, 0) + 1
+
+
+def disk_usage_cached(instance_id: str) -> tuple:
+    """(letztes Ergebnis oder None, frisch?) — ohne zu zählen."""
+    cached = _DISK_CACHE.get(instance_id)
+    if cached is None:
+        return None, False
+    return cached[1], time.monotonic() - cached[0] < _DISK_CACHE_TTL
 
 
 def disk_usage(instance_id: str) -> dict:
     """Speicherverbrauch der Instanz, aufgeschlüsselt nach Mods, Welt,
     packs und Rest (Welt = gefundener level.dat-Ordner). Ergebnis wird
-    kurz (30 s) gecacht, damit häufiges Öffnen/Neuladen schnell bleibt."""
-    now = time.monotonic()
-    cached = _DISK_CACHE.get(instance_id)
-    if cached is not None and now - cached[0] < _DISK_CACHE_TTL:
-        return cached[1]
+    60 s gecacht; parallele Aufrufe warten auf denselben Durchlauf."""
+    cached, fresh = disk_usage_cached(instance_id)
+    if fresh:
+        return cached
+    with _DISK_LOCKS_GUARD:
+        lock = _DISK_LOCKS.setdefault(instance_id, threading.Lock())
+        gen = _DISK_GEN.get(instance_id, 0)
+    with lock:
+        cached, fresh = disk_usage_cached(instance_id)
+        if fresh:
+            return cached
+        result = _measure_disk(instance_id)
+        with _DISK_LOCKS_GUARD:
+            # Während des Zählens invalidiert (Upload, Weltwechsel …)? Dann
+            # nicht als frisch speichern — der nächste Aufruf zählt neu.
+            if _DISK_GEN.get(instance_id, 0) == gen:
+                _DISK_CACHE[instance_id] = (time.monotonic(), result)
+        return result
+
+
+def _measure_disk(instance_id: str) -> dict:
     directory = instance_dir(instance_id)
     world_path = find_world_dir(directory)
     buckets = {str(directory / "mods"): "mods", str(directory / "packs"): "packs"}
@@ -703,7 +736,7 @@ def disk_usage(instance_id: str) -> dict:
     sizes = _dir_sizes(directory, buckets)
     world, mods, packs = sizes["world"], sizes["mods"], sizes["packs"]
     total = sum(sizes.values())
-    result = {
+    return {
         "total_bytes": total,
         "mods_bytes": mods,
         "world_bytes": world,
@@ -712,8 +745,6 @@ def disk_usage(instance_id: str) -> dict:
         "world_dir": world_path.name if world_path else None,
         "world_exists": world_path is not None,
     }
-    _DISK_CACHE[instance_id] = (now, result)
-    return result
 
 
 def list_mods(instance_id: str, with_meta: bool = False) -> list:
@@ -746,6 +777,8 @@ def list_mods_in(directory, with_meta: bool = False) -> list:
             mods.append(entry)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Mods-Ordner nicht lesbar: {exc}")
+    if with_meta:
+        modmeta.save_cache()  # neu gelesene .jar-Infos für den nächsten Start sichern
     mods.sort(key=lambda m: m["filename"].lower())
     return mods
 
@@ -1291,6 +1324,7 @@ __all__ = [
     "delete_instance",
     "delete_mod",
     "disk_usage",
+    "disk_usage_cached",
     "find_world_dir",
     "get_instance",
     "instance_dir",

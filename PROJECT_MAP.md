@@ -57,7 +57,12 @@ Checkliste, Dashboard-Schnellstart).
       ID/Port, 409 bei laufender Quelle, Zeitplan UND Tags werden übernommen),
      find_world_dir()/world_dir() (Welt-Erkennung über level-name aus
      server.properties → 'world' → erster Unterordner mit level.dat),
-     disk_usage() (total/mods/world/packs/rest + world_dir)
+     disk_usage() (total/mods/world/packs/rest + world_dir; 60 s Cache, pro
+     Instanz nur ein Durchlauf gleichzeitig, disk_usage_cached() liefert auch
+     ältere Werte; GET /instances/{id} wartet max. 1 s darauf, sonst
+     disk_pending=true und das Frontend holt GET /instances/{id}/disk nach;
+     Ping nur bei laufendem Container; Server-Timing-Header mit Teilzeiten,
+     Anfragen ab 1 s werden geloggt)
   - rcon.py – minimaler RCON-Client (Source-RCON-Protokoll, stdlib-only):
     command(host, port, password, cmd) + parse_list_output() für 'list'
   - runtime.py – Docker-Runtime pro Instanz (docker SDK): Container itzg/minecraft-server
@@ -69,7 +74,8 @@ Checkliste, Dashboard-Schnellstart).
   - catalog.py – Katalog: Mojang-Versionen (Releases/Snapshots) + Loader-Versionen
     (Fabric/Quilt-Meta, Forge-Promotions, NeoForge-Maven, Paper Fill-API v3,
     Bukkit/Spigot-BuildTools-Hinweis); 10-min-Cache, nie werfend je Loader
-  - modmeta.py – Mod-Metadaten aus der .jar (fabric.mod.json, quilt.mod.json,
+  - modmeta.py – (Cache gespiegelt in {INSTANCES_DIR}/.modmeta-cache.json,
+    überlebt Neustarts) Mod-Metadaten aus der .jar (fabric.mod.json, quilt.mod.json,
     (neoforge.)mods.toml; Jar-in-Jar eine Ebene tief) + Problem-Erkennung
     (fehlende/deaktivierte Pflicht-Abhängigkeit, falscher Loader, reine
     Client-Mod, doppelte Mod-ID); instances.mods_overview() liefert Mods +
