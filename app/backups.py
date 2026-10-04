@@ -1,10 +1,10 @@
 """Instanz-Backups: tar.gz-Snapshots je Instanz.
 
-Speicherort: Geschwister-Ordner neben INSTANCES_DIR im selben Volume
-(/data/backups/{instance_id}) — damit landen Backups NICHT im Instanz-Ordner
-selbst und ein Restore kann den Instanz-Ordner ohne Sondernfälle leeren.
-Hinweis: Die Snapshots liegen im selben Volume wie die Server-Daten — für
-echte Off-Site-Sicherheit regelmäßig herunterladen (SERVER-SETUP.md §5).
+Speicherort: BACKUPS_DIR/{instance_id}, standardmäßig der Geschwister-Ordner
+neben INSTANCES_DIR im selben Volume (/data/backups) — damit landen Backups
+NICHT im Instanz-Ordner selbst und ein Restore kann den Instanz-Ordner ohne
+Sondernfälle leeren. Mit BACKUPS_DIR auf einer zweiten Platte überstehen sie
+auch einen Ausfall der Server-Platte (SERVER-SETUP.md §5).
 """
 import contextlib
 import logging
@@ -21,11 +21,11 @@ logger = logging.getLogger("dashboard.backups")
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}\.tar\.gz$")
 
 # Sicherheits-Snapshots (pre-install = vor Modpack-Installation, pre-restore =
-# vor Backup-Restore). Die Rotation begrenzt sie pro Instanz, damit die
+# vor Backup-Restore, pre-update = vor Mod-Updates und Versionswechsel). Die Rotation begrenzt sie pro Instanz, damit die
 # Operationen "risikofrei" bleiben, ohne das Volume ungebremst zu füllen.
-_SAFETY_KINDS = ("pre-install", "pre-restore")
+_SAFETY_KINDS = ("pre-install", "pre-restore", "pre-update")
 _SAFETY_NAME_RE = re.compile(
-    r"^(pre-install|pre-restore)-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
+    r"^(pre-install|pre-restore|pre-update)-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
 _SAFETY_KEEP = 3
 
 # Zeitgesteuerte Backups (Scheduler): eigenes Namensschema + eigene Rotation,
@@ -34,8 +34,22 @@ _SCHEDULED_NAME_RE = re.compile(r"^scheduled-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
 
 
 def backups_root() -> Path:
-    """Globales Backup-Verzeichnis (im mcdata-Volume)."""
+    """Globales Backup-Verzeichnis: BACKUPS_DIR (z. B. zweite Platte) oder
+    standardmäßig neben den Instanzen im selben Volume."""
+    if settings.backups_dir:
+        return settings.backups_dir
     return Path(settings.instances_dir).parent / "backups"
+
+
+def is_external() -> bool:
+    """True, wenn die Backups auf einem anderen Dateisystem liegen als die
+    Server (übersteht dann einen Ausfall der Server-Platte)."""
+    root = backups_root()
+    try:
+        probe = root if root.exists() else root.parent
+        return probe.stat().st_dev != Path(settings.instances_dir).stat().st_dev
+    except OSError:
+        return False
 
 
 def instance_backups_dir(instance_id: str) -> Path:
@@ -123,7 +137,8 @@ def create_backup(instance_id: str, instance_dir: Path) -> dict:
 def _safety_excludes(kind: str, instance_dir: Path) -> set:
     """Zu überspringende Top-Level-Ordner je Snapshot-Typ:
     - pre-install: Welt (bleibt unberührt) + packs (Installations-Quellen)
-    - pre-restore: nur packs — Restore ersetzt ALLE Daten"""
+    - pre-restore/pre-update: nur packs (Restore ersetzt ALLE Daten, neue
+      Mod-/Spielversionen können die Welt beim ersten Start umschreiben)"""
     excludes = {"packs", *_ALWAYS_EXCLUDE}
     if kind == "pre-install":
         from .instances import find_world_dir  # lazy, vermeidet Import-Zirkel

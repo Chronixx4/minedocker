@@ -3572,12 +3572,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filenames: filenames || null }),
       });
-      await pollProgress(job, {
+      const done = await pollProgress(job, {
         box: $("#mods-update-progress"),
         bar: $("#mods-update-bar"),
         phase: $("#mods-update-phase"),
         pct: $("#mods-update-pct"),
       });
+      Object.assign(job, done || {});
       const summary = job.summary
         ? `${job.summary.updated} aktualisiert${job.summary.failed ? `, ${job.summary.failed} fehlgeschlagen` : ""}.`
         : "Aktualisiert.";
@@ -4574,6 +4575,15 @@
     try {
       const data = await api(`/api/instances/${state.detailId}/backups`);
       list.textContent = "";
+      const loc = $("#backup-location");
+      if (data.location) {
+        setText(loc, data.external
+          ? `Ablage: ${data.location} (eigene Platte)`
+          : `Ablage: ${data.location}, auf derselben Platte wie die Server. Fällt sie aus, `
+            + "sind auch die Backups weg. Abhilfe: DASHBOARD_BACKUPS_DIR in der .env auf "
+            + "eine zweite Platte setzen oder Backups herunterladen.");
+      }
+      show(loc, !!data.location);
       show($("#backup-empty"), data.backups.length === 0);
       for (const b of data.backups) {
         const row = document.createElement("li");

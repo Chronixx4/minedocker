@@ -535,9 +535,11 @@
               <button id="backup-create-btn" class="btn primary admin-only">Backup erstellen</button>
               <button id="backup-reload-btn" class="btn">Aktualisieren</button>
             </div>
-            <p class="muted small">Sichert Welt, Configs und Mods der Instanz im Volume. Für
-              konsistente Snapshots die Instanz vorher stoppen. Wiederherstellen
-              ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <p class="muted small">Sichert Welt, Configs und Mods der Instanz. Bei laufendem
+              Server wird vorher alles gespeichert. Vor Mod-Updates, Modpack-Installationen
+              und Versionswechseln entsteht automatisch ein Sicherheits-Backup.
+              Wiederherstellen ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <p id="backup-location" class="muted small hidden"></p>
             <div id="backup-error" class="err hidden"></div>
             <ul id="backup-list" class="mod-list"></ul>
             <p id="backup-empty" class="muted hidden">Noch keine Backups vorhanden.</p>

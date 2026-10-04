@@ -45,6 +45,9 @@ class Settings:
         self.instances_dir = Path(os.getenv("INSTANCES_DIR", "/data/instances")).resolve()
         self.instances_port_base = int(os.getenv("INSTANCES_PORT_BASE", "25570"))
         self.instances_memory = os.getenv("INSTANCES_MEMORY", "2G").strip()
+        # Backups woanders ablegen (z. B. zweite Platte); leer = /data/backups
+        backups_dir = os.getenv("BACKUPS_DIR", "").strip()
+        self.backups_dir = Path(backups_dir).resolve() if backups_dir else None
         # Host-Pfad des Instanz-Ordners (für Docker-Binds); leer = automatische
         # Erkennung über /proc/self/mountinfo
         self.instances_host_dir = os.getenv("INSTANCES_HOST_DIR", "").strip()

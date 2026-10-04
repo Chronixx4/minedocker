@@ -696,6 +696,22 @@ async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
             job["results"].append(entry)
 
     job["results"] = []
+    # Sicherheits-Backup (inkl. Welt): eine neue Mod-Version kann beim
+    # ersten Start Weltdaten umschreiben. Ohne Backup kein Update.
+    job["phase"] = "Sicherheits-Backup"
+    try:
+        from . import backups  # lazy, vermeidet Import-Zirkel
+        snap = await asyncio.to_thread(
+            backups.safety_backup, instance["id"],
+            instances.instance_dir(instance["id"]), "pre-update")
+        job["backup"] = snap["name"]
+    except Exception as exc:
+        job["phase"] = "abgebrochen"
+        job["status"] = "error"
+        job["error"] = f"Sicherheits-Backup fehlgeschlagen, nichts geändert: {exc}"
+        modrinth.persist_job(job)
+        return
+    job["phase"] = f"Aktualisiere (0/{job['total']})"
     client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0),
                                follow_redirects=True)
     try:

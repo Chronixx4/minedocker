@@ -317,3 +317,26 @@ class TestMetadaten:
         assert instances_mod.get_instance(inst["id"])["status"] in (
             "running", "stopped", "starting", "error")
         assert not list(d.glob("instance.json*.tmp"))
+
+
+class TestBackupAblage:
+    def test_backups_dir_aus_env(self, tmp_path, monkeypatch):
+        from app import backups
+        from app.config import settings
+        monkeypatch.setattr(settings, "backups_dir", tmp_path / "zweite-platte")
+        assert backups.backups_root() == tmp_path / "zweite-platte"
+        assert backups.instance_backups_dir("abc") == tmp_path / "zweite-platte" / "abc"
+        assert backups.is_external() is False  # gleiches Dateisystem im Test
+
+    def test_standard_neben_instanzen(self, monkeypatch):
+        from app import backups
+        from app.config import settings
+        monkeypatch.setattr(settings, "backups_dir", None)
+        assert backups.backups_root() == settings.instances_dir.parent / "backups"
+
+    def test_api_meldet_ablage(self, client):
+        from app import instances
+        inst = instances.create_instance("Ablage-Srv", "fabric", "1.21.4", accept_eula=True)
+        data = client.get(f"/api/instances/{inst['id']}/backups").json()
+        assert data["external"] is False
+        assert data["location"].endswith("backups")

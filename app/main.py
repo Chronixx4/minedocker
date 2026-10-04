@@ -1854,7 +1854,10 @@ def _handle_backup_error(exc: Exception) -> HTTPException:
 async def list_instance_backups(instance_id: str):
     instances.get_instance(instance_id)
     try:
-        return {"backups": await asyncio.to_thread(backups_mod.list_backups, instance_id)}
+        items = await asyncio.to_thread(backups_mod.list_backups, instance_id)
+        external = await asyncio.to_thread(backups_mod.is_external)
+        return {"backups": items, "external": external,
+                "location": str(backups_mod.backups_root())}
     except Exception as exc:
         raise _handle_backup_error(exc)
 

@@ -27,7 +27,11 @@
 # - DASHBOARD_HTTP_PORT   Host-Port des Dashboards (Default 8080)
 # - MCDATA_DIR            Datenablage: leer/„mcdata" = Named Volume; sonst
 #                         Bind-Mount (ZimaOS: /DATA/AppData/mc-dashboard/data)
-# - BACKUPS_DIR           Backup-Ablage (Default ./backups; ZimaOS: unter /DATA)
+# - BACKUPS_DIR           Backup-Ablage des Backup-Daemons (Default ./backups;
+#                         ZimaOS: unter /DATA)
+# - DASHBOARD_BACKUPS_DIR Dashboard-Backups auf eine zweite Platte legen
+#                         (Host-Pfad, z. B. /media/HDD2/mc-backups); leer =
+#                         wie bisher /data/backups neben den Servern
 # - DASHBOARD_API_KEY, CF_API_KEY, CORS_ORIGINS, TZ, ALERT_*, INSTANCES_*
 #   werden als ${VAR:-Default} aus .env durchgereicht (siehe dashboard:
 #   environment) — so müssen Geheimnisse/spezielle Werte nicht in die
@@ -70,7 +74,9 @@ services:
     network_mode: none
     volumes:
       - ${MCDATA_DIR:-mcdata}:/data
+      - ${DASHBOARD_BACKUPS_DIR:-mcbackups}:/backups
     command: |
+      [ "$$(stat -c %u /backups)" = "1000" ] || chown -R 1000:1000 /backups
       uid=$$(stat -c %u /data) || true
       [ "$$uid" = "1000" ] && exit 0
       if [ -n "$$(ls -A /data 2>/dev/null)" ] && [ ! -d /data/instances ]; then
@@ -106,6 +112,8 @@ services:
       INSTANCES_PORT_BASE: "${INSTANCES_PORT_BASE:-25570}"
       INSTANCES_MEMORY: "${INSTANCES_MEMORY:-2G}" # Default-Heap pro Instanz (siehe SERVER-SETUP.md §1)
       INSTANCES_HOST_DIR: "${INSTANCES_HOST_DIR:-}" # leer = automatische Erkennung (empfohlen)
+      # Backups auf zweiter Platte: nur aktiv, wenn DASHBOARD_BACKUPS_DIR gesetzt ist
+      BACKUPS_DIR: "${DASHBOARD_BACKUPS_DIR:+/backups}"
       # --- Crash-Watchdog/Alerts (optional, siehe SERVER-SETUP.md §8) ---
       ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}" # Discord-kompatibler Webhook; leer = aus
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}" # alternativ Telegram (Token + Chat-ID)
@@ -117,6 +125,7 @@ services:
       - "${DASHBOARD_HTTP_PORT:-8080}:8080"  # LAN/VPN only — nie direkt ins Internet!
     volumes:
       - ${MCDATA_DIR:-mcdata}:/data
+      - ${DASHBOARD_BACKUPS_DIR:-mcbackups}:/backups # Dashboard-Backups (zweite Platte, optional)
       - /var/run/docker.sock:/var/run/docker.sock   # Instanz-Verwaltung + Ressourcen-Statistik
     # Gehärtet: UID/GID 1000 (Dockerfile-User, identisch mit itzg/minecraft-
     # server) statt root. Docker-Socket-Zugriff läuft über die Socket-Gruppe:
@@ -176,3 +185,4 @@ services:
 
 volumes:
   mcdata:
+  mcbackups:  # Platzhalter, solange DASHBOARD_BACKUPS_DIR leer ist
