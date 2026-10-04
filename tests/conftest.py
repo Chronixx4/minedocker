@@ -30,6 +30,19 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def _leere_suchcaches():
+    """Such-/Kategorie-Caches und geteilte HTTP-Clients pro Test zurücksetzen
+    — sonst liefert ein Test die gecachten Treffer eines anderen Mocks."""
+    from app import modcategories, searchcache
+
+    searchcache.clear()
+    modcategories.clear()
+    yield
+    searchcache.clear()
+    modcategories.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isoliere_auth():
     """users.json/.auth_secret vor und nach JEDEM Test löschen — die Dateien
     liegen im geteilten conftest-tmp; ohne Reset würde ein Login-Test, der

@@ -85,6 +85,14 @@ Checkliste, Dashboard-Schnellstart).
     Frontend: Suche im Server-Bereich unter Mods › Hinzufügen (Karte wird
     zwischen Tab „Mods suchen“ und Workspace verschoben), Detail-Dialog,
     Vormerk-Leiste, eigene Rückfragen (confirmDialog statt window.confirm)
+  - searchcache.py – Mod-Suche schneller: Keep-Alive-Client je Event-Loop
+    (kein TLS-Aufbau pro Seite) + 5-min-Cache für Ergebnisseiten; das
+    Frontend lädt die nächste Seite im Hintergrund vor. Suche und
+    Installiert-Abgleich (updates.installed_project_ids, Modrinth-Batch
+    POST /version_files) laufen parallel
+  - modcategories.py – Kategorie-Filter des Modbrowsers (/mods/categories):
+    Listen von Modrinth (/tag/category) bzw. CurseForge (/categories),
+    deutsche Namen für bekannte Kategorien, 1 Tag Cache
   - packs.py – Modpack-Installer: Modrinth-Suche, mrpack-Download+Entpacken,
     Upload-Installation (.mrpack + CurseForge-.zip mit manifest.json),
     Index-Normalisierung (mrpack/CF -> internes Schema: title, game_version,

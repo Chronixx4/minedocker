@@ -2910,6 +2910,8 @@ kbd {
   user-select: none;
 }
 .result.is-client-only .side { color: var(--warn); }
+/* Seitenwechsel scrollt an den Kartenanfang — Platz für die sticky Topbar */
+#search-card { scroll-margin-top: 5rem; }
 .mod-cart {
   position: sticky;
   bottom: 0.75rem;

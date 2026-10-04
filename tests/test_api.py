@@ -116,7 +116,7 @@ class TestModrinthSearch:
         captured = {}
 
         async def fake_search(query, loader, game_version, limit=20, offset=0,
-                              sort="relevance", environment=None):
+                              sort="relevance", environment=None, category=None):
             captured["query"] = query
             return {"total": 0, "hits": [], "loader": loader, "game_version": game_version}
 
@@ -129,7 +129,7 @@ class TestModrinthSearch:
         captured = {}
 
         async def fake_search(query, loader, game_version, limit=20, offset=0,
-                              sort="relevance", environment=None):
+                              sort="relevance", environment=None, category=None):
             captured["offset"] = offset
             return {"total": 0, "hits": [], "loader": loader, "game_version": game_version}
 
@@ -150,7 +150,7 @@ class TestModrinthSearch:
         captured = {}
 
         async def fake_search(query, loader, game_version, limit=20, offset=0,
-                              sort="relevance", environment=None):
+                              sort="relevance", environment=None, category=None):
             captured.update(loader=loader, game_version=game_version, sort=sort,
                             environment=environment)
             return {"total": 0, "hits": [], "loader": loader, "game_version": game_version}

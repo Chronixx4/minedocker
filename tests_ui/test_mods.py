@@ -1,7 +1,9 @@
 """Mod-Liste: Infos aus der .jar, erkannte Probleme und Papierkorb."""
 import io
 import json
+import re
 import zipfile
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import expect
 
@@ -207,3 +209,71 @@ def test_mods_suchen_tab_hat_zielauswahl(page, make_instance):
     expect(card).to_be_visible()
     expect(card.locator(".search-target-pick")).to_be_visible()
     expect(page.locator("#search-target-select")).to_contain_text("Tab-Ziel")
+
+
+def _wait_until(page, cond, timeout_ms=5000):
+    for _ in range(timeout_ms // 50):
+        if cond():
+            return
+        page.wait_for_timeout(50)
+    assert cond()
+
+
+def _page_hits(offset):
+    return [{"project_id": f"P{offset + i:04d}", "slug": f"mod-{offset + i}",
+             "title": f"Mod {offset + i}", "author": "x", "description": "Test",
+             "downloads": 1000, "icon_url": "", "latest_version": "1.0",
+             "server_side": "optional", "installed": offset + i == 21}
+            for i in range(20)]
+
+
+def test_modbrowser_kategorie_blaettern_und_installiert(page, make_instance):
+    inst = make_instance("Blaetter-SMP")
+    searches = []
+
+    def search(route):
+        query = parse_qs(urlparse(route.request.url).query)
+        searches.append(query)
+        offset = int(query["offset"][0])
+        route.fulfill(json={"total": 45, "hits": _page_hits(offset),
+                            "loader": "fabric", "game_version": "1.21.4"})
+
+    page.route("**/api/modrinth/search?*", search)
+    page.route("**/api/mods/categories?*", lambda r: r.fulfill(json={
+        "source": "modrinth", "categories": [
+            {"id": "magic", "name": "Magie"}, {"id": "worldgen", "name": "Weltgenerierung"}]}))
+
+    _open_mods(page, inst, "Hinzufügen")
+    results = page.locator("#search-results .result")
+    expect(results).to_have_count(20)
+
+    # Kategorie-Filter: Anbieter-Kategorien auf Deutsch, Auswahl geht in die Suche
+    category = page.locator("#search-filter-category")
+    expect(category.locator("option")).to_have_count(3)
+    category.select_option("worldgen")
+    expect(page.locator("#search-page")).to_contain_text("Seite 1")
+    page.wait_for_function("() => document.querySelectorAll('#search-results .result').length === 20")
+    assert any(q.get("category") == ["worldgen"] and q["offset"] == ["0"] for q in searches)
+
+    # Nächste Seite wurde schon im Hintergrund geladen → Klick braucht keine neue Anfrage
+    _wait_until(page, lambda: searches[-1]["offset"] == ["20"])
+    assert searches[-1].get("category") == ["worldgen"]
+    before = len(searches)
+    page.locator("#search-next").scroll_into_view_if_needed()
+    page.locator("#search-next").click()
+    expect(page.locator("#search-page")).to_contain_text("Seite 2")
+    expect(results.first.locator(".name")).to_have_text("Mod 20")
+    # Seite 2 kam aus dem Vorabladen; danach wird nur Seite 3 vorgeladen
+    _wait_until(page, lambda: len(searches) > before)
+    page.wait_for_timeout(200)  # keine weitere (doppelte) Anfrage für Seite 2
+    assert [q["offset"] for q in searches[before:]] == [["40"]]
+
+    # Nach dem Seitenwechsel steht die Trefferliste wieder oben im Bild
+    page.wait_for_function(
+        "() => Math.abs(document.querySelector('#search-card').getBoundingClientRect().top) < 120")
+
+    # Bereits installierte Mods sind markiert und nicht erneut installierbar
+    installed = results.nth(1)
+    expect(installed).to_have_class(re.compile(r"\bis-installed\b"))
+    expect(installed.locator(".installed-tag")).to_have_text("Installiert")
+    expect(installed.locator(".install")).to_be_disabled()
