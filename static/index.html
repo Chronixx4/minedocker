@@ -4,25 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0c0f0e">
+<meta name="theme-color" content="#121312">
 <title>Minecraft Server Dashboard</title>
 <link rel="icon" href="data:,">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
-    <span class="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
-        <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>
-      </svg>
-    </span>
-    <h1>Minecraft Dashboard</h1>
+    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 8 8" shape-rendering="crispEdges"><rect width="8" height="8" fill="#7a5434"/><rect width="8" height="2" fill="#5ccf4a"/><rect y="2" width="1" height="1" fill="#3e9a32"/><rect x="3" y="2" width="2" height="1" fill="#3e9a32"/><rect x="1" y="4" width="2" height="1" fill="#5a3c24"/><rect x="5" y="5" width="2" height="1" fill="#5a3c24"/><rect x="2" y="7" width="1" height="1" fill="#5a3c24"/></svg></span>
+    <h1>Minedocker</h1>
   </div>
+  <nav class="tabs" aria-label="Hauptnavigation">
+    <button type="button" class="tab active" data-tab="overview" title="Übersicht">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span class="tab-label">Übersicht</span>
+    </button>
+    <button type="button" class="tab" data-tab="servers" title="Server">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
+      <span class="tab-label">Server</span>
+    </button>
+    <button type="button" class="tab" data-tab="search" title="Mods suchen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
+      <span class="tab-label">Mods suchen</span>
+    </button>
+    <button type="button" class="tab" data-tab="modpacks" title="Modpacks">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
+      <span class="tab-label">Modpacks</span>
+    </button>
+    <button type="button" class="tab" data-tab="upload" title="Upload">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <span class="tab-label">Upload</span>
+    </button>
+    <button type="button" class="tab" data-tab="stats" title="Statistik">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <span class="tab-label">Statistik</span>
+    </button>
+  </nav>
   <div class="topbar-right">
     <a id="update-badge" class="hidden" href="https://github.com/Chronixx4/minedocker/releases" target="_blank" rel="noopener">Update verfügbar</a>
     <span id="app-version" class="muted small" title="Installierte Dashboard-Version">–</span>
@@ -44,32 +65,11 @@
   </div>
 </header>
 
-<nav class="tabs" aria-label="Hauptnavigation">
-  <button class="tab active" data-tab="overview">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
-    Übersicht
-  </button>
-  <button class="tab" data-tab="servers">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>
-    Server
-  </button>
-  <button class="tab" data-tab="search">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
-    Mods suchen
-  </button>
-  <button class="tab" data-tab="modpacks">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg>
-    Modpacks
-  </button>
-  <button class="tab" data-tab="upload">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
-    Upload
-  </button>
-  <button class="tab" data-tab="stats">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
-    Statistik
-  </button>
-</nav>
+<div class="worldbar">
+  <nav id="inst-tabs" class="inst-tabs" aria-label="Server"></nav>
+</div>
+
+
 
 <main>
   <!-- Übersicht -->
@@ -208,7 +208,6 @@
 
   <!-- Server-Instanzen (Multi-Server-Verwaltung) -->
   <section id="tab-servers" class="panel">
-    <nav id="inst-tabs" class="inst-tabs" aria-label="Server-Tabs"></nav>
     <div id="inst-list-wrap">
     <div class="card">
       <div class="card-head">
@@ -329,63 +328,67 @@
     </div>
 
     <div id="inst-detail" class="card hidden">
-      <div class="card-head">
-        <h2 id="detail-title">Instanz</h2>
-        <div class="row">
-          <span id="detail-state" class="badge inst-badge off" title="Status dieser Instanz">
-            <span class="dot"></span><span id="detail-state-text">–</span>
-          </span>
-          <button id="detail-close" class="btn">Alle Server</button>
+      <div class="card-head ws-hero">
+        <img id="detail-icon" class="ws-hero-icon" alt="" width="64" height="64">
+        <div class="ws-hero-text">
+          <h2 id="detail-title">Instanz</h2>
+          <div class="row ws-hero-meta">
+            <span id="detail-state" class="badge inst-badge off" title="Status dieser Instanz">
+              <span class="dot"></span><span id="detail-state-text">–</span>
+            </span>
+            <span class="muted small" id="ws-uptime">–</span>
+          </div>
+        </div>
+        <div class="ws-actions">
+          <button id="ws-start" class="btn primary ws-btn-start" title="Server starten">Starten</button>
+          <button id="ws-restart" class="btn ws-btn-restart" title="Server neu starten">Neustart</button>
+          <button id="ws-stop" class="btn danger" title="Server stoppen">Stoppen</button>
+          <button id="detail-close" class="btn" title="Zurück zur Server-Liste">Alle Server</button>
         </div>
       </div>
       <div id="detail-error" class="err hidden"></div>
-      <div class="ws-top">
-        <div class="ws-box">
-          <h3>Server-Informationen</h3>
-          <div id="detail-info" class="detail-info"></div>
-          <div class="ws-metrics">
-            <div class="metric">
-              <div class="metric-head"><span>CPU</span><span id="ws-cpu-val" class="muted small">–</span></div>
-              <div class="bar"><div id="ws-cpu-bar" class="bar-fill" style="width:0%"></div></div>
-            </div>
-            <div class="metric">
-              <div class="metric-head"><span>RAM</span><span id="ws-ram-val" class="muted small">–</span></div>
-              <div class="bar"><div id="ws-ram-bar" class="bar-fill ram" style="width:0%"></div></div>
-            </div>
-          </div>
-        </div>
-        <div class="ws-box">
-          <h3>Server-Steuerung</h3>
-          <div class="ws-actions">
-            <button id="ws-start" class="btn primary ws-btn-start" title="Server starten">Start</button>
-            <button id="ws-restart" class="btn ws-btn-restart" title="Server neu starten">Neu starten</button>
-            <button id="ws-stop" class="btn danger" title="Server stoppen">Stop</button>
-          </div>
-          <p class="muted small" id="ws-uptime">–</p>
-          <div class="ws-chat">
-            <input id="ws-chat-input" class="search-input" type="text" maxlength="256"
-                   placeholder="Nachricht an alle Spieler (say …)" autocomplete="off" spellcheck="false">
-            <button id="ws-chat-send" class="btn admin-only">Senden</button>
-          </div>
-          <label class="check" for="ws-autostart">
-            <input type="checkbox" id="ws-autostart">
-            Beim Dashboard-Start automatisch starten
-          </label>
-          <div id="ws-controls-error" class="err hidden"></div>
-        </div>
-        <div class="ws-box">
-          <h3>Backups
-            <button id="ws-backups-open" class="btn small-btn" title="Backup-Verwaltung öffnen">Alle anzeigen</button>
-          </h3>
-          <p class="muted small" id="bk-mini-summary">–</p>
-          <div class="row">
-            <button id="ws-backup-now" class="btn primary admin-only">Backup erstellen</button>
-          </div>
-          <ul id="bk-mini-list" class="mod-list compact"></ul>
-        </div>
-      </div>
-      <nav id="ws-tabs" class="ws-tabs" aria-label="Bereiche dieser Instanz"></nav>
       <div id="ws-panels" class="ws-panels">
+        <div class="ws-panel hidden" data-ws-panel="uebersicht">
+          <div class="ws-top">
+            <div class="ws-box">
+              <h3>Server-Informationen</h3>
+              <div id="detail-info" class="detail-info"></div>
+              <div class="ws-metrics">
+                <div class="metric">
+                  <div class="metric-head"><span>CPU</span><span id="ws-cpu-val" class="muted small">–</span></div>
+                  <div class="bar"><div id="ws-cpu-bar" class="bar-fill" style="width:0%"></div></div>
+                </div>
+                <div class="metric">
+                  <div class="metric-head"><span>RAM</span><span id="ws-ram-val" class="muted small">–</span></div>
+                  <div class="bar"><div id="ws-ram-bar" class="bar-fill ram" style="width:0%"></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="ws-box">
+              <h3>Chat &amp; Autostart</h3>
+              <div class="ws-chat">
+                <input id="ws-chat-input" class="search-input" type="text" maxlength="256"
+                       placeholder="Nachricht an alle Spieler (say …)" autocomplete="off" spellcheck="false">
+                <button id="ws-chat-send" class="btn admin-only">Senden</button>
+              </div>
+              <label class="check" for="ws-autostart">
+                <input type="checkbox" id="ws-autostart">
+                Beim Dashboard-Start automatisch starten
+              </label>
+              <div id="ws-controls-error" class="err hidden"></div>
+            </div>
+            <div class="ws-box">
+              <h3>Backups
+                <button id="ws-backups-open" class="btn small-btn" title="Backup-Verwaltung öffnen">Alle anzeigen</button>
+              </h3>
+              <p class="muted small" id="bk-mini-summary">–</p>
+              <div class="row">
+                <button id="ws-backup-now" class="btn primary admin-only">Backup erstellen</button>
+              </div>
+              <ul id="bk-mini-list" class="mod-list compact"></ul>
+            </div>
+          </div>
+        </div>
         <div class="ws-panel hidden" data-ws-panel="mods"></div>
         <div class="ws-panel hidden" data-ws-panel="welt"></div>
         <div class="ws-panel hidden" data-ws-panel="dateien"></div>
@@ -394,7 +397,6 @@
         <div class="ws-panel hidden" data-ws-panel="einstellungen"></div>
         <div class="ws-panel hidden" data-ws-panel="zeitplan"></div>
         <div class="ws-panel hidden" data-ws-panel="backups"></div>
-        <div class="ws-panel hidden" data-ws-panel="logs"></div>
       </div>
       <div class="detail-grid">
         <div class="detail-cols">
@@ -1067,13 +1069,8 @@
 <div id="auth-overlay" class="auth-overlay hidden">
   <div class="auth-box">
     <div class="auth-brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
-          <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>
-        </svg>
-      </span>
-      <h1>Minecraft Dashboard</h1>
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 8 8" shape-rendering="crispEdges"><rect width="8" height="8" fill="#7a5434"/><rect width="8" height="2" fill="#5ccf4a"/><rect y="2" width="1" height="1" fill="#3e9a32"/><rect x="3" y="2" width="2" height="1" fill="#3e9a32"/><rect x="1" y="4" width="2" height="1" fill="#5a3c24"/><rect x="5" y="5" width="2" height="1" fill="#5a3c24"/><rect x="2" y="7" width="1" height="1" fill="#5a3c24"/></svg></span>
+      <h1>Minedocker</h1>
     </div>
 
     <form id="auth-login-form" class="auth-form hidden" autocomplete="on">
@@ -1287,6 +1284,12 @@
     </div>
   </article>
 </template>
+
+<!-- Hotbar: 9 Bereiche der geöffneten Instanz (Tasten 1–9 wie im Spiel) -->
+<div id="hotbar-wrap" class="hotbar-wrap hidden">
+  <div id="slot-name" class="slot-name" aria-hidden="true"></div>
+  <nav id="ws-tabs" class="hotbar" aria-label="Bereiche dieser Instanz"></nav>
+</div>
 
 <script src="app.js"></script>
 </body>
