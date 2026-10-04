@@ -2912,6 +2912,9 @@
   /* ---------- Detail-Ansicht (Instanz-Workspace) ---------- */
   async function openDetail(id) {
     state.detailId = id;
+    // Daten der Bereiche laden erst, wenn man sie öffnet (weniger Anfragen
+    // beim Öffnen eines Servers); der aktuelle Bereich lädt nach den Details
+    state.wsLoaded = null; // erst nach dem Zurücksetzen der Bereiche laden
     show($("#inst-list-wrap"), false); // Workspace ersetzt die Liste (Tab-Look)
     show($("#inst-create"), false);
     show($("#inst-import-box"), false);
@@ -2970,7 +2973,6 @@
     // Whitelist-Editor zurücksetzen und Datei laden
     state.wlEntries = [];
     renderWhitelistStatic();
-    loadWhitelist();
     // Mod-Update-Ansicht zurücksetzen (Ergebnis ist instanzbezogen)
     state.detailUpdates = null;
     setText($("#mods-update-summary"), "");
@@ -2990,8 +2992,6 @@
     $("#icon-upload-btn").disabled = true;
     // Datei-Browser zurücksetzen (Wurzel der neuen Instanz laden)
     state.fb = { path: "", entries: [] };
-    fbReload();
-    dpReload();
     // Gamerules zurücksetzen (werden per „Laden" geholt — nur laufend)
     state.grRules = [];
     $("#gr-filter").value = "";
@@ -3013,11 +3013,9 @@
       show($("#sched-error"), false);
       // Tags + Port in die Felder laden
       loadTagsAndPort(detail);
-      // Modpack-Update-Check direkt beim Öffnen (still bei Fehlern)
       show($("#mp-update-btn"), false);
       setText($("#mp-update-info"), "Update-Check läuft…");
       show($("#mp-update-error"), false);
-      checkPackUpdate(true);
     }
     // server.properties laden: füttert den Editor UND die Info-Box
     // (Schwierigkeit, Spielmodus, MOTD) — nach dem Laden Info neu rendern
@@ -3028,9 +3026,21 @@
       }
     });
     updateWsControls();
-    loadBackups();
-    loadWorldInfo();
-    loadIconPreview();
+    if (state.detailId === openedId) {
+      state.wsLoaded = new Set();
+      loadWsTabData(state.wsTab);
+    }
+  }
+
+  /* Daten eines Workspace-Bereichs einmal je geöffnetem Server laden */
+  function loadWsTabData(key) {
+    if (!state.detailId || !state.wsLoaded || state.wsLoaded.has(key)) return;
+    state.wsLoaded.add(key);
+    if (key === "welt") { loadWorldInfo(); dpReload(); loadIconPreview(); }
+    else if (key === "dateien") fbReload();
+    else if (key === "spieler") loadWhitelist();
+    else if (key === "backups") loadBackups();
+    else if (key === "mods") { checkPackUpdate(true); loadModTrash(); }
   }
   function closeDetail() {
     state.detailId = null;
@@ -3249,7 +3259,8 @@
     state.detailMods = mods || [];
     renderModNotes(detail);
     applyModFilter();
-    loadModTrash();
+    // Papierkorb nur nachladen, wenn der Mods-Bereich schon geladen ist
+    if (state.wsLoaded?.has("mods")) loadModTrash();
   }
 
   // Hinweise über der Mod-Liste: erkannte Probleme + „Neustart nötig“
@@ -6239,7 +6250,8 @@
     btn.disabled = true;
     if (!quiet) mpUpdateSetError("");
     try {
-      const data = await api(`/api/instances/${state.detailId}/modpacks/update-check`);
+      const data = await api(`/api/instances/${state.detailId}/modpacks/update-check`
+        + (quiet ? "" : "?refresh=true"));
       if (state.detailId && data) renderPackUpdateState(data);
     } catch (e) {
       setText($("#mp-update-info"), "Update-Check fehlgeschlagen.");
@@ -6624,8 +6636,9 @@
     // Mods › Hinzufügen: Suche in den Server-Bereich holen (Ziel = dieser Server)
     if (key === "mods" && state.modsView === "add" && state.detailId) mountSearch(true);
     // Welt-Slot: Welten + Karte laden; beim Verlassen die Karte entladen
-    if (key === "welt" && state.detailId) loadWorldInfo();
-    else if (typeof resetMapFrame === "function") resetMapFrame();
+    if (key === "welt" && state.detailId && state.wsLoaded?.has("welt")) loadWorldInfo();
+    else if (key !== "welt" && typeof resetMapFrame === "function") resetMapFrame();
+    loadWsTabData(key);
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
         && instStateKey(currentDetailInst() || state.detailData || {}) === "running") {
@@ -6737,6 +6750,7 @@
       ["#gr-reload", "spieler"],          // Gamerules
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
+      ["#hib-save", "einstellungen"],     // Schlafmodus
       ["#tags-save", "einstellungen"],    // Tags & Port
       ["#inst-delete-btn", "einstellungen"], // Server löschen
       ["#sched-autostart", "zeitplan"],   // Zeitplan

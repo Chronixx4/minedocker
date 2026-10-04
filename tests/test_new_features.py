@@ -595,3 +595,27 @@ def _wait_job(job_id: str) -> dict:
         return modrinth.get_job(job_id)
 
     return asyncio.run(_flow())
+
+
+class TestPackUpdateCheckCache:
+    def test_zweiter_aufruf_aus_cache_refresh_fragt_neu(self, client, instanz, monkeypatch):
+        from app import packs
+        _set_modpack(instanz["id"], {"project_id": "packproj", "version_id": "v1",
+                                     "title": "Pack", "source": "modrinth"})
+        calls = []
+
+        async def fake_check(instance_id):
+            calls.append(instance_id)
+            return {"installed": True, "update_available": False}
+        monkeypatch.setattr(packs, "pack_update_check", fake_check)
+        url = f"/api/instances/{instanz['id']}/modpacks/update-check"
+        assert "cached" not in client.get(url).json()
+        assert client.get(url).json()["cached"] is True
+        assert len(calls) == 1
+        client.get(url + "?refresh=true")
+        assert len(calls) == 2
+        # neuer Pack-Stand → neuer Schlüssel
+        _set_modpack(instanz["id"], {"project_id": "packproj", "version_id": "v2",
+                                     "title": "Pack", "source": "modrinth"})
+        client.get(url)
+        assert len(calls) == 3

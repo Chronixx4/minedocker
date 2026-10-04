@@ -1870,6 +1870,29 @@ def _cf_compatibility(instance: dict, entry: dict) -> bool | None:
     return gv_ok and ld_ok
 
 
+# Update-Check-Cache: (Instanz, Pack-Stand) → (Zeitpunkt, Ergebnis). Das
+# Öffnen eines Servers fragt so nicht jedes Mal Modrinth/CurseForge.
+_UPDATE_CHECK_TTL = 3600.0
+_update_check_cache: dict = {}
+
+
+async def pack_update_check_cached(instance_id: str, refresh: bool = False) -> dict:
+    """pack_update_check mit 1-h-Cache; refresh=True fragt neu an. Der
+    Schlüssel enthält den installierten Stand, ein Update/Versionswechsel
+    macht den Eintrag damit automatisch ungültig."""
+    instance = get_instance(instance_id)
+    mp = instance.get("modpack") or {}
+    key = (instance_id, str(mp.get("project_id") or ""), str(mp.get("version_id") or ""),
+           instance.get("loader"), instance.get("game_version"))
+    now = time.monotonic()
+    hit = _update_check_cache.get(key)
+    if hit and not refresh and now - hit[0] < _UPDATE_CHECK_TTL:
+        return {**hit[1], "cached": True}
+    result = await pack_update_check(instance_id)
+    _update_check_cache[key] = (now, result)
+    return result
+
+
 async def pack_update_check(instance_id: str) -> dict:
     """Prüft, ob für das installierte Modpack eine neuere Version existiert.
     Wirft nicht für 'nicht prüfbar' (Upload ohne Projekt-Quelle) — liefert

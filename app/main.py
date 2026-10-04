@@ -30,6 +30,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES as GZIP_DEFAULT_EXCLUDED
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import auth as auth_mod
 from . import backups as backups_mod
@@ -140,6 +142,16 @@ app.add_middleware(
 )
 
 app.middleware("http")(security_headers_middleware)
+
+# Kompression für Frontend und JSON (app.js & Co. ~450 KB → ~100 KB). Bereits
+# gepackte Downloads (Backups, Welten, Mods) und Bilder bleiben unangetastet,
+# Live-Logs (text/event-stream) schließt Starlette selbst aus.
+app.add_middleware(
+    GZipMiddleware, minimum_size=1024,
+    exclude_content_types=(*GZIP_DEFAULT_EXCLUDED,
+                           "application/gzip", "application/x-gzip",
+                           "application/zip", "application/java-archive",
+                           "application/octet-stream", "image/*", "video/*"))
 
 # Alle /api-Routen (außer /api/health und /api/auth/*) durchlaufen den
 # kombinierten Guard: DASHBOARD_API_KEY (Admin) ODER Login-Cookie; Rollen-
@@ -678,8 +690,28 @@ def _check_console_command(cmd: str) -> str:
 async def status():
     """Ressourcen aller laufenden Minecraft-Container (Instanzen + ggf.
     legacy 'minecraft'-Container) über die Docker-Engine-API."""
-    resources = await asyncio.to_thread(runtime.docker_resources)
-    return {"resources": resources}
+    return {"resources": await _shared_resources()}
+
+
+# /api/status wird von jedem offenen Browser-Tab alle 5 s abgefragt; die
+# Docker-Stats kosten je Container ca. 1 s. Gleichzeitige und kurz
+# aufeinanderfolgende Anfragen teilen sich deshalb ein Ergebnis.
+_STATUS_TTL = 4.0
+_status_cache: dict = {"at": 0.0, "value": None, "task": None}
+
+
+async def _shared_resources() -> dict:
+    now = time.monotonic()
+    if _status_cache["value"] is not None and now - _status_cache["at"] < _STATUS_TTL:
+        return _status_cache["value"]
+    task = _status_cache["task"]
+    if task is None or task.done():
+        task = asyncio.ensure_future(asyncio.to_thread(runtime.docker_resources))
+        _status_cache["task"] = task
+    value = await asyncio.shield(task)
+    if _status_cache["task"] is task:
+        _status_cache.update(at=time.monotonic(), value=value)
+    return value
 
 
 @api.get("/mods")
@@ -1043,8 +1075,10 @@ async def _read_capped(file: UploadFile, max_bytes: int,
 @api.get("/instances")
 async def list_instances():
     result = []
-    for instance in instances.list_instances():
-        status = await asyncio.to_thread(runtime.container_status, instance)
+    all_instances = instances.list_instances()
+    statuses = await asyncio.to_thread(runtime.container_statuses, all_instances)
+    for instance in all_instances:
+        status = statuses[instance["id"]]
         entry = dict(instance)
         entry["container"] = {"running": status["running"], "state": status["container"],
                               "paused": status["running"] and instances.is_paused(instance["id"])}
@@ -1061,11 +1095,9 @@ async def live_instances():
     """SLP-Ping aller laufenden Instanzen (parallel, je 2 s Timeout).
     Liefert Spielerzahl, MOTD und Version für die Übersicht; gestoppte
     Instanzen fehlen. Wirft nicht — Pings liefern immer ein Objekt."""
-    running = []
-    for instance in instances.list_instances():
-        status = await asyncio.to_thread(runtime.container_status, instance)
-        if status["running"]:
-            running.append(instance)
+    all_instances = instances.list_instances()
+    statuses = await asyncio.to_thread(runtime.container_statuses, all_instances)
+    running = [i for i in all_instances if statuses[i["id"]]["running"]]
 
     async def ping_one(instance: dict) -> dict:
         paused = instances.is_paused(instance["id"])
@@ -2334,13 +2366,13 @@ async def instance_pack_install(instance_id: str, req: InstallPackRequest):
 
 
 @api.get("/instances/{instance_id}/modpacks/update-check")
-async def instance_pack_update_check(instance_id: str):
+async def instance_pack_update_check(instance_id: str, refresh: bool = False):
     """Prüft, ob für das installierte Modpack eine neuere Version verfügbar
     ist (Modrinth: neueste kompatible Version, CurseForge: neueste Datei).
     'checkable=false' bei hochgeladenen Archiven ohne Projekt-Quelle."""
     instances.get_instance(instance_id)
     try:
-        return await packs.pack_update_check(instance_id)
+        return await packs.pack_update_check_cached(instance_id, refresh)
     except HTTPException:
         raise
     except Exception as exc:

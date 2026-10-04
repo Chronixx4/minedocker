@@ -489,7 +489,11 @@ def container_status(instance: dict) -> dict:
     container = _get_container(client, instance)
     if container is None:
         return {"running": False, "container": None, "started_at": None, "error": None}
-    state = (container.attrs or {}).get("State") or {}
+    return _status_from_attrs(container.attrs)
+
+
+def _status_from_attrs(attrs: dict) -> dict:
+    state = (attrs or {}).get("State") or {}
     started_at = state.get("StartedAt") or None
     if started_at:
         # Nanosekunden kürzen (new Date() im Frontend parst nur Millisekunden)
@@ -500,6 +504,18 @@ def container_status(instance: dict) -> dict:
         "started_at": started_at,
         "error": None,
     }
+
+
+def container_statuses(instances: list) -> dict:
+    """container_status für viele Instanzen parallel (Polling der Server-
+    Liste): N Docker-Abfragen kosten so etwa eine statt N Rundreisen.
+    Rückgabe: {instanz_id: status}."""
+    if not instances:
+        return {}
+    workers = max(1, min(len(instances), 8))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(container_status, instances))
+    return {inst["id"]: status for inst, status in zip(instances, results, strict=True)}
 
 
 def logs(instance: dict, tail: int = 100) -> list:
