@@ -110,3 +110,26 @@ def test_welten_liste_und_neue_welt(page, make_instance, data_dir):
     props = (base / "server.properties").read_text()
     assert re.search(r"^level-name=Abenteuer$", props, re.M)
     assert re.search(r"^level-seed=4242$", props, re.M)
+
+
+def test_update_tab_erkennt_datei_und_wendet_an(page, make_instance):
+    """Update-Tab: Datei hochladen → Erkennung + Plan → Anwenden."""
+    import io
+    import zipfile
+
+    inst = make_instance("Update-Test")
+    _open(page, inst)
+    page.locator('#ws-tabs .slot[data-ws-tab="update"]').click()
+    expect(page.locator('.ws-panel[data-ws-panel="update"]')).to_be_visible()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("fabric.mod.json", "{}")
+    page.set_input_files("#upd-file", {"name": "testmod-1.0.jar",
+                                       "mimeType": "application/java-archive",
+                                       "buffer": buf.getvalue()})
+    expect(page.locator("#upd-result")).to_be_visible()
+    expect(page.locator("#upd-kind")).to_have_text("Mods / Plugins")
+    expect(page.locator("#upd-plan li").first).to_contain_text("testmod-1.0.jar")
+    page.locator("#upd-apply").click()
+    expect(page.locator("#upd-done")).to_be_visible(timeout=15000)
+    expect(page.locator("#upd-done-list")).to_contain_text("1 Datei(en) installiert")

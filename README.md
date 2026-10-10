@@ -35,6 +35,13 @@ Dashboard.
   CurseForge-`.zip` hochladen oder direkt aus der Suche installieren — auch als
   **neuer Server aus einem Modpack** (Server-Pack bevorzugt, MC-Version/Loader
   automatisch aus dem Pack)
+- **Server-Update per Datei** — Tab „Update“ je Server: neue Datei ablegen
+  (Modpack `.mrpack`/`.zip`, Server-Pack/Server-Ordner `.zip`/`.tar.gz`, Welt,
+  Datapack, einzelne Mod-/Plugin-`.jar`), das Dashboard erkennt den Inhalt
+  selbst und zeigt vorab den Plan (inkl. erkannter MC-Version/Loader). Beim
+  Anwenden werden alte Mod-Versionen ersetzt, Configs gemerged und die Version
+  bei Bedarf umgestellt; Server-Software, `server.properties` und Spielerlisten
+  bleiben unangetastet. Server muss gestoppt sein, vorher Sicherheits-Snapshot
 - **Welt-Verwaltung** — Welt als `.zip` herunterladen/hochladen, bestehende
   Server-Ordner importieren (`.zip`/`.tar.gz`), Instanzen klonen als Vorlage
 - **Server-Icon** — `server-icon.png` hochladen/entfernen (64×64-PNG), Austausch

@@ -2848,3 +2848,37 @@ kbd {
   .world-form .toolbar-field { width: 100%; }
   .map-frame { height: 60vh; }
 }
+
+/* ---------- Server-Update (Datei ablegen → erkennen → anwenden) ---------- */
+.upd-drop {
+  display: grid;
+  gap: 0.25rem;
+  place-items: center;
+  text-align: center;
+  padding: 1.6rem 1rem;
+  margin: 0.75rem 0;
+  border: 2px dashed var(--edge-hi);
+  border-radius: var(--radius-sm);
+  background: rgba(139, 139, 139, 0.08);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.upd-drop:hover, .upd-drop:focus-visible, .upd-drop.drag {
+  background: rgba(139, 139, 139, 0.18);
+  border-color: var(--text);
+  outline: none;
+}
+.upd-drop-title { font-weight: 600; }
+.upd-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.upd-result { margin-top: 0.75rem; display: grid; gap: 0.6rem; }
+.upd-result h4 { margin: 0.4rem 0 0; }
+.upd-list { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.25rem; }
+.upd-list:empty { display: none; }
+.upd-warn li { color: var(--warn); }
+.upd-opts { display: grid; gap: 0.4rem; }
+.upd-indeterminate {
+  width: 40% !important;
+  animation: upd-slide 1.2s ease-in-out infinite alternate;
+}
+@keyframes upd-slide { from { margin-left: 0; } to { margin-left: 60%; } }
+@media (prefers-reduced-motion: reduce) { .upd-indeterminate { animation: none; width: 100% !important; } }

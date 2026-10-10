@@ -5573,6 +5573,213 @@
     instAction({ id: state.detailId }, "restart");
   });
 
+  /* ---------- Server-Update: Datei ablegen → erkennen → anwenden ---------- */
+  const UPD_KIND_LABELS = {
+    modpack: "Modpack", server: "Server-Pack", world: "Welt",
+    datapack: "Datapack", mods: "Mods / Plugins",
+  };
+  const upd = { token: null, instanceId: null, result: null, busy: false };
+
+  function updError(msg) {
+    setText($("#upd-error"), msg || "");
+    show($("#upd-error"), !!msg);
+  }
+
+  function updFillList(sel, items) {
+    const ul = $(sel);
+    ul.textContent = "";
+    for (const text of items || []) {
+      const li = document.createElement("li");
+      li.textContent = text;
+      ul.appendChild(li);
+    }
+  }
+
+  function updDiscard() {
+    if (upd.token && upd.instanceId) {
+      api(`/api/instances/${upd.instanceId}/update/${upd.token}`, { method: "DELETE" })
+        .catch(() => { /* verfällt ohnehin nach 1 h */ });
+    }
+    upd.token = null;
+    upd.result = null;
+  }
+
+  function updReset(discard = true) {
+    if (discard) updDiscard();
+    show($("#upd-result"), false);
+    show($("#upd-progress"), false);
+    show($("#upd-done"), false);
+    updError("");
+  }
+
+  // Start-Button + Hinweis hängen am Laufzustand (Update nur bei gestopptem Server)
+  function updRefreshState() {
+    // Anderer Server geöffnet: angefangenes Update verwerfen
+    if (upd.instanceId && upd.instanceId !== state.detailId && !upd.busy) {
+      updReset();
+      upd.instanceId = null;
+    }
+    const inst = currentDetailInst() || state.detailData;
+    const running = !!inst && instStateKey(inst) === "running";
+    const apply = $("#upd-apply");
+    if (apply) apply.disabled = running || upd.busy;
+    show($("#upd-running"), running && !!upd.result);
+    const last = inst?.last_update || state.detailData?.last_update;
+    if (last) {
+      const when = new Date(last.at * 1000).toLocaleString("de-DE");
+      setText($("#upd-last"), `Letztes Update: ${when} · ${UPD_KIND_LABELS[last.kind] || last.kind} · ${last.filename}`);
+    }
+    show($("#upd-last"), !!last);
+  }
+
+  function updRender(res) {
+    upd.result = res;
+    setText($("#upd-kind"), UPD_KIND_LABELS[res.kind] || res.kind);
+    setText($("#upd-name"), res.filename);
+    setText($("#upd-size"), ` · ${fmtBytes(res.size)}`);
+    updFillList("#upd-plan", res.plan);
+    updFillList("#upd-warn", res.warnings);
+    const o = res.options || {};
+    show($("#upd-o-clean"), "clean_mods" in o);
+    show($("#upd-o-config"), "overwrite_config" in o);
+    show($("#upd-o-world"), "replace_world" in o);
+    show($("#upd-o-version"), !!res.version_change);
+    $("#upd-clean").checked = o.clean_mods !== false;
+    $("#upd-config").checked = o.overwrite_config !== false;
+    $("#upd-world").checked = false;
+    $("#upd-version").checked = true;
+    show($("#upd-result"), true);
+    updRefreshState();
+  }
+
+  async function updAnalyze(file) {
+    if (!state.detailId || upd.busy) return;
+    updReset();
+    upd.busy = true;
+    upd.instanceId = state.detailId;
+    show($("#upd-busy"), true);
+    setText($("#upd-busy-text"), "Lade hoch…");
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await apiUpload(`/api/instances/${upd.instanceId}/update/analyze`, form,
+        (pct) => setText($("#upd-busy-text"),
+          pct < 100 ? `Lade hoch… ${pct} %` : "Analysiere…"));
+      upd.token = res.token;
+      updRender(res);
+    } catch (e) {
+      updError(e.message || "Analyse fehlgeschlagen");
+    } finally {
+      upd.busy = false;
+      show($("#upd-busy"), false);
+      $("#upd-file").value = "";
+      updRefreshState();
+    }
+  }
+
+  function updDoneLines(summary) {
+    const lines = [];
+    const add = (cond, text) => { if (cond) lines.push(text); };
+    add(summary.installed?.length, `${summary.installed?.length} Datei(en) installiert (${summary.target || "mods"}/)`);
+    add(summary.replaced?.length, `Ältere Version ersetzt: ${(summary.replaced || []).join(", ")}`);
+    add(summary.mods_installed != null, `${summary.mods_installed} Mod-Datei(en) in mods/`);
+    add(summary.plugins_installed != null, `${summary.plugins_installed} Plugin-Datei(en) in plugins/`);
+    add(summary.removed_old?.length, `${summary.removed_old?.length} alte Mod-Datei(en) entfernt`);
+    add(summary.files != null && !summary.installed, `${summary.files} Datei(en) übernommen`);
+    add(summary.kept_existing, `${summary.kept_existing} vorhandene Datei(en) unverändert gelassen`);
+    add(summary.world_replaced, `Welt ersetzt: ${summary.world_replaced}`);
+    add(summary.world_dir, `Welt ersetzt: ${summary.world_dir}`);
+    add(summary.datapack, `Datapack installiert: ${summary.datapack}`);
+    add(summary.version_adapted?.to,
+      `Server umgestellt auf Minecraft ${summary.version_adapted?.to?.game_version} (${summary.version_adapted?.to?.loader})`);
+    add(summary.version_adapted && !summary.version_adapted.to, "Server-Version umgestellt");
+    for (const s of Array.isArray(summary.skipped) ? summary.skipped.slice(0, 5) : []) {
+      lines.push(`Übersprungen: ${typeof s === "string" ? s : JSON.stringify(s)}`);
+    }
+    return lines.filter(Boolean);
+  }
+
+  async function updApply() {
+    if (!upd.token || !upd.result || upd.busy) return;
+    const id = upd.instanceId;
+    const body = {
+      token: upd.token,
+      clean_mods: $("#upd-clean").checked,
+      overwrite_config: $("#upd-config").checked,
+      replace_world: $("#upd-world").checked,
+      adapt_version: $("#upd-version").checked,
+    };
+    if (body.replace_world
+        && !window.confirm("Die aktuelle Welt wird durch die Welt aus dem Upload ersetzt. Fortfahren?")) {
+      return;
+    }
+    upd.busy = true;
+    updError("");
+    show($("#upd-result"), false);
+    show($("#upd-progress"), true);
+    setText($("#upd-phase"), "Starte Update…");
+    try {
+      const job = await api(`/api/instances/${id}/update/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      upd.token = null; // wird serverseitig verbraucht
+      const done = await new Promise((resolve, reject) => {
+        const timer = setInterval(async () => {
+          try {
+            const data = await api(`/api/jobs/${job.job_id}`);
+            setText($("#upd-phase"), data.phase || data.status);
+            if (data.status === "done") { clearInterval(timer); resolve(data); }
+            else if (data.status === "error") {
+              clearInterval(timer);
+              reject(new Error(data.error || "Update fehlgeschlagen"));
+            }
+          } catch (e) { clearInterval(timer); reject(e); }
+        }, 900);
+      });
+      show($("#upd-progress"), false);
+      const summary = done.summary || {};
+      setText($("#upd-done-title"), "Update abgeschlossen");
+      updFillList("#upd-done-list", summary.files != null || summary.kind
+        ? updDoneLines(summary) : []);
+      show($("#upd-done"), true);
+      toast("Server aktualisiert.", "success");
+      if (state.detailId === id) loadDetail();
+    } catch (e) {
+      show($("#upd-progress"), false);
+      updError(e.message || "Update fehlgeschlagen");
+      // Token ist bei Fehlern im Job verbraucht; bei Start-Fehlern (409) bleibt er gültig
+      if (upd.token && upd.result) show($("#upd-result"), true);
+    } finally {
+      upd.busy = false;
+      updRefreshState();
+    }
+  }
+
+  $("#upd-file").addEventListener("change", () => {
+    const file = $("#upd-file").files[0];
+    if (file) updAnalyze(file);
+  });
+  const updDrop = $("#upd-drop");
+  ["dragenter", "dragover"].forEach((ev) => updDrop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    updDrop.classList.add("drag");
+  }));
+  ["dragleave", "drop"].forEach((ev) => updDrop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    updDrop.classList.remove("drag");
+  }));
+  updDrop.addEventListener("drop", (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (file) updAnalyze(file);
+  });
+  updDrop.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#upd-file").click(); }
+  });
+  $("#upd-apply").addEventListener("click", updApply);
+  $("#upd-cancel").addEventListener("click", () => updReset());
+
   /* =====================================================================
      Instanz-Workspace (SpawnBox-Look)
      - Instanz-Tabs oben: Schnellwechsel zwischen Servern + "Alle"-Tab
@@ -5592,6 +5799,7 @@
     ["backups", "Backups", "chest"],
     ["zeitplan", "Zeitplan", "clock"],
     ["einstellungen", "Einstellungen", "anvil"],
+    ["update", "Update", "arrow"],
   ];
 
   const SLOT_ICONS = {
@@ -5603,6 +5811,7 @@
     folder: pixelIcon(["........", "YYY.....", "YyyYYYYY", "YyyyyyyY", "YyyyyyyY", "YyyyyyyY", "YYYYYYYY", "........"]),
     chest: pixelIcon(["DddddddD", "dYYYYYYd", "dYddddYd", "kkkyykkk", "dYdyydYd", "dYddddYd", "dYYYYYYd", "DddddddD"]),
     clock: pixelIcon(["..yyyy..", ".yYYYYy.", "yYwwwwYy", "yYwkwwYy", "yYwkkwYy", "yYwwwwYy", ".yYYYYy.", "..yyyy.."]),
+    arrow: pixelIcon(["...gg...", "..gggg..", ".gggggg.", "gg.gg.gg", "...gg...", "...gg...", ".dddddd.", "dddddddd"]),
     anvil: pixelIcon(["........", "SSSSSSSs", ".SSSSSs.", "...Ss...", "...Ss...", "..SSSs..", ".SSSSSs.", "........"]),
   };
 
@@ -5701,6 +5910,7 @@
       else if (logs.parentElement?.id !== "ws-ov-main") $("#ws-ov-main")?.append(logs);
     }
     // Welt-Slot: Welten + Karte laden; beim Verlassen die Karte entladen
+    if (key === "update") updRefreshState();
     if (key === "welt" && state.detailId) loadWorldInfo();
     else if (typeof resetMapFrame === "function") resetMapFrame();
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
