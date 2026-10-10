@@ -69,7 +69,7 @@ jobs:
 
       - name: Screenshots + Server-Log bei Fehlern
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-artifacts
           path: ui-artifacts/
