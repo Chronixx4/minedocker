@@ -30,6 +30,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -276,7 +277,7 @@ def analyze_upload(instance_id: str, token: str, path: Path, filename: str) -> d
     instance = instances.get_instance(instance_id)
     lower = filename.lower()
     size = path.stat().st_size
-    result = {"token": token, "filename": filename, "size": size,
+    result: dict[str, Any] = {"token": token, "filename": filename, "size": size,
               "instance_id": instance_id, "warnings": [], "plan": [],
               "options": {}, "detected": {}}
     meta = {"instance_id": instance_id, "filename": filename, "created": time.time()}
