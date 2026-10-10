@@ -30,7 +30,7 @@ jobs:
         id: repo
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # ARM64-Builds emulieren (ZimaOS/NAS-Boxen teils auf ARM)
       - uses: docker/setup-qemu-action@v3
