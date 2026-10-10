@@ -458,6 +458,56 @@
         <div class="ws-panel hidden" data-ws-panel="einstellungen"></div>
         <div class="ws-panel hidden" data-ws-panel="zeitplan"></div>
         <div class="ws-panel hidden" data-ws-panel="backups"></div>
+        <div class="ws-panel hidden" data-ws-panel="update">
+          <div class="upload-box" id="upd-box">
+            <h3>Server aktualisieren</h3>
+            <p class="muted small">Neue Datei einfach hier ablegen — das Dashboard erkennt
+              automatisch, was es ist: <strong>Modpack</strong> (.mrpack / CurseForge-.zip),
+              <strong>Server-Pack</strong> oder kompletter Server-Ordner (.zip / .tar.gz),
+              <strong>Welt</strong>, <strong>Datapack</strong> oder <strong>Mods/Plugins</strong> (.jar).
+              Du siehst vorab, was passiert. Der Server muss gestoppt sein, vorher wird
+              automatisch ein Sicherheits-Snapshot angelegt.</p>
+            <label id="upd-drop" class="upd-drop admin-only" tabindex="0">
+              <input id="upd-file" class="upd-file" type="file" accept=".zip,.mrpack,.jar,.gz,.tgz">
+              <span class="upd-drop-title">Datei hierher ziehen oder klicken</span>
+              <span class="muted small">.zip · .mrpack · .tar.gz · .jar</span>
+            </label>
+            <div id="upd-busy" class="loading hidden"><span class="spinner"></span> <span id="upd-busy-text">Analysiere…</span></div>
+            <div id="upd-error" class="err hidden"></div>
+            <div id="upd-result" class="upd-result hidden">
+              <div class="row"><span id="upd-kind" class="badge"></span>
+                <strong id="upd-name"></strong><span id="upd-size" class="muted small"></span></div>
+              <h4>Das passiert beim Update</h4>
+              <ul id="upd-plan" class="upd-list"></ul>
+              <ul id="upd-warn" class="upd-list upd-warn"></ul>
+              <div id="upd-opts" class="upd-opts">
+                <label class="check" id="upd-o-clean"><input type="checkbox" id="upd-clean" checked>
+                  Alte Mods entfernen (mods/ komplett ersetzen — empfohlen)</label>
+                <label class="check" id="upd-o-config"><input type="checkbox" id="upd-config" checked>
+                  Vorhandene Configs überschreiben</label>
+                <label class="check" id="upd-o-world"><input type="checkbox" id="upd-world">
+                  Auch die Welt aus dem Upload übernehmen (ersetzt die aktuelle Welt!)</label>
+                <label class="check" id="upd-o-version"><input type="checkbox" id="upd-version" checked>
+                  Minecraft-Version/Loader automatisch umstellen</label>
+              </div>
+              <div class="row">
+                <button id="upd-apply" class="btn primary admin-only">Update starten</button>
+                <button id="upd-cancel" class="btn">Abbrechen</button>
+              </div>
+              <p id="upd-running" class="err hidden">Der Server läuft — bitte zuerst stoppen.</p>
+            </div>
+            <div id="upd-progress" class="hidden">
+              <div class="metric-head"><span id="upd-phase" class="muted small"></span></div>
+              <div class="bar"><div class="bar-fill upd-indeterminate"></div></div>
+            </div>
+            <div id="upd-done" class="upd-result hidden">
+              <h4 id="upd-done-title"></h4>
+              <ul id="upd-done-list" class="upd-list"></ul>
+              <p class="muted small">Starte den Server jetzt, damit die Änderungen wirksam werden.</p>
+            </div>
+            <p id="upd-last" class="muted small hidden"></p>
+          </div>
+        </div>
       </div>
       <div class="detail-grid">
         <div class="detail-cols">

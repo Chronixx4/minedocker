@@ -45,6 +45,7 @@ from . import (
     modrinth,
     packs,
     runtime,
+    serverupdate,
     versionchange,
     worlds,
 )
@@ -2722,6 +2723,52 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
     return {"job_id": job["id"], "filename": job["filename"],
             "total": job["total"], "phase": job["phase"],
             "target": {"type": "instance", "instance_id": instance_id}}
+
+
+# ---------------------------------------------------------------------------
+# Server-Update: Datei hochladen → Inhalt erkennen → Server aktualisieren
+# ---------------------------------------------------------------------------
+
+class ServerUpdateApply(BaseModel):
+    token: str = Field(pattern=r"^[0-9a-f]{32}$")
+    clean_mods: bool = True
+    overwrite_config: bool = True
+    replace_world: bool = False
+    adapt_version: bool = True
+
+
+@api.post("/instances/{instance_id}/update/analyze")
+async def instance_update_analyze(instance_id: str, file: UploadFile = File(...)):
+    """Nimmt eine beliebige Update-Datei (.zip/.mrpack/.tar.gz/.jar) entgegen,
+    erkennt den Inhalt (Modpack, Server-Pack, Welt, Datapack, Mods) und liefert
+    den Update-Plan samt Token für /update/apply. Ändert noch nichts."""
+    instances.get_instance(instance_id)
+    filename = serverupdate.validate_upload_filename(file.filename or "")
+    token, dest = serverupdate.new_stage(filename)
+    try:
+        await _stream_upload(file, dest, serverupdate.MAX_UPLOAD_BYTES)
+        return await asyncio.to_thread(
+            serverupdate.analyze_upload, instance_id, token, dest, filename)
+    except BaseException:
+        serverupdate.discard(token)
+        raise
+
+
+@api.post("/instances/{instance_id}/update/apply")
+async def instance_update_apply(instance_id: str, req: ServerUpdateApply):
+    """Wendet die zuvor analysierte Datei an (Instanz muss gestoppt sein,
+    vorher Sicherheits-Snapshot). Antwort: Job zum Pollen über /api/jobs/{id}."""
+    options = req.model_dump(exclude={"token"})
+    job = await serverupdate.start_apply(instance_id, req.token, options)
+    return {"job_id": job["id"], "filename": job["filename"],
+            "total": job["total"], "phase": job["phase"],
+            "target": {"type": "instance", "instance_id": instance_id}}
+
+
+@api.delete("/instances/{instance_id}/update/{token}")
+async def instance_update_discard(instance_id: str, token: str):
+    serverupdate.discard(token)
+    return {"discarded": True}
 
 
 app.include_router(api)
