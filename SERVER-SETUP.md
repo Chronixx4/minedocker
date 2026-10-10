@@ -80,8 +80,11 @@ Installationsskript. **Kein Vanilla-Server vorher aufsetzen.**
 - **Tab „Modpacks"** → Ziel-Instanz + Quelle (Modrinth/CurseForge) → Pack
   suchen → **Installieren**. Kompatibilität (Loader + MC-Version) wird
   vorab geprüft;parallele Mod-Downloads mit SHA1-Prüfung, Fortschrittsbalken.
-- **Eigener Server-Pack-Upload:** `.mrpack` (Modrinth) oder `.zip` mit
-  `manifest.json` (CurseForge) direkt im Tab.
+- **Eigener Pack-Upload (Tab „Upload“):** `.mrpack` (Modrinth), CurseForge-
+  Client-Export (`.zip` mit `manifest.json`) oder CurseForge-**Server Files**
+  (`.zip` mit `mods/`-Ordner, z. B. ATM10 `ServerFiles-x.y.zip`) einfach in die
+  Ablagefläche ziehen. Vor der Installation zeigt eine Vorschau Minecraft-
+  Version, Loader, Java, Anzahl Mods und einen RAM-Vorschlag.
 - **Keine Vanilla-Vorbereitung, keine Java-/Loader-Handarbeit:** Die Instanz
   startet direkt mit gewähltem Loader; Java wählt das itzg-Image passend.
   Loader nur als **Beta** verfügbar → Dialog wählt automatisch die neueste
@@ -102,12 +105,18 @@ im UI gibt es dazu einen Hinweis). Zwei Wege funktionieren trotzdem ohne Key:
     passende Datei → **Download** (Client-Zip mit `manifest.json`), oder
   - auf derselben Datei-Seite unter *Additional Files* → **Server Pack**
     (.zip) — meist mit weniger Client-only-Mods.
-  Beide Varianten laufen durch denselben Installer: Der Upload-Pfad akzeptiert
-  beides und lädt die im `manifest.json` gelisteten Mods selbst nach
-  (öffentlicher Website-Redirect, **kein API-Key nötig**). Alternativ: Export
-  aus dem CurseForge-Launcher.
-  Hochladen im Tab „Modpacks" (bestehende Instanz) oder über
-  **„Neuer Server aus Upload"** (neue Instanz).
+  Beide Varianten laufen durch denselben Installer. **Server Files sind der
+  bessere Weg:** Sie werden direkt entpackt (Loader/MC-Version aus
+  `variables.txt`, dem Installer-Namen, `libraries/` oder den Mods), es gibt
+  keine Einzeldownloads und keine Client-Mods. Beim Client-Export lädt das
+  Dashboard die im `manifest.json` gelisteten Mods selbst nach (öffentlicher
+  Website-Redirect, **kein API-Key nötig**); schlagen einzelne Downloads fehl,
+  wird der Rest trotzdem installiert und „Nur fehlende Mods erneut laden“
+  holt den Rest nach. Alternativ: Export aus dem CurseForge-Launcher.
+  Hochladen im Tab „Upload“: Ziel „Neuen Server aus dem Pack erstellen“ oder
+  eine bestehende Instanz. Ohne RAM-Angabe bekommt ein neuer Server die
+  Empfehlung nach Mod-Anzahl (unter 60 Mods 4G, unter 150 6G, unter 250 8G,
+  sonst 12G).
 - **Einzel-Mods von CurseForge:** Datei auf der Website herunterladen →
   Datei-Browser der Instanz → `mods/` hochladen.
 
@@ -140,8 +149,10 @@ Dashboard auch bei Crash-Loops automatisch weiter.
 - **Manuell:** JDK-Pfad im Startskript setzen
   (`"/usr/lib/jvm/java-21-openjdk/bin/java" … -jar server.jar nogui`);
   mehrere Server mit verschiedenen MC-Versionen → pro Ordner ein JDK.
-- **Docker/itzg (auch im Dashboard):** Java wird anhand `VERSION` automatisch
-  gewählt; `JAVA_VERSION` erzwingt eine Variante.
+- **Docker/itzg:** Die Java-Version steckt im Image-Tag (`itzg/minecraft-server:java8`,
+  `:java17`, `:java21`, `:latest` = neuestes Java). Das Dashboard wählt den Tag
+  automatisch nach obiger Tabelle (26.x und Snapshots: `latest`); unter
+  Einstellungen → „JVM & RAM“ → „Java“ lässt er sich je Server überschreiben.
 - **Merksatz:** „Server startet nicht / Class-Version-Fehler" = fast immer
   falsches Java.
 
@@ -155,8 +166,9 @@ Dashboard auch bei Crash-Loops automatisch weiter.
 | 25570, 25571, … | TCP | Dashboard-Instanzen (`INSTANCES_PORT_BASE`) | je ja |
 | 19132 | UDP | Bedrock/Geyser (optional) | ja |
 | 25575 | TCP | RCON (optional, **nicht** öffnen) | nein |
+| Spiel-Port + 1000 (z. B. 26570) | TCP | RCON der Dashboard-Instanzen, nur auf `127.0.0.1` gebunden | nein |
 | 8080 | TCP | Dashboard | **nein** — nur LAN/VPN |
-| Spiel-Port + 2000 (z. B. 27570) | TCP | Live-Karte (BlueMap), nur wenn aktiviert | **nein** — ohne Login, nur LAN/VPN |
+| Spiel-Port + 2000 (z. B. 27570) | TCP | Live-Karte (BlueMap), nur auf `127.0.0.1` gebunden; im Browser über das Dashboard | nein |
 
 - **Heimnetz:** feste interne IP für den Server-Host (DHCP-Reservierung) →
   Router-Portweiterleitung 25565/tcp auf diese IP → Host-Firewall:
@@ -171,10 +183,9 @@ Dashboard auch bei Crash-Loops automatisch weiter.
   Host veröffentlicht. Port-Weiterleitung am NAS-Router wie oben.
 - **Dashboard niemals direkt ins Internet** — nur VPN (WireGuard/Tailscale)
   oder Reverse-Proxy mit Auth; optional `DASHBOARD_API_KEY` setzen.
-- **Live-Karte:** Der BlueMap-Webserver hat **keine eigene Anmeldung** — jeder,
-  der den Port erreicht, sieht die ganze Welt (Basen, Koordinaten). Den Port
-  nicht am Router weiterleiten; wer die Karte öffentlich zeigen will, stellt
-  sie hinter einen Reverse-Proxy mit Auth.
+- **Live-Karte:** Der BlueMap-Webserver hat **keine eigene Anmeldung**. Das
+  Dashboard bindet seinen Port deshalb nur an `127.0.0.1` und zeigt die Karte
+  über `/api/instances/{id}/map/view/` — also nur mit Dashboard-Login.
 
 ---
 
@@ -188,6 +199,14 @@ wieder an (`save-on`) — so landen keine halb geschriebenen Regionen im
 Archiv. Die Renderdaten der Live-Karte (`bluemap/`) werden nicht gesichert;
 BlueMap rendert sie nach einem Restore neu.
 3-2-1-Regel: 3 Kopien, 2 Medien, 1 extern.
+
+**Dashboard-Backups auf eine zweite Platte:** Standardmäßig liegen sie in
+`/data/backups`, also auf derselben Platte wie die Server. In der `.env`
+`DASHBOARD_BACKUPS_DIR=/pfad/auf/zweiter/platte` setzen und
+`docker compose up -d` ausführen; der `init`-Service setzt die Rechte. Neue
+Backups landen dann dort, die Backup-Box zeigt „eigene Platte“. Ältere
+Backups bleiben in `/data/backups/<id>/` und lassen sich bei Bedarf von Hand
+in den neuen Ordner verschieben.
 
 **Docker/Volume (dieses Projekt):**
 ```bash
@@ -203,9 +222,9 @@ Der Service `backup` (Alpine-Tar-Loop) sichert alle 6 h das gesamte
 `mcdata`-Volume (alle Instanzen + Mods) nach `./backups`, löscht Archive
 älter als 14 Tage und pflegt `latest.tgz` als Symlink auf das Neueste.
 Anpassbar: `sleep 6h` (Intervall), `-mtime +14` (Retention), Backup-Pfad
-(.env: `BACKUPS_DIR`, bei ZimaOS unter `/DATA/`). Für 100 % konsistente
-Weltschnapp-
-schüsse die Instanz vorher im Dashboard stoppen.
+(.env: `BACKUPS_DIR`, bei ZimaOS unter `/DATA/`). Laufende Welten sichert
+dieser Daemon **ohne** `save-off` — für konsistente Weltstände die
+Dashboard-Backups (Zeitplan je Server) nutzen oder die Instanz vorher stoppen.
 ```bash
 # Restore (alle Instanzen) — /data-Quelle analog zum Backup-Kommentar oben:
 #   Named Volume: <projekt>_mcdata, sonst MCDATA_DIR-Pfad aus .env
@@ -293,15 +312,32 @@ hilfreich gegen Watchdog-Kicks) nach Bedarf.
   selbst gerade neu startete. Saubere Stops (Dashboard-Stop/Neustart) werden
   nicht als Crash gewertet; Docker-Restarts der Restart-Policy setzen den
   Status wieder auf „läuft".
+- **Crash-Diagnose:** Bei einem Absturz wertet der Watchdog Log-Ende und
+  `crash-reports/` aus und zeigt im Server-Bereich die Ursache in Klartext
+  (fehlende Mod-Abhängigkeit, falsche Java-Version, zu wenig RAM, Client-Mod
+  auf dem Server, belegter Port, doppelte Mod, Mixin-Konflikt, EULA,
+  beschädigte Welt) samt verdächtiger Mods. „Neu analysieren“ wertet auch
+  ohne Absturz-Event aus, z. B. wenn ein Server nicht hochkommt. Drei
+  Abstürze in zehn Minuten halten den Server an (Absturzschleife), statt ihn
+  endlos neu starten zu lassen.
+- **Schlafmodus (je Server, Einstellungen):** „Pausieren“ friert den Server
+  ein, wenn die eingestellte Zeit niemand online war (itzg
+  `ENABLE_AUTOPAUSE`, spart CPU) und weckt ihn beim nächsten
+  Verbindungsversuch; „Stoppen“ beendet ihn (`ENABLE_AUTOSTOP`, spart auch
+  RAM), starten dann im Dashboard. Das Dashboard pingt schlafende Server
+  nicht an, damit es sie nicht selbst weckt. Hinweis: Für „Pausieren“ läuft
+  der Container ohne `no-new-privileges`, weil der Weck-Dienst (knockd) sonst
+  nicht starten darf.
 - **Alerts (optional):** Bei Crash/Start/Stop kann ein Webhook benachrichtigt
   werden — Discord-kompatibel (`ALERT_WEBHOOK_URL`, POST `{"content": …}`)
   und/oder Telegram (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`). Mit
   `ALERT_EVENTS` wählt man die Ereignisse (`crash,start,stop`, Default: alle
   drei; z. B. nur `crash`). Ohne Env-Variablen bleibt alles still.
 - **Sicherheits-Snapshots:** Vor jeder Modpack-Installation in eine Instanz
-  mit bestehenden Mods (und vor jedem Backup-Restore) legt das Dashboard
-  automatisch einen Snapshot an (`pre-install-*.tar.gz` bzw.
-  `pre-restore-*.tar.gz` in der Instanz-Backup-Liste) — eine fehlgeschlagene
+  mit bestehenden Mods, vor jedem Backup-Restore und vor Mod-Updates bzw.
+  Versionswechseln legt das Dashboard automatisch einen Snapshot an
+  (`pre-install-*`, `pre-restore-*` bzw. `pre-update-*.tar.gz` in der
+  Instanz-Backup-Liste) — eine fehlgeschlagene
   Installation ist damit per Restore rückholbar, `force`-Überschreiben ist
   risikofrei. Pro Instanz rotieren max. 3 Sicherheits-Snapshots.
 - **Job-Persistenz:** Laufende Downloads/Installationen/Mod-Updates werden

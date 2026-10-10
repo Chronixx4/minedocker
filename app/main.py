@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -29,16 +30,34 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES as GZIP_DEFAULT_EXCLUDED
+from starlette.middleware.gzip import GZipMiddleware
 
 from . import auth as auth_mod
 from . import backups as backups_mod
-from . import catalog, curseforge, instances, modrinth, packs, runtime, serverupdate, worlds
+from . import (
+    catalog,
+    crashinfo,
+    curseforge,
+    instances,
+    modcategories,
+    modinstall,
+    modrinth,
+    packs,
+    runtime,
+    serverupdate,
+    versionchange,
+    worlds,
+)
 from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
 from . import history as history_mod
 from . import icon as icon_mod
+from . import inventory as inventory_mod
+from . import itemassets as itemassets_mod
 from . import livemap as livemap_mod
+from . import players as players_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
 from . import updates as updates_mod
@@ -129,6 +148,16 @@ app.add_middleware(
 
 app.middleware("http")(security_headers_middleware)
 
+# Kompression für Frontend und JSON (app.js & Co. ~450 KB → ~100 KB). Bereits
+# gepackte Downloads (Backups, Welten, Mods) und Bilder bleiben unangetastet,
+# Live-Logs (text/event-stream) schließt Starlette selbst aus.
+app.add_middleware(
+    GZipMiddleware, minimum_size=1024,
+    exclude_content_types=(*GZIP_DEFAULT_EXCLUDED,
+                           "application/gzip", "application/x-gzip",
+                           "application/zip", "application/java-archive",
+                           "application/octet-stream", "image/*", "video/*"))
+
 # Alle /api-Routen (außer /api/health und /api/auth/*) durchlaufen den
 # kombinierten Guard: DASHBOARD_API_KEY (Admin) ODER Login-Cookie; Rollen-
 # Prüfung (schreibende Methoden nur für Admin) passiert im Guard selbst.
@@ -148,6 +177,22 @@ class DownloadRequest(BaseModel):
 
 class ToggleModRequest(BaseModel):
     enabled: bool
+
+
+class ModItem(BaseModel):
+    """Eine vorgemerkte Mod im Modbrowser (optional mit fester Version)."""
+    source: str = Field(pattern=r"^(modrinth|curseforge)$")
+    project_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    version_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ModPlanRequest(BaseModel):
+    items: list[ModItem] = Field(min_length=1, max_length=modinstall.MAX_ITEMS)
+
+
+class ModInstallRequest(ModPlanRequest):
+    overwrite: bool = False
 
 
 class CreateInstanceRequest(BaseModel):
@@ -269,16 +314,37 @@ class ScheduleModel(BaseModel):
     update_check: UpdateCheckScheduleModel | None = None
 
 
+class HibernateModel(BaseModel):
+    mode: str = Field(pattern=r"^(off|pause|stop)$")
+    minutes: int = Field(default=30, ge=5, le=1440)
+
+
+class VersionTargetRequest(BaseModel):
+    loader: str = Field(min_length=1, max_length=16)
+    game_version: str = Field(min_length=1, max_length=32)
+
+
+class VersionChangeRequest(VersionTargetRequest):
+    loader_version: str | None = Field(default=None, max_length=64)
+    update_mods: bool = True
+    disable_missing: bool = True
+    allow_downgrade: bool = False
+
+
 class UpdateInstanceRequest(BaseModel):
     """Instanz-Einstellungen ändern (Name, RAM, JVM-Flags, Tags, Port, Zeitplan)."""
     name: str | None = Field(default=None, min_length=1, max_length=64)
     memory: str | None = Field(default=None, pattern=r"^\d{1,4}[GgMm]$")
     jvm_opts: str | None = Field(default=None, max_length=2000)
     use_aikar: bool | None = None
+    # "auto" = passend zur MC-Version; Prüfung gegen runtime.JAVA_CHOICES
+    java: str | None = Field(default=None, max_length=8)
     # Tag-/Port-Validierung macht das Backend in instances.py
     tags: list[str] | None = None
     port: int | None = Field(default=None, ge=1024, le=65535)
     schedule: ScheduleModel | None = None
+    # Schlafmodus: {"mode": "off"|"pause"|"stop", "minutes": 5-1440}
+    hibernate: HibernateModel | None = None
 
 
 class AuthSetupRequest(BaseModel):
@@ -354,6 +420,12 @@ class GameruleSetRequest(BaseModel):
     """Gamerule setzen (name aus kuratierter Liste, value bool/int)."""
     name: str = Field(min_length=1, max_length=64)
     value: bool | int | str | None = None
+
+
+class TimeWeatherRequest(BaseModel):
+    """Uhrzeit/Wetter der Welt über feste Voreinstellungen setzen."""
+    time: str | None = Field(default=None, max_length=16)
+    weather: str | None = Field(default=None, max_length=16)
 
 
 @app.get("/api/health")
@@ -641,8 +713,28 @@ def _check_console_command(cmd: str) -> str:
 async def status():
     """Ressourcen aller laufenden Minecraft-Container (Instanzen + ggf.
     legacy 'minecraft'-Container) über die Docker-Engine-API."""
-    resources = await asyncio.to_thread(runtime.docker_resources)
-    return {"resources": resources}
+    return {"resources": await _shared_resources()}
+
+
+# /api/status wird von jedem offenen Browser-Tab alle 5 s abgefragt; die
+# Docker-Stats kosten je Container ca. 1 s. Gleichzeitige und kurz
+# aufeinanderfolgende Anfragen teilen sich deshalb ein Ergebnis.
+_STATUS_TTL = 4.0
+_status_cache: dict = {"at": 0.0, "value": None, "task": None}
+
+
+async def _shared_resources() -> dict:
+    now = time.monotonic()
+    if _status_cache["value"] is not None and now - _status_cache["at"] < _STATUS_TTL:
+        return _status_cache["value"]
+    task = _status_cache["task"]
+    if task is None or task.done():
+        task = asyncio.ensure_future(asyncio.to_thread(runtime.docker_resources))
+        _status_cache["task"] = task
+    value = await asyncio.shield(task)
+    if _status_cache["task"] is task:
+        _status_cache.update(at=time.monotonic(), value=value)
+    return value
 
 
 @api.get("/mods")
@@ -713,25 +805,59 @@ def _parse_sort(sort: str | None) -> str:
     return sort
 
 
-async def _mark_installed(data: object, instance_id: str | None, source: str) -> None:
-    """Markiert Treffer der Mod-Suche mit 'installed', wenn der Mod bereits
-    in der Ziel-Instanz liegt (per Datei-Hash identifiziert — Modrinth-
-    Projekt-ID bzw. CurseForge-Mod-ID). Fehler schlagen die Suche nicht fehl."""
-    if not instance_id or not isinstance(data, dict) or not data.get("hits"):
-        return
-    instance_id = validate_identifier(instance_id, "Instanz-ID")
+# So lange wartet die Suche höchstens auf die erste Installiert-Ermittlung
+# (Hashen aller jars + Anbieter-Abgleich). Danach kommen die Treffer ohne
+# Markierung und mit installed_pending; das Frontend fragt kurz darauf
+# erneut, dann aus dem Cache.
+_INSTALLED_WAIT = 2.5
+
+
+async def _installed_ids(instance_id: str | None, source: str) -> set | None:
+    """Projekt-IDs der Mods, die schon in der Ziel-Instanz liegen (per
+    Datei-Hash identifiziert — Modrinth-Projekt-ID bzw. CurseForge-Mod-ID).
+    None = Ermittlung läuft noch. Fehler schlagen die Suche nicht fehl."""
+    if not instance_id:
+        return set()
     try:
-        ids = await updates_mod.installed_project_ids(instance_id)
+        ids = await updates_mod.installed_project_ids_within(instance_id, _INSTALLED_WAIT)
     except Exception as exc:
         logger.warning("Installiert-Markierung nicht möglich (%s): %s",
                        instance_id, exc)
-        return
-    installed = ids.get("modrinth" if source == "modrinth" else "curseforge") or set()
-    if not installed:
-        return
-    for hit in data.get("hits") or []:
-        if isinstance(hit, dict):
-            hit["installed"] = str(hit.get("project_id") or "") in installed
+        return set()
+    if ids is None:
+        return None
+    return ids.get("modrinth" if source == "modrinth" else "curseforge") or set()
+
+
+async def _search_with_installed(search, instance_id: str | None, source: str):
+    """Suche und Installiert-Erkennung PARALLEL ausführen und Treffer mit
+    'installed' markieren. Die Suche wartet höchstens _INSTALLED_WAIT
+    Sekunden auf die Erkennung (installed_pending=True, wenn sie noch läuft)."""
+    if instance_id:
+        try:
+            instance_id = validate_identifier(instance_id, "Instanz-ID")
+        except HTTPException:
+            search.close()  # Koroutine nie gestartet → sauber verwerfen
+            raise
+    data, installed = await asyncio.gather(search, _installed_ids(instance_id, source))
+    if isinstance(data, dict):
+        if installed is None:
+            data["installed_pending"] = True
+            installed = set()
+        for hit in data.get("hits") or []:
+            if isinstance(hit, dict):
+                hit["installed"] = str(hit.get("project_id") or "") in installed
+    return data
+
+
+@api.get("/mods/categories")
+async def mod_categories(source: str = "modrinth"):
+    """Kategorien für den Modbrowser-Filter (Weltgenerierung, Magie, Technik …)
+    — so, wie Modrinth bzw. CurseForge sie selbst führen."""
+    source = (source or "").strip().lower()
+    if source not in ("modrinth", "curseforge"):
+        raise HTTPException(status_code=400, detail="Quelle muss modrinth oder curseforge sein")
+    return {"source": source, "categories": await modcategories.categories(source)}
 
 
 @api.get("/modrinth/search")
@@ -740,16 +866,17 @@ async def modrinth_search(q: str = "", offset: int = 0,
                           game_version: str | None = None,
                           sort: str | None = None,
                           environment: str | None = None,
+                          category: str | None = None,
                           instance_id: str | None = None):
     loader, game_version = _parse_search_filters(loader, game_version)
     sort = _parse_sort(sort)
     query = (q or "").strip()[:100]
     offset = max(0, min(offset, 1000))
-    data = await modrinth.search_mods(query, loader, game_version,
-                                      sort=sort, offset=offset,
-                                      environment=(environment or "").strip().lower() or None)
-    await _mark_installed(data, instance_id, "modrinth")
-    return data
+    search = modrinth.search_mods(query, loader, game_version,
+                                  sort=sort, offset=offset,
+                                  environment=(environment or "").strip().lower() or None,
+                                  category=(category or "").strip().lower() or None)
+    return await _search_with_installed(search, instance_id, "modrinth")
 
 
 async def _start_mod_download(req: DownloadRequest, resolver, provider: str,
@@ -885,14 +1012,15 @@ async def curseforge_search(q: str = "", offset: int = 0,
                             loader: str | None = None,
                             game_version: str | None = None,
                             sort: str | None = None,
+                            category: str | None = None,
                             instance_id: str | None = None):
     loader, game_version = _parse_search_filters(loader, game_version)
     sort = _parse_sort(sort)
     query = (q or "").strip()[:100]
-    data = await curseforge.search_mods(query, loader, game_version,
-                                        sort=sort, offset=offset)
-    await _mark_installed(data, instance_id, "curseforge")
-    return data
+    search = curseforge.search_mods(query, loader, game_version,
+                                    sort=sort, offset=offset,
+                                    category=(category or "").strip() or None)
+    return await _search_with_installed(search, instance_id, "curseforge")
 
 
 @api.post("/curseforge/download")
@@ -970,10 +1098,13 @@ async def _read_capped(file: UploadFile, max_bytes: int,
 @api.get("/instances")
 async def list_instances():
     result = []
-    for instance in instances.list_instances():
-        status = await asyncio.to_thread(runtime.container_status, instance)
+    all_instances = instances.list_instances()
+    statuses = await asyncio.to_thread(runtime.container_statuses, all_instances)
+    for instance in all_instances:
+        status = statuses[instance["id"]]
         entry = dict(instance)
-        entry["container"] = {"running": status["running"], "state": status["container"]}
+        entry["container"] = {"running": status["running"], "state": status["container"],
+                              "paused": status["running"] and instances.is_paused(instance["id"])}
         if status.get("started_at"):
             entry["container"]["started_at"] = status["started_at"]
         if status.get("error"):
@@ -987,20 +1118,24 @@ async def live_instances():
     """SLP-Ping aller laufenden Instanzen (parallel, je 2 s Timeout).
     Liefert Spielerzahl, MOTD und Version für die Übersicht; gestoppte
     Instanzen fehlen. Wirft nicht — Pings liefern immer ein Objekt."""
-    running = []
-    for instance in instances.list_instances():
-        status = await asyncio.to_thread(runtime.container_status, instance)
-        if status["running"]:
-            running.append(instance)
+    all_instances = instances.list_instances()
+    statuses = await asyncio.to_thread(runtime.container_statuses, all_instances)
+    running = [i for i in all_instances if statuses[i["id"]]["running"]]
 
     async def ping_one(instance: dict) -> dict:
-        ping_host, ping_port = _instance_ping_host(instance)
-        ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
+        paused = instances.is_paused(instance["id"])
+        if paused:
+            # Ein Ping würde den schlafenden Server sofort wecken
+            ping = dict(_OFFLINE_PING)
+        else:
+            ping_host, ping_port = _instance_ping_host(instance)
+            ping = await asyncio.to_thread(server_status, ping_host, ping_port, 2.0)
         return {
             "id": instance["id"],
             "name": instance["name"],
             "port": instance["port"],
             "ping": ping,
+            "paused": paused,
         }
 
     live = list(await asyncio.gather(*(ping_one(i) for i in running))) \
@@ -1074,36 +1209,54 @@ async def instance_from_pack(req: CreateFromPackRequest):
     return {"instance": result["instance"], "job": result["job"]}
 
 
+async def _save_pack_upload(file: UploadFile, dest: Path) -> None:
+    """Modpack-Upload streamend speichern (4 GiB-Deckel); räumt bei Fehler auf."""
+    try:
+        await _stream_upload(file, dest, packs._MAX_PACK_BYTES)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
+
+
+@api.post("/modpacks/analyze")
+async def modpack_analyze(file: UploadFile = File(...)):
+    """Vorschau: Lädt ein Pack-Archiv hoch und liest, was erkannt wird
+    (Format, Minecraft/Loader, Java, Mods, RAM-Empfehlung, Warnungen).
+    Die Datei bleibt unter 'token' liegen, damit die Installation sie ohne
+    zweiten Upload verwenden kann (Feld 'staged')."""
+    filename = instances.validate_pack_filename(file.filename or "")
+    token, archive = packs.preview_path(filename)
+    await _save_pack_upload(file, archive)
+    try:
+        result = await asyncio.to_thread(packs.analyze_archive, archive, filename)
+    except Exception:
+        archive.unlink(missing_ok=True)
+        raise
+    return {"token": token, **result}
+
+
 @api.post("/instances/from-pack-upload", status_code=201)
 async def instance_from_pack_upload(name: str = Form(""),
                                     memory: str = Form(""),
                                     port: int | None = Form(None),
                                     accept_eula: bool = Form(False),
-                                    file: UploadFile = File(...)):
-    """Erstellt aus einem hochgeladenen Modpack-Archiv (.mrpack/.zip) direkt
-    eine neue Server-Instanz: Loader/MC-Version werden aus dem Index gelesen."""
-    filename = instances.validate_pack_filename(file.filename or "")
-    archive = None
-    try:
+                                    staged: str = Form(""),
+                                    file: UploadFile | None = File(None)):
+    """Erstellt aus einem hochgeladenen Modpack-Archiv (.mrpack/.zip/Server
+    Files) direkt eine neue Server-Instanz: Loader/MC-Version werden aus dem
+    Archiv gelesen. Statt 'file' kann 'staged' (Token aus /modpacks/analyze)
+    übergeben werden."""
+    if staged:
+        archive, filename = packs.staged_preview(staged)
+    elif file is not None:
+        filename = instances.validate_pack_filename(file.filename or "")
         archive = packs.staging_dir() / f"upload_{uuid.uuid4().hex[:8]}_{filename}"
-        written = 0
-        with open(archive, "wb") as fh:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > packs._MAX_PACK_BYTES:
-                    raise HTTPException(status_code=413,
-                                        detail="Modpack zu groß (max 4 GiB)")
-                fh.write(chunk)
-    except HTTPException:
-        if archive is not None:
-            archive.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        if archive is not None:
-            archive.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
-    finally:
-        await file.close()
+        await _save_pack_upload(file, archive)
+    else:
+        raise HTTPException(status_code=400, detail="Keine Modpack-Datei angegeben")
     try:
         result = await packs.create_server_from_upload(
             archive, filename, name=(name or "").strip() or None,
@@ -1122,30 +1275,113 @@ async def instance_from_pack_upload(name: str = Form(""),
     return {"instance": result["instance"], "job": result["job"]}
 
 
+# Speicher-Zählung der Detail-Ansicht: Läuft sie länger als dieses Budget
+# (erster Aufruf, große Welt, langsame Platte), kommt die Antwort ohne
+# Speicherwert ('disk_pending') und das Frontend holt ihn über /disk nach.
+_DISK_BUDGET_SECONDS = 1.0
+_DISK_TASKS: dict = {}
+_OFFLINE_PING = {"online": False, "version": None, "motd": "",
+                 "players": {"online": 0, "max": 0, "sample": []}, "error": None}
+# Anfragen, die länger dauern, landen mit Zeit im Log (Diagnose langsamer Hosts)
+_SLOW_REQUEST_MS = 1000
+
+
+def _disk_task(instance_id: str) -> asyncio.Task:
+    """Eine laufende Speicher-Zählung pro Instanz (und Event-Loop) teilen."""
+    loop = asyncio.get_running_loop()
+    entry = _DISK_TASKS.get(instance_id)
+    if entry is not None and entry[0] is loop and not entry[1].done():
+        return entry[1]
+    task = loop.create_task(asyncio.to_thread(instances.disk_usage, instance_id))
+    # Ergebnis/Fehler abholen, auch wenn niemand mehr wartet (kein Warn-Log)
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    _DISK_TASKS[instance_id] = (loop, task)
+    return task
+
+
+async def _detail_disk(instance_id: str) -> dict | None:
+    """Speicherwert für die Detail-Ansicht ohne lange Wartezeit: frischer
+    Cache sofort; älterer Cache sofort + Neuzählung im Hintergrund; ohne
+    Cache höchstens _DISK_BUDGET_SECONDS warten, sonst None."""
+    cached, fresh = instances.disk_usage_cached(instance_id)
+    if fresh:
+        return cached
+    task = _disk_task(instance_id)
+    if cached is not None:
+        return cached
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), _DISK_BUDGET_SECONDS)
+    except TimeoutError:
+        return None
+
+
+async def _timed(timings: dict, name: str, awaitable):
+    start = time.perf_counter()
+    try:
+        return await awaitable
+    finally:
+        timings[name] = (time.perf_counter() - start) * 1000
+
+
 @api.get("/instances/{instance_id}")
-async def instance_detail(instance_id: str):
+async def instance_detail(instance_id: str, response: Response):
     instance = instances.get_instance(instance_id)
     ping_host, ping_port = _instance_ping_host(instance)
-    # Docker-Status, Ping, Mod-Scan und Disk-Scan parallel (statt seriell) —
-    # die Antwort kommt so nach der langsamsten Einzelabfrage, nicht nach
-    # der Summe aller; jeder Schritt läuft im Worker-Thread, damit der
-    # Event-Loop nicht blockiert (sonst hängt das ganze Panel kurz).
-    status, ping, mods, disk = await asyncio.gather(
-        asyncio.to_thread(runtime.container_status, instance),
-        asyncio.to_thread(server_status, ping_host, ping_port, 1.0),
-        asyncio.to_thread(instances.list_mods, instance_id),
-        asyncio.to_thread(instances.disk_usage, instance_id),
+    timings: dict = {}
+
+    async def status_and_ping():
+        # Ping nur bei laufendem Container: bei gestopptem Server kostet er
+        # sonst bis zum Timeout (bzw. eine DNS-Anfrage auf den Containernamen)
+        status = await _timed(timings, "docker",
+                              asyncio.to_thread(runtime.container_status, instance))
+        if not status["running"]:
+            return status, dict(_OFFLINE_PING)
+        if instances.is_paused(instance_id):
+            # Schlafmodus: ein Ping würde den Server wecken
+            return status, dict(_OFFLINE_PING)
+        ping = await _timed(timings, "ping",
+                            asyncio.to_thread(server_status, ping_host, ping_port, 1.0))
+        return status, ping
+
+    # Docker+Ping, Mod-Scan und Speicher parallel; jeder Schritt im Worker-
+    # Thread, damit der Event-Loop nicht blockiert. Der Speicher wartet
+    # höchstens kurz (siehe _detail_disk).
+    (status, ping), overview, disk = await asyncio.gather(
+        status_and_ping(),
+        _timed(timings, "mods", asyncio.to_thread(instances.mods_overview, instance_id)),
+        _timed(timings, "disk", _detail_disk(instance_id)),
     )
     detail = dict(instance)
-    detail["container"] = {"running": status["running"], "state": status["container"]}
+    detail["container"] = {"running": status["running"], "state": status["container"],
+                           "paused": status["running"] and instances.is_paused(instance_id)}
     if status.get("started_at"):
         detail["container"]["started_at"] = status["started_at"]
     if status.get("error"):
         detail["container"]["error"] = status["error"]
     detail["ping"] = ping
-    detail["mods"] = mods
+    detail["mods"] = overview["mods"]
+    detail["mod_problems"] = overview["problems"]
+    detail["mods_changed_at"] = overview["mods_changed_at"]
     detail["disk"] = disk
+    detail["disk_pending"] = disk is None
+    # Teilzeiten für die Browser-Entwicklertools (Netzwerk → Timing)
+    response.headers["Server-Timing"] = ", ".join(
+        f"{name};dur={ms:.0f}" for name, ms in timings.items())
+    if timings and max(timings.values()) >= _SLOW_REQUEST_MS:
+        logger.info("Server-Details %s langsam: %s", instance_id, ", ".join(
+            f"{name} {ms:.0f} ms" for name, ms in timings.items()))
     return detail
+
+
+@api.get("/instances/{instance_id}/disk")
+async def instance_disk(instance_id: str):
+    """Speicherverbrauch der Instanz (wartet auf eine laufende Zählung) —
+    Nachladen, wenn die Detail-Antwort 'disk_pending' gemeldet hat."""
+    instances.get_instance(instance_id)
+    cached, fresh = instances.disk_usage_cached(instance_id)
+    if fresh:
+        return cached
+    return await asyncio.shield(_disk_task(instance_id))
 
 
 @api.patch("/instances/{instance_id}")
@@ -1158,7 +1394,7 @@ async def instance_update(instance_id: str, req: UpdateInstanceRequest):
     if not body and schedule is None:
         raise HTTPException(status_code=400,
                             detail="Keine Änderungen übergeben "
-                                   "(name/memory/jvm_opts/use_aikar/tags/port/schedule)")
+                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule/hibernate)")
     result = {"instance": instances.get_instance(instance_id), "changed": []}
     if schedule is not None:
         result = instances.update_schedule(
@@ -1192,9 +1428,58 @@ async def instance_clone(instance_id: str, req: CloneInstanceRequest):
     return instance
 
 
+@api.post("/instances/{instance_id}/version/check")
+async def instance_version_check(instance_id: str, req: VersionTargetRequest):
+    """Vorschau eines Versionswechsels: welche Mods es für die Zielversion
+    gibt, welche fehlen und welche unbekannt sind."""
+    try:
+        return await versionchange.check(instance_id, req.loader, req.game_version)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Versions-Vorschau fehlgeschlagen")
+        raise HTTPException(status_code=502, detail=f"Mod-Anbieter nicht erreichbar: {exc}")
+
+
+@api.post("/instances/{instance_id}/version")
+async def instance_version_change(instance_id: str, req: VersionChangeRequest):
+    """Minecraft-Version/Loader wechseln (Job): Backup, Mods mitziehen,
+    fehlende Mods deaktivieren, Version umstellen. Server muss gestoppt sein."""
+    job = await versionchange.start_change(
+        instance_id, req.loader, req.game_version, req.loader_version,
+        update_mods=req.update_mods, disable_missing=req.disable_missing,
+        allow_downgrade=req.allow_downgrade)
+    return {"job_id": job["id"], "total": job["total"], "phase": job["phase"]}
+
+
+@api.post("/instances/{instance_id}/crash/analyze")
+async def instance_crash_analyze(instance_id: str):
+    """Absturz-Ursache jetzt ermitteln (Log-Ende + neuester Crash-Report der
+    letzten 24 h), z. B. wenn ein Server nicht hochkommt."""
+    instance = instances.get_instance(instance_id)
+    try:
+        lines = await asyncio.to_thread(runtime.logs, instance, 300)
+    except RuntimeError:
+        lines = []
+    diag = await asyncio.to_thread(
+        crashinfo.diagnose, instances.instance_dir(instance_id), lines,
+        since=time.time() - 86400)
+    await asyncio.to_thread(instances.set_crash, instance_id, diag)
+    return diag
+
+
+@api.delete("/instances/{instance_id}/crash")
+async def instance_crash_dismiss(instance_id: str):
+    """Angezeigte Absturz-Diagnose ausblenden."""
+    instances.get_instance(instance_id)
+    await asyncio.to_thread(instances.set_crash, instance_id, None)
+    return {"ok": True}
+
+
 @api.post("/instances/{instance_id}/start")
 async def instance_start(instance_id: str):
     instance = instances.get_instance(instance_id)
+    watchdog_mod.forget_crashes(instance_id)  # Absturzschleife neu zählen
     container = await asyncio.to_thread(runtime.container_status, instance)
     if container.get("running"):
         instances.set_status(instance_id, "running", None)
@@ -1316,8 +1601,70 @@ async def instance_delete(instance_id: str, force: bool = False):
 
 @api.get("/instances/{instance_id}/mods")
 async def instance_mods(instance_id: str):
+    """Mods mit Metadaten aus der .jar (Name, Version, Abhängigkeiten) und
+    erkannten Problemen (fehlende Abhängigkeit, falscher Loader, …)."""
     instances.get_instance(instance_id)  # 404 wenn unbekannt
-    return {"mods": await asyncio.to_thread(instances.list_mods, instance_id)}
+    return await asyncio.to_thread(instances.mods_overview, instance_id)
+
+
+@api.get("/instances/{instance_id}/mods/browse/{source}/{project_id}")
+async def instance_mod_browse(instance_id: str, source: str, project_id: str,
+                              all_versions: bool = False):
+    """Modbrowser-Details: Beschreibung und Versionen eines Projekts,
+    standardmäßig gefiltert auf Loader und MC-Version der Instanz."""
+    instance = instances.get_instance(instance_id)
+    return await modinstall.project_details(instance, source, project_id,
+                                            all_versions=all_versions)
+
+
+@api.get("/curseforge/project/{project_id}/files/{file_id}/changelog")
+async def curseforge_file_changelog(project_id: str, file_id: str):
+    return {"changelog": await modinstall.curseforge_changelog(project_id, file_id)}
+
+
+@api.post("/instances/{instance_id}/mods/plan")
+async def instance_mod_plan(instance_id: str, req: ModPlanRequest):
+    """Vorschau: welche Dateien inkl. Pflicht-Abhängigkeiten geladen würden."""
+    instance = instances.get_instance(instance_id)
+    plan = await modinstall.build_plan(instance, [i.model_dump() for i in req.items])
+    return modinstall.public_plan(plan)
+
+
+@api.post("/instances/{instance_id}/mods/install")
+async def instance_mod_install(instance_id: str, req: ModInstallRequest):
+    """Eine oder mehrere Mods samt gemeinsamer Abhängigkeiten installieren
+    (ein Hintergrund-Job, Fortschritt über /api/modrinth/jobs/{id})."""
+    instance = instances.get_instance(instance_id)
+    try:
+        result = await modinstall.start_install(
+            instance, [i.model_dump() for i in req.items], req.overwrite)
+    except modinstall.InstallConflict as exc:
+        return JSONResponse(status_code=409, content={
+            "detail": "Bereits im mods-Ordner: " + ", ".join(exc.conflicts),
+            "conflicts": exc.conflicts})
+    instances.invalidate_disk_cache(instance_id)
+    return result
+
+
+@api.get("/instances/{instance_id}/mod-trash")
+async def instance_mod_trash(instance_id: str):
+    """Papierkorb: gelöschte und per Update ersetzte Mods der letzten Tage."""
+    entries = await asyncio.to_thread(instances.list_trash, instance_id)
+    return {"entries": entries, "keep_days": instances.TRASH_DAYS}
+
+
+@api.post("/instances/{instance_id}/mod-trash/{entry}/restore")
+async def instance_mod_trash_restore(instance_id: str, entry: str):
+    result = await asyncio.to_thread(instances.restore_from_trash, instance_id, entry)
+    instances.invalidate_disk_cache(instance_id)
+    updates_mod.invalidate_installed_cache(instance_id)
+    logger.info("Instanz %s: Mod wiederhergestellt: %s", instance_id, result["restored"])
+    return result
+
+
+@api.delete("/instances/{instance_id}/mod-trash")
+async def instance_mod_trash_empty(instance_id: str):
+    return await asyncio.to_thread(instances.empty_trash, instance_id)
 
 
 @api.get("/instances/{instance_id}/mods/{filename}/icon")
@@ -1336,7 +1683,7 @@ async def instance_mod_icon(instance_id: str, filename: str):
 @api.delete("/instances/{instance_id}/mods/{filename}")
 async def instance_delete_mod(instance_id: str, filename: str):
     instances.get_instance(instance_id)
-    deleted = instances.delete_mod(instance_id, filename)
+    deleted = await asyncio.to_thread(instances.delete_mod, instance_id, filename)
     instances.invalidate_disk_cache(instance_id)
     updates_mod.invalidate_installed_cache(instance_id)
     return {"deleted": deleted}
@@ -1430,6 +1777,217 @@ async def instance_players(instance_id: str):
         return {"online": None, "max": None, "names": [], "raw": output}
     return {"online": parsed["online"], "max": parsed["max"],
             "names": parsed["names"], "raw": output}
+
+
+# ---------------------------------------------------------------------------
+# Spieler-Übersicht: alle bekannten Spieler, Profil, Live-Tabelle
+# ---------------------------------------------------------------------------
+
+async def _online_names(instance: dict) -> list | None:
+    """Namen laut RCON 'list'; None, wenn der Server nicht läuft oder RCON
+    nicht antwortet (die Liste kommt dann nur aus den Dateien)."""
+    if not await asyncio.to_thread(runtime.is_running, instance):
+        return None
+    try:
+        output = await _rcon_run(instance, "list")
+    except HTTPException:
+        return None
+    parsed = rcon_mod.parse_list_output(output)
+    return parsed["names"] if parsed else None
+
+
+@api.get("/instances/{instance_id}/known-players")
+async def known_players(instance_id: str):
+    """Alle Spieler, die je auf der Instanz waren (auch offline)."""
+    instance = instances.get_instance(instance_id)
+    online = await _online_names(instance)
+    data = await asyncio.to_thread(players_mod.list_players, instance_id, online or [])
+    data["running"] = online is not None
+    return data
+
+
+@api.get("/instances/{instance_id}/known-players/{key}")
+async def known_player_profile(instance_id: str, key: str):
+    """Profil eines Spielers (Name oder UUID); online zusätzlich Live-Werte."""
+    instance = instances.get_instance(instance_id)
+    if not (players_mod.UUID_RE.match(key) or inventory_mod.PLAYER_RE.match(key)):
+        raise HTTPException(status_code=400, detail="Ungültiger Spieler")
+    profile = await asyncio.to_thread(players_mod.player_profile, instance_id, key)
+    profile["live"] = None
+    name = profile.get("name")
+    online = await _online_names(instance) if name else None
+    if name and online and name.lower() in {n.lower() for n in online}:
+        try:
+            outputs = await _rcon_many(instance, players_mod.live_commands([name]))
+            rows = players_mod.parse_live([name], outputs)
+            profile["live"] = rows[0] if rows else None
+        except HTTPException:
+            profile["live"] = None
+    profile["online"] = profile["live"] is not None
+    return profile
+
+
+@api.get("/instances/{instance_id}/players-live")
+async def players_live(instance_id: str):
+    """Tabelle der verbundenen Spieler: Leben, Hunger, Level, Position, Bett,
+    Sitzungsdauer, dazu Uhrzeit und Wetter der Welt."""
+    instance = instances.get_instance(instance_id)
+    output = await _rcon_run(instance, "list")
+    parsed = rcon_mod.parse_list_output(output) or {"names": [], "online": None, "max": None}
+    names = [n for n in parsed["names"] if inventory_mod.PLAYER_RE.match(n)][:100]
+    outputs = await _rcon_many(
+        instance, [*players_mod.live_commands(names), "time query daytime"])
+    rows = players_mod.parse_live(names, outputs[:-1])
+    starts = history_mod.open_session_starts(instance_id)
+    now = int(time.time())
+    for row in rows:
+        start = starts.get(row["name"])
+        row["session_seconds"] = now - start if start else None
+    weather = await asyncio.to_thread(
+        players_mod.world_weather, instances.world_dir(instance_id))
+    return {"players": rows, "online": parsed.get("online"), "max": parsed.get("max"),
+            "daytime": gamerules_mod.parse_daytime(outputs[-1]),
+            "weather": weather, "fetched_at": now}
+
+
+# ---------------------------------------------------------------------------
+# Spieler-Inventar (RCON: data get entity / item replace / give)
+# ---------------------------------------------------------------------------
+
+class InventoryAction(BaseModel):
+    """Änderung an einem Slot. Item-Daten kommen nie vom Browser — der Server
+    liest den aktuellen Stand und baut die Befehle selbst. 'expect' enthält
+    die Fingerabdrücke der betroffenen Slots aus der Ansicht; weichen sie ab,
+    hat der Spieler inzwischen etwas bewegt (409)."""
+    action: str = Field(pattern=r"^(set_count|clear|move|give)$")
+    slot: str | None = Field(default=None, max_length=24)
+    to: str | None = Field(default=None, max_length=24)
+    count: int | None = Field(default=None, ge=0, le=6400)
+    item_id: str | None = Field(default=None, max_length=128)
+    expect: dict[str, str] = Field(default_factory=dict, max_length=4)
+
+
+def _check_player(name: str) -> str:
+    if not inventory_mod.PLAYER_RE.match(name or ""):
+        raise HTTPException(status_code=400, detail="Ungültiger Spielername")
+    return name
+
+
+async def _rcon_many(instance: dict, cmds: list) -> list:
+    """Wie _rcon_run, aber mehrere Befehle über eine Verbindung."""
+    if not await asyncio.to_thread(runtime.is_running, instance):
+        raise HTTPException(status_code=409,
+                            detail="Instanz läuft nicht — RCON braucht einen gestarteten Server")
+    host, port = runtime.rcon_target(instance)
+    try:
+        return await asyncio.to_thread(
+            rcon_mod.commands, host, port, runtime.rcon_secret(instance), cmds)
+    except rcon_mod.RconError as exc:
+        raise HTTPException(status_code=503, detail=f"RCON nicht erreichbar: {exc}")
+
+
+async def _read_inventory(instance: dict, player: str) -> tuple:
+    loader = (instance.get("loader") or "").lower()
+    outputs = await _rcon_many(instance, inventory_mod.read_commands(player, loader))
+    try:
+        snapshot, slots = inventory_mod.build_snapshot(player, loader, outputs)
+    except inventory_mod.PlayerOffline:
+        raise HTTPException(status_code=404, detail=f"{player} ist nicht online")
+    game_version = instance.get("game_version") or ""
+    snapshot.update(
+        mc_version=game_version,
+        loader=loader,
+        editable=inventory_mod.editing_supported(game_version),
+        fetched_at=int(time.time()),
+        icons=itemassets_mod.ensure_vanilla(game_version),
+    )
+    return snapshot, slots
+
+
+@api.get("/instances/{instance_id}/players/{player}/inventory")
+async def player_inventory(instance_id: str, player: str):
+    """Inventar, Rüstung, Offhand, Endertruhe und Mod-Slots eines Online-Spielers."""
+    instance = instances.get_instance(instance_id)
+    snapshot, _slots = await _read_inventory(instance, _check_player(player))
+    return snapshot
+
+
+@api.post("/instances/{instance_id}/players/{player}/inventory")
+async def player_inventory_action(instance_id: str, player: str, req: InventoryAction,
+                                  request: Request):
+    """Slot setzen/leeren/verschieben oder Item geben (Admin, siehe auth_guard)."""
+    instance = instances.get_instance(instance_id)
+    player = _check_player(player)
+    if not inventory_mod.editing_supported(instance.get("game_version") or ""):
+        raise HTTPException(status_code=409,
+                            detail="Bearbeiten braucht Minecraft 1.17 oder neuer")
+    for name in (req.slot, req.to):
+        if name is not None and not inventory_mod.SLOT_RE.match(name):
+            raise HTTPException(status_code=400, detail=f"Ungültiger Slot: {name}")
+    if req.action in ("set_count", "clear", "move") and not req.slot:
+        raise HTTPException(status_code=400, detail="Slot fehlt")
+    if req.action == "move" and (not req.to or req.to == req.slot):
+        raise HTTPException(status_code=400, detail="Ziel-Slot fehlt")
+    if req.action == "set_count" and not 1 <= (req.count or 0) <= 99:
+        raise HTTPException(status_code=400, detail="Menge muss zwischen 1 und 99 liegen")
+    if req.action == "give":
+        if not inventory_mod.ITEM_ID_RE.match(req.item_id or ""):
+            raise HTTPException(status_code=400, detail="Ungültige Item-ID (z. B. minecraft:stone)")
+        if not 1 <= (req.count or 0) <= 6400:
+            raise HTTPException(status_code=400, detail="Menge muss zwischen 1 und 6400 liegen")
+
+    _snapshot, slots = await _read_inventory(instance, player)
+    for name, sig in req.expect.items():
+        if not inventory_mod.SLOT_RE.match(name):
+            raise HTTPException(status_code=400, detail=f"Ungültiger Slot: {name}")
+        if inventory_mod.signature(slots.get(name)) != sig:
+            raise HTTPException(status_code=409,
+                                detail="Das Inventar hat sich inzwischen geändert — "
+                                       "Ansicht aktualisiert, bitte erneut versuchen")
+    try:
+        cmds = inventory_mod.plan_action(player, req.action, slots, req.slot, req.to,
+                                         req.count, req.item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    outputs = await _rcon_many(instance, cmds)
+    session = auth_mod.current_session(request) or {}
+    who = session.get("u") or ("api-key" if request.headers.get("X-API-Key") else "anonym")
+    for cmd, out in zip(cmds, outputs, strict=True):
+        logger.info("Inventar %s (%s): %s → %s", instance_id, who, cmd[:200], out[:120])
+    failed = [out for out in outputs if not inventory_mod.write_ok(out)]
+    snapshot, _slots = await _read_inventory(instance, player)
+    if failed:
+        raise HTTPException(status_code=400,
+                            detail=f"Minecraft hat abgelehnt: {failed[0] or '(keine Antwort)'}")
+    return snapshot
+
+
+@api.get("/instances/{instance_id}/items")
+async def items_lookup(instance_id: str, ids: str = Query(default="", max_length=8000),
+                       q: str = Query(default="", max_length=64)):
+    """Namen und Icon-Verfügbarkeit für Item-IDs (ids=a,b,c) oder Suche (q=…)."""
+    instance = instances.get_instance(instance_id)
+    index = await asyncio.to_thread(itemassets_mod.index_for, instance)
+    icons = itemassets_mod.vanilla_status(instance.get("game_version") or "")
+    if q:
+        return {"results": index.search(q), "icons": icons}
+    wanted = [i for i in ids.split(",") if inventory_mod.ITEM_ID_RE.match(i)][:300]
+    return {"items": {i: {"name": index.names.get(i) or index.enchantments.get(i)}
+                      for i in wanted}, "icons": icons}
+
+
+@api.get("/instances/{instance_id}/items/icon")
+async def items_icon(instance_id: str, id: str = Query(max_length=128)):
+    """PNG-Textur eines Items (erstes Bild bei Animationen macht das Frontend)."""
+    if not inventory_mod.ITEM_ID_RE.match(id):
+        raise HTTPException(status_code=400, detail="Ungültige Item-ID")
+    instance = instances.get_instance(instance_id)
+    index = await asyncio.to_thread(itemassets_mod.index_for, instance)
+    data = await asyncio.to_thread(index.icon, id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Kein Icon gefunden")
+    return Response(content=data, media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=3600"})
 
 
 @api.post("/instances/{instance_id}/console")
@@ -1586,7 +2144,10 @@ def _handle_backup_error(exc: Exception) -> HTTPException:
 async def list_instance_backups(instance_id: str):
     instances.get_instance(instance_id)
     try:
-        return {"backups": await asyncio.to_thread(backups_mod.list_backups, instance_id)}
+        items = await asyncio.to_thread(backups_mod.list_backups, instance_id)
+        external = await asyncio.to_thread(backups_mod.is_external)
+        return {"backups": items, "external": external,
+                "location": str(backups_mod.backups_root())}
     except Exception as exc:
         raise _handle_backup_error(exc)
 
@@ -1785,6 +2346,14 @@ async def instance_map_status(instance_id: str):
     return result
 
 
+@api.api_route("/instances/{instance_id}/map/view/{path:path}", methods=["GET", "HEAD"])
+async def instance_map_view(instance_id: str, path: str, request: Request):
+    """BlueMap-Web-App der Instanz hinter dem Dashboard-Login (Reverse-Proxy)."""
+    instance = instances.get_instance(instance_id)
+    return await livemap_mod.proxy(instance, path, request.url.query,
+                                   request.method, request.headers)
+
+
 @api.put("/instances/{instance_id}/map")
 async def instance_map_toggle(instance_id: str, req: MapToggleRequest):
     """Karte ein-/ausschalten (wirksam beim nächsten (Neu-)Start)."""
@@ -1976,6 +2545,13 @@ async def instance_gamerules_set(instance_id: str, req: GameruleSetRequest):
                                    instance_id, req.name, req.value)
 
 
+@api.post("/instances/{instance_id}/world/time-weather")
+async def instance_time_weather(instance_id: str, req: TimeWeatherRequest):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(gamerules_mod.set_time_weather,
+                                   instance_id, req.time, req.weather)
+
+
 # ---------------------------------------------------------------------------
 # Modpacks pro Instanz
 # ---------------------------------------------------------------------------
@@ -2055,13 +2631,13 @@ async def instance_pack_install(instance_id: str, req: InstallPackRequest):
 
 
 @api.get("/instances/{instance_id}/modpacks/update-check")
-async def instance_pack_update_check(instance_id: str):
+async def instance_pack_update_check(instance_id: str, refresh: bool = False):
     """Prüft, ob für das installierte Modpack eine neuere Version verfügbar
     ist (Modrinth: neueste kompatible Version, CurseForge: neueste Datei).
     'checkable=false' bei hochgeladenen Archiven ohne Projekt-Quelle."""
     instances.get_instance(instance_id)
     try:
-        return await packs.pack_update_check(instance_id)
+        return await packs.pack_update_check_cached(instance_id, refresh)
     except HTTPException:
         raise
     except Exception as exc:
@@ -2089,10 +2665,20 @@ async def instance_pack_update(instance_id: str, req: PackUpdateRequest):
             "total": job["total"], "phase": job["phase"]}
 
 
+@api.post("/instances/{instance_id}/modpacks/retry-failed")
+async def instance_pack_retry_failed(instance_id: str):
+    """Lädt nur die Dateien nach, die bei der letzten Pack-Installation
+    fehlgeschlagen sind."""
+    job = await packs.retry_failed(instance_id)
+    return {"job_id": job["id"], "filename": job["filename"],
+            "total": job["total"], "phase": job["phase"]}
+
+
 @api.post("/instances/{instance_id}/modpacks/upload")
 async def instance_pack_upload(instance_id: str, force: bool = Form(False),
                                auto_version: bool = Form(True),
-                               file: UploadFile = File(...)):
+                               staged: str = Form(""),
+                               file: UploadFile | None = File(None)):
     """Installiert ein hochgeladenes Modpack-Archiv (.mrpack oder CurseForge-.zip).
 
     Das Archiv wird streamend in packs/ der Instanz geschrieben (Größenlimit
@@ -2103,32 +2689,28 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
     (nur bei gestoppter Instanz, sonst Fehler im Job).
     """
     instances.get_instance(instance_id)
-    filename = instances.validate_pack_filename(file.filename or "")
+    staged_path = None
+    if staged:
+        staged_path, filename = packs.staged_preview(staged)
+    elif file is not None:
+        filename = instances.validate_pack_filename(file.filename or "")
+    else:
+        raise HTTPException(status_code=400, detail="Keine Modpack-Datei angegeben")
     pack_dir = instances.pack_dir(instance_id)
     try:
         pack_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"packs-Ordner nicht schreibbar: {exc}")
     dest = pack_dir / filename
-    try:
+    if staged_path is not None:
+        try:
+            shutil.move(str(staged_path), str(dest))
+        except OSError as exc:
+            raise HTTPException(status_code=500,
+                                detail=f"Upload nicht übernehmbar: {exc}") from exc
+    elif file is not None:
         # Streamend schreiben, damit große Archive den Speicher nicht füllen
-        max_bytes = 4 * 1024 * 1024 * 1024  # harte Grenze, wie packs._MAX_PACK_BYTES
-        written = 0
-        with open(dest, "wb") as fh:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > max_bytes:
-                    raise HTTPException(status_code=413,
-                                        detail="Modpack zu groß (max 4 GiB)")
-                fh.write(chunk)
-    except HTTPException:
-        dest.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        dest.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
-    finally:
-        await file.close()
+        await _save_pack_upload(file, dest)
 
     try:
         job = await packs.install_upload(instance_id, dest, filename,
@@ -2190,6 +2772,23 @@ async def instance_update_discard(instance_id: str, token: str):
 
 
 app.include_router(api)
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    """Gesamtdauer jeder Anfrage als Server-Timing-Header ('app') und
+    langsame Anfragen (ab _SLOW_REQUEST_MS) im Log — zeigt auf dem
+    eigenen Host, welche Abfrage das Dashboard ausbremst."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - start) * 1000
+    existing = response.headers.get("Server-Timing")
+    response.headers["Server-Timing"] = (
+        f"{existing}, app;dur={ms:.0f}" if existing else f"app;dur={ms:.0f}")
+    if ms >= _SLOW_REQUEST_MS and request.url.path.startswith("/api"):
+        logger.info("Langsame Anfrage: %s %s %.0f ms",
+                    request.method, request.url.path, ms)
+    return response
 
 
 @app.middleware("http")

@@ -1,7 +1,9 @@
 """Tests für die Live-Weltkarte (BlueMap): Ein-/Ausschalten, Installation
 (Modrinth gemockt), Port-Reservierung, Container-Port und Welt-Wechsel."""
+import gzip
 import shutil
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -123,7 +125,7 @@ class TestPortsUndStart:
                    json={"enabled": True, "accept_download": True})
         runtime.start_instance(instances.get_instance(inst["id"]))
         ports = fake_docker.containers.run_kwargs["ports"]
-        assert ports["8100/tcp"] == inst["port"] + 2000
+        assert ports["8100/tcp"] == ("127.0.0.1", inst["port"] + 2000)
 
     def test_ausschalten_entfernt_jar_und_port(self, client, modrinth_fake, fake_docker):
         inst = _create()
@@ -179,3 +181,75 @@ class TestStatus:
         monkeypatch.setattr(livemap, "reachable", up)
         body = client.get(f"/api/instances/{inst['id']}/map").json()
         assert body["server_running"] and body["reachable"]
+
+
+class TestProxy:
+    """Die Karte ist nur über den Dashboard-Proxy (mit Login) erreichbar."""
+
+    @pytest.fixture()
+    def upstream(self, monkeypatch):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            if request.url.path == "/":
+                return httpx.Response(200, stream=httpx.ByteStream(b"<html>BlueMap</html>"),
+                                      headers={"content-type": "text/html"})
+            if request.url.path == "/maps/world/tiles/0/x0/z0.prbm":
+                # Kacheln kommen gzip-komprimiert und gehen unverändert durch
+                return httpx.Response(200, stream=httpx.ByteStream(gzip.compress(b"tile")),
+                                      headers={"content-encoding": "gzip",
+                                               "content-type": "application/octet-stream"})
+            return httpx.Response(404, text="nope")
+
+        real = httpx.AsyncClient
+
+        def fake_client(*args, **kwargs):
+            return real(transport=httpx.MockTransport(handler), **kwargs)
+
+        monkeypatch.setattr(livemap.httpx, "AsyncClient", fake_client)
+        return seen
+
+    def _enable(self, client):
+        inst = _create()
+        client.put(f"/api/instances/{inst['id']}/map",
+                   json={"enabled": True, "accept_download": True})
+        return inst
+
+    def test_index_mit_eigener_csp(self, client, modrinth_fake, upstream):
+        inst = self._enable(client)
+        r = client.get(f"/api/instances/{inst['id']}/map/view/")
+        assert r.status_code == 200 and "BlueMap" in r.text
+        assert "frame-ancestors 'self'" in r.headers["content-security-policy"]
+        assert r.headers["x-frame-options"] == "SAMEORIGIN"
+        assert str(upstream[0].url) == f"http://127.0.0.1:{inst['port'] + 2000}/"
+
+    def test_kachel_mit_query_und_gzip(self, client, modrinth_fake, upstream):
+        inst = self._enable(client)
+        r = client.get(f"/api/instances/{inst['id']}/map/view/maps/world/tiles/0/x0/z0.prbm?1234")
+        assert r.status_code == 200
+        assert r.content == b"tile"  # TestClient entpackt gzip wie ein Browser
+        assert upstream[-1].url.query == b"1234"
+
+    def test_ausgeschaltet_404(self, client, upstream):
+        inst = _create()
+        r = client.get(f"/api/instances/{inst['id']}/map/view/")
+        assert r.status_code == 404
+        assert upstream == []
+
+    def test_nicht_erreichbar_502(self, client, modrinth_fake, monkeypatch):
+        inst = self._enable(client)
+
+        def handler(request):
+            raise httpx.ConnectError("down")
+
+        real = httpx.AsyncClient
+        monkeypatch.setattr(livemap.httpx, "AsyncClient",
+                            lambda *a, **kw: real(transport=httpx.MockTransport(handler), **kw))
+        r = client.get(f"/api/instances/{inst['id']}/map/view/")
+        assert r.status_code == 502
+
+    def test_schreibende_methoden_nicht_erlaubt(self, client, modrinth_fake, upstream):
+        inst = self._enable(client)
+        r = client.post(f"/api/instances/{inst['id']}/map/view/")
+        assert r.status_code == 405

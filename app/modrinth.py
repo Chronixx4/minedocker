@@ -12,12 +12,14 @@ from pathlib import Path
 import httpx
 from fastapi import HTTPException
 
+from . import searchcache
 from .config import settings
 from .security import validate_curseforge_download_url
 
 logger = logging.getLogger("dashboard.modrinth")
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_CATEGORY_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 
 # In-Memory-Jobs (leichtgewichtig, Maximalbegrenzung gegen Speicherwucher).
 # Zusätzlich wird jeder Job-Zustand als JSON-Datei gespiegelt (Überleben von
@@ -150,6 +152,9 @@ _SORT_INDEX = {
 # Umgebungsfilter: welche Seite den Mod braucht bzw. wo er zwingend nötig ist.
 # Modrinth-Feldwerte: required, optional, unsupported, unknown.
 _ENVIRONMENT_FACETS = {
+    # "läuft auf dem Server": alles außer reinen Client-Mods (unsupported)
+    "server_ok": ["server_side:required", "server_side:optional",
+                  "server_side:unknown"],
     "server_required": ["server_side:required"],
     "server": ["server_side:required", "server_side:optional"],
     "client_required": ["client_side:required"],
@@ -159,11 +164,13 @@ _ENVIRONMENT_FACETS = {
 
 async def search_mods(query: str, loader: str | None, game_version: str | None,
                       limit: int = 20, offset: int = 0, sort: str = "relevance",
-                      environment: str | None = None) -> dict:
-    """Sucht Mods, optional gefiltert nach Loader/MC-Version/Umgebung.
+                      environment: str | None = None,
+                      category: str | None = None) -> dict:
+    """Sucht Mods, optional gefiltert nach Loader/MC-Version/Umgebung/Kategorie.
 
     loader=None bzw. game_version=None lässt den jeweiligen Filter weg
-    (Treffer aller Loader bzw. aller MC-Versionen)."""
+    (Treffer aller Loader bzw. aller MC-Versionen). category ist ein
+    Modrinth-Kategoriename (z. B. "worldgen", "magic")."""
     if sort not in _SORT_INDEX:
         raise HTTPException(status_code=400,
                             detail=f"Sortierung muss einer von {', '.join(_SORT_INDEX)} sein")
@@ -171,7 +178,16 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
         raise HTTPException(status_code=400,
                             detail=f"Umgebung muss einer von "
                                    f"{', '.join(_ENVIRONMENT_FACETS)} sein")
+    if category and not _CATEGORY_RE.match(category):
+        raise HTTPException(status_code=400, detail="Ungültige Kategorie")
+    cache_key = ("modrinth", query, loader, game_version, limit, offset, sort,
+                 environment, category)
+    hit_cache = searchcache.cached(cache_key)
+    if hit_cache is not None:
+        return hit_cache
     facets = [["project_type:mod"]]
+    if category:
+        facets.append([f"categories:{category}"])
     if loader:
         facets.append([f"categories:{loader}"])
     if game_version:
@@ -187,9 +203,10 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
     if query:
         params["query"] = query
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{settings.modrinth_api}/search",
-                                    params=params, headers=_headers())
+        # Keep-Alive-Client: spart DNS/TLS-Aufbau bei jedem Seitenwechsel
+        client = searchcache.shared_client("modrinth-search", timeout=15.0)
+        resp = await client.get(f"{settings.modrinth_api}/search",
+                                params=params, headers=_headers())
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502,
                             detail=f"Modrinth nicht erreichbar ({exc.__class__.__name__})")
@@ -211,13 +228,15 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
         }
         for h in data.get("hits", [])
     ]
-    return {
+    result = {
         # Modrinth nennt das Feld total_hits; 'total' ist ein Fallback
         "total": int(data.get("total_hits") or data.get("total") or len(hits)),
         "hits": hits,
         "loader": loader,
         "game_version": game_version,
     }
+    searchcache.store(cache_key, result)
+    return result
 
 
 async def _get_json(client: httpx.AsyncClient, path: str, params: dict | None = None):
@@ -461,35 +480,56 @@ async def run_bundle_job(job: dict, dest_dir: Path, verify_url: bool = False) ->
     """Lädt alle Einträge eines Mod-Bundles (job['bundle'], Hauptdatei zuerst)
     nacheinander atomar in dest_dir. Fehler an Abhängigkeiten sammeln sich in
     job['dep_errors'] (Job bleibt 'done'); ein Fehler an der Hauptdatei bricht
-    den Job mit 'error' ab. Bereits vorhandene Dep-Dateien werden übersprungen."""
+    den Job mit 'error' ab. Bereits vorhandene Dep-Dateien werden übersprungen.
+
+    Mehrere vorgemerkte Mods (kind='item') laufen unabhängig voneinander:
+    Fehler landen in job['item_errors'], 'error' nur, wenn keine klappt.
+    entry['verify_url'] überschreibt verify_url je Datei (gemischte Quellen)."""
     from .security import safe_mods_path
     entries = job.get("bundle") or []
     dep_errors: list = []
+    item_errors: list = []
+    items_ok = 0
     try:
         for idx, entry in enumerate(entries):
             if job["status"] == "error":
                 break  # Hauptdatei fehlgeschlagen → Rest abbrechen
             kind = entry.get("kind") or "dep"
             dest = safe_mods_path(dest_dir, str(entry.get("filename") or ""))
-            if dest.exists() and kind != "main":
+            if dest.exists() and kind not in ("main", "item"):
                 entry["status"] = "übersprungen (existiert bereits)"
                 continue
             job["phase"] = f"Datei {idx + 1}/{len(entries)}: {entry.get('filename')}"
+            # Fehler einer Datei nicht an die nächste weiterreichen
+            job.pop("error", None)
             if await _download_one(job, str(entry.get("url") or ""), dest,
-                                   sha1=entry.get("sha1"), verify_url=verify_url,
+                                   sha1=entry.get("sha1"),
+                                   verify_url=bool(entry.get("verify_url", verify_url)),
                                    expected=int(entry.get("size") or 0)):
                 entry["status"] = "fertig"
+                if kind == "item":
+                    items_ok += 1
             elif kind == "main":
                 entry["status"] = "fehler"
                 job["status"] = "error"
+            elif kind == "item":
+                entry["status"] = "fehler"
+                item_errors.append(f"{entry.get('filename')}: {job.get('error')}")
             else:
                 entry["status"] = "fehler"
                 dep_errors.append(str(entry.get("filename")))
+        has_items = any((e.get("kind") == "item") for e in entries)
+        if has_items and not items_ok:
+            job["status"] = "error"
+            job["error"] = "; ".join(item_errors) or "Download fehlgeschlagen"
         if job["status"] != "error":
+            job.pop("error", None)
             job["status"] = "done"
             job["phase"] = "Fertig"
             if dep_errors:
                 job["dep_errors"] = dep_errors
+            if item_errors:
+                job["item_errors"] = item_errors
     finally:
         persist_job(job)
         try:  # Installiert-Cache auffrischen (Mod-Menge hat sich geändert)

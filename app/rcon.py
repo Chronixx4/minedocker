@@ -73,6 +73,48 @@ def command(host: str, port: int, password: str, cmd: str,
         raise RconError(str(exc) or exc.__class__.__name__) from exc
 
 
+def commands(host: str, port: int, password: str, cmds: list,
+             timeout: float = 5.0) -> list:
+    """Mehrere Kommandos über EINE Verbindung; Antworten in derselben
+    Reihenfolge. Lange Antworten schickt der Server in mehreren Paketen —
+    das Ende erkennen wir an einem Marker-Paket (Typ 0 → der Server antwortet
+    mit "Unknown request", in Reihenfolge nach der eigentlichen Antwort)."""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            _send(sock, 1, 3, password.encode("utf-8"))
+            req_id, _ptype, _payload = _read_packet(sock)
+            if req_id == -1:
+                raise RconError("RCON-Login fehlgeschlagen (Passwort falsch?)")
+            results = []
+            for index, cmd in enumerate(cmds):
+                cmd_id, end_id = 10 + 2 * index, 11 + 2 * index
+                _send(sock, cmd_id, 2, cmd.encode("utf-8"))
+                _send(sock, end_id, 0, b"")
+                buf = bytearray()
+                got = False
+                while True:
+                    try:
+                        rid, _ptype, payload = _read_packet(sock)
+                    except OSError:
+                        if got:  # Server ohne Marker-Antwort: was da ist, zählt
+                            break
+                        raise
+                    if rid == -1:
+                        raise RconError("RCON-Kommando abgelehnt")
+                    if rid == cmd_id:
+                        buf.extend(payload)
+                        got = True
+                    elif rid == end_id:
+                        break
+                results.append(buf.decode("utf-8", "replace").strip())
+            return results
+    except RconError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise RconError(str(exc) or exc.__class__.__name__) from exc
+
+
 def parse_list_output(text: str) -> dict | None:
     """Parst die Ausgabe von 'list': Spielerzahl, Slots und Namen."""
     match = _LIST_RE.search(text or "")
@@ -84,4 +126,4 @@ def parse_list_output(text: str) -> dict | None:
     return {"online": online, "max": maximum, "names": names}
 
 
-__all__ = ["RconError", "command", "parse_list_output"]
+__all__ = ["RconError", "command", "commands", "parse_list_output"]

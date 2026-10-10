@@ -364,6 +364,23 @@
         </div>
       </div>
       <div id="detail-error" class="err hidden"></div>
+      <!-- Absturz-Diagnose (Watchdog bzw. „Absturz analysieren“) -->
+      <div id="crash-box" class="crash-box hidden">
+        <div class="crash-head">
+          <strong id="crash-title">Letzter Absturz</strong>
+          <span id="crash-when" class="muted small"></span>
+          <span class="crash-actions">
+            <button id="crash-analyze" class="btn small-btn" title="Log und Crash-Report jetzt auswerten">Neu analysieren</button>
+            <button id="crash-dismiss" class="btn small-btn" title="Hinweis ausblenden">Ausblenden</button>
+          </span>
+        </div>
+        <ul id="crash-findings" class="crash-findings"></ul>
+        <p id="crash-suspects" class="muted small hidden"></p>
+        <details id="crash-log-wrap">
+          <summary class="muted small">Letzte Logzeilen</summary>
+          <pre id="crash-log" class="crash-log"></pre>
+        </details>
+      </div>
       <div id="ws-panels" class="ws-panels">
         <div class="ws-panel hidden" data-ws-panel="uebersicht">
           <!-- Live-Werte als XP-Leisten -->
@@ -514,6 +531,16 @@
             <div id="tags-error" class="err hidden"></div>
           </div>
 
+          <!-- Server endgültig löschen -->
+          <div class="upload-box admin-only">
+            <h3>Server löschen</h3>
+            <p class="muted small">Entfernt den Container und alle Daten dieser Instanz
+              (Welt, Mods, Configs). Backups im Backup-Ordner bleiben erhalten.</p>
+            <div class="row" style="margin-top: 0.4rem;">
+              <button id="inst-delete-btn" class="btn danger admin-only">Server löschen…</button>
+            </div>
+          </div>
+
           <!-- Installiertes Modpack: Update-Prüfung + Pack-Update -->
           <div class="upload-box">
             <h3>Installiertes Modpack
@@ -549,12 +576,8 @@
           </div>
           <div class="upload-box">
             <h3>Fertiges Modpack hochladen</h3>
-            <div class="upload-row">
-              <input id="pack-upload-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
-              <button id="pack-upload-btn" class="btn primary admin-only" disabled>Installieren</button>
-            </div>
-            <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Benötigte MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt (Server muss dafür gestoppt sein)</p>
-            <div id="upload-error" class="err hidden"></div>
+            <p class="muted small">CurseForge-Zip (Client-Export oder „Server Files“) oder .mrpack — Minecraft-Version, Loader und RAM werden automatisch erkannt.</p>
+            <button id="pack-upload-goto" type="button" class="btn primary admin-only">Modpack für diesen Server hochladen</button>
           </div>
           <div class="upload-box">
             <h3>Backups</h3>
@@ -562,9 +585,11 @@
               <button id="backup-create-btn" class="btn primary admin-only">Backup erstellen</button>
               <button id="backup-reload-btn" class="btn">Aktualisieren</button>
             </div>
-            <p class="muted small">Sichert Welt, Configs und Mods der Instanz im Volume. Für
-              konsistente Snapshots die Instanz vorher stoppen. Wiederherstellen
-              ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <p class="muted small">Sichert Welt, Configs und Mods der Instanz. Bei laufendem
+              Server wird vorher alles gespeichert. Vor Mod-Updates, Modpack-Installationen
+              und Versionswechseln entsteht automatisch ein Sicherheits-Backup.
+              Wiederherstellen ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
+            <p id="backup-location" class="muted small hidden"></p>
             <div id="backup-error" class="err hidden"></div>
             <ul id="backup-list" class="mod-list"></ul>
             <p id="backup-empty" class="muted hidden">Noch keine Backups vorhanden.</p>
@@ -709,6 +734,19 @@
             <p class="muted small">Ram-Limit der Instanz (Container + JVM-Heap).
               Änderungen greifen beim nächsten Start/Neustart; ein laufender Server
               behält sein aktuelles Limit bis dahin.</p>
+            <div class="row">
+              <label class="muted small" for="jvm-java">Java</label>
+              <select id="jvm-java">
+                <option value="auto">Automatisch (passend zur Minecraft-Version)</option>
+                <option value="8">Java 8</option>
+                <option value="11">Java 11</option>
+                <option value="17">Java 17</option>
+                <option value="21">Java 21</option>
+                <option value="25">Java 25</option>
+              </select>
+            </div>
+            <p class="muted small">Automatisch: bis 1.16 Java 8, 1.17 bis 1.20.4 Java 17,
+              ab 1.20.5 Java 21, neuere Versionen das aktuelle Java. Gilt für den nächsten (Neu-)Start.</p>
             <label class="check">
               <input type="checkbox" id="jvm-aikar">
               Aikar-Flags (optimierte GC-Einstellungen für Server)
@@ -721,6 +759,78 @@
               <button id="jvm-save" class="btn primary admin-only">Speichern</button>
             </div>
             <div id="jvm-error" class="err hidden"></div>
+          </div>
+
+          <!-- Versionswechsel (MC-Version/Loader) -->
+          <div class="upload-box">
+            <h3>Version wechseln <span class="muted small">(Server muss gestoppt sein)</span></h3>
+            <div class="form-grid">
+              <label>Minecraft-Version
+                <select id="ver-mc-version"></select>
+              </label>
+              <label>Server-Loader
+                <select id="ver-loader"></select>
+              </label>
+              <label>Loader-Version
+                <select id="ver-loader-version"></select>
+              </label>
+            </div>
+            <p class="muted small" id="ver-loader-note"></p>
+            <div class="row">
+              <button id="ver-check" class="btn">Mods prüfen</button>
+            </div>
+            <div id="ver-preview" class="hidden">
+              <p id="ver-summary" class="small"></p>
+              <ul id="ver-mods" class="mod-list compact"></ul>
+              <label class="check">
+                <input type="checkbox" id="ver-update-mods" checked>
+                Mods auf passende Versionen bringen
+              </label>
+              <label class="check">
+                <input type="checkbox" id="ver-disable-missing" checked>
+                Mods ohne passende Version deaktivieren
+              </label>
+              <label class="check hidden" id="ver-downgrade-wrap">
+                <input type="checkbox" id="ver-allow-downgrade">
+                Ich weiß, dass eine ältere Version die Welt beschädigen kann
+              </label>
+              <div class="row" style="margin-top: 0.5rem;">
+                <button id="ver-apply" class="btn primary admin-only">Version wechseln</button>
+              </div>
+            </div>
+            <div id="ver-progress" class="hidden">
+              <div class="metric-head"><span id="ver-phase" class="muted small"></span><span id="ver-pct" class="muted small"></span></div>
+              <div class="bar"><div id="ver-bar" class="bar-fill" style="width:0%"></div></div>
+            </div>
+            <p class="muted small">Vorher entsteht automatisch ein Backup inklusive Welt.
+              Die neue Server-Software lädt der nächste Start.</p>
+            <div id="ver-error" class="err hidden"></div>
+          </div>
+
+          <!-- Schlafmodus (itzg Autopause/Autostop) -->
+          <div class="upload-box">
+            <h3>Schlafmodus <span class="muted small">(wirksam beim nächsten Start)</span></h3>
+            <div class="row">
+              <label class="muted small" for="hib-mode">Wenn niemand spielt</label>
+              <select id="hib-mode">
+                <option value="off">Aus (Server läuft immer)</option>
+                <option value="pause">Pausieren (wacht beim Verbinden auf)</option>
+                <option value="stop">Stoppen (spart auch RAM)</option>
+              </select>
+              <span class="muted small">nach</span>
+              <input id="hib-minutes" type="number" min="5" max="1440" step="5"
+                     class="sched-num" value="30">
+              <span class="muted small">Min</span>
+            </div>
+            <p class="muted small"><strong>Pausieren</strong> friert den Server ein, sobald
+              die eingestellte Zeit niemand online war. Er spart dann CPU, behält aber
+              seinen RAM. Wer sich verbindet, weckt ihn automatisch (der erste Versuch kann
+              einen Moment dauern). <strong>Stoppen</strong> beendet den Server und gibt
+              auch den RAM frei; starten dann wieder hier im Dashboard.</p>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="hib-save" class="btn primary admin-only">Speichern</button>
+            </div>
+            <div id="hib-error" class="err hidden"></div>
           </div>
 
           <!-- Zeitplan (Auto-Start, geplanter Neustart, Backups, Update-Check) -->
@@ -776,6 +886,53 @@
             <div id="sched-error" class="err hidden"></div>
           </div>
 
+          <!-- Verbundene Spieler (Live-Tabelle per RCON) -->
+          <div class="upload-box plive-box">
+            <h3>Verbundene Spieler
+              <span class="plive-world muted small">
+                <span id="plive-time" title="Uhrzeit in der Welt">–</span>
+                <span id="plive-weather" title="Wetter (Stand des letzten Speicherns)">–</span>
+              </span>
+              <span id="plive-count" class="muted small"></span>
+              <button id="plive-reload" class="btn small-btn" title="Jetzt aktualisieren">Aktualisieren</button>
+            </h3>
+            <p id="plive-hint" class="muted small">Aktualisiert sich alle 10 Sekunden, solange
+              dieser Bereich offen ist und der Server läuft.</p>
+            <div class="plive-wrap">
+              <table id="plive-table" class="plive-table hidden">
+                <thead>
+                  <tr>
+                    <th>Spieler</th><th>Sitzung</th><th>Position</th><th>Bett</th>
+                    <th title="Leben">Leben</th><th title="Hunger">Hunger</th><th>Level</th>
+                  </tr>
+                </thead>
+                <tbody id="plive-body"></tbody>
+              </table>
+            </div>
+            <p id="plive-empty" class="muted small hidden">Niemand online.</p>
+            <div id="plive-error" class="err hidden"></div>
+          </div>
+
+          <!-- Spieler-Übersicht: alle Spieler, Profil, Statistiken -->
+          <div class="upload-box pl-box">
+            <h3>Spieler <span class="muted small">(alle, die je auf dem Server waren)</span>
+              <button id="pl-reload" class="btn small-btn" title="Liste neu laden">Aktualisieren</button>
+            </h3>
+            <div class="pl-layout">
+              <div class="pl-side">
+                <input id="pl-filter" class="search-input" type="search"
+                       placeholder="Name suchen…" autocomplete="off">
+                <div id="pl-chips" class="pl-chips" role="group" aria-label="Filter"></div>
+                <ul id="pl-list" class="pl-list"></ul>
+                <p id="pl-empty" class="muted small hidden">Noch keine Spieler gefunden.</p>
+              </div>
+              <div id="pl-profile" class="pl-profile">
+                <p class="muted small pl-placeholder">Spieler links auswählen.</p>
+              </div>
+            </div>
+            <div id="pl-error" class="err hidden"></div>
+          </div>
+
           <!-- Spieler verwalten (RCON: OP/Kick/Ban) -->
           <div class="upload-box">
             <h3>Spieler online <span class="muted small">(RCON)</span>
@@ -818,9 +975,62 @@
             <div id="console-error" class="err hidden"></div>
           </div>
 
+          <!-- Welt-Einstellungen (Spielregeln sofort, Allgemein beim Neustart) -->
+          <div class="upload-box wset-box">
+            <h3>Welt-Einstellungen
+              <button id="wset-reload" class="btn small-btn" title="Werte neu laden">Aktualisieren</button>
+            </h3>
+            <div class="wset-section">
+              <div class="wset-head">
+                <h4>Spielregeln</h4>
+                <span class="muted small">Sofort wirksam, kein Neustart nötig.</span>
+              </div>
+              <div id="wset-clock" class="wset-clock hidden">
+                <div class="wset-clock-now">
+                  <span class="muted small">Uhrzeit in der Welt</span>
+                  <strong id="wset-time">–</strong>
+                </div>
+                <div class="wset-clock-actions admin-only">
+                  <div class="seg" role="group" aria-label="Uhrzeit setzen">
+                    <button type="button" class="seg-btn" data-wset-time="morgen">Morgen</button>
+                    <button type="button" class="seg-btn" data-wset-time="mittag">Mittag</button>
+                    <button type="button" class="seg-btn" data-wset-time="abend">Abend</button>
+                    <button type="button" class="seg-btn" data-wset-time="nacht">Nacht</button>
+                  </div>
+                  <div class="seg" role="group" aria-label="Wetter setzen">
+                    <button type="button" class="seg-btn" data-wset-weather="klar">Klar</button>
+                    <button type="button" class="seg-btn" data-wset-weather="regen">Regen</button>
+                    <button type="button" class="seg-btn" data-wset-weather="gewitter">Gewitter</button>
+                  </div>
+                </div>
+              </div>
+              <div id="wset-rules" class="wset-list"></div>
+              <p id="wset-rules-off" class="muted small hidden">Server starten, um die Spielregeln
+                zu sehen und zu ändern.</p>
+            </div>
+            <div class="wset-section">
+              <div class="wset-head">
+                <h4>Allgemein</h4>
+                <span class="muted small">Wirksam beim nächsten (Neu-)Start.</span>
+                <label class="check wset-adv" for="wset-advanced">
+                  <input type="checkbox" id="wset-advanced"> Erweitert
+                </label>
+              </div>
+              <div id="wset-general" class="wset-list"></div>
+              <div class="row admin-only" style="margin-top: 0.6rem;">
+                <button id="wset-save" class="btn primary" disabled>Speichern</button>
+                <span id="wset-restart-row" class="row hidden">
+                  <span class="muted small">Neustart nötig, damit es wirkt.</span>
+                  <button id="wset-restart" class="btn">Jetzt neu starten</button>
+                </span>
+              </div>
+            </div>
+            <div id="wset-error" class="err hidden"></div>
+          </div>
+
           <!-- Gamerule-Quick-Editor (nur bei laufender Instanz) -->
           <div class="upload-box">
-            <h3>Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
+            <h3>Alle Gamerules <span class="muted small">(Vanilla 1.21.x, nur laufend)</span>
               <button id="gr-reload" class="btn small-btn" title="Aktuelle Werte laden">Laden</button>
             </h3>
             <p class="muted small" id="gr-hint">Werte werden sofort per RCON gesetzt
@@ -897,6 +1107,14 @@
                     title="Mod-Liste ein-/ausklappen">Einklappen</button>
           </div>
           <p class="mods-summary muted small" id="mods-summary"></p>
+          <div id="mods-restart-note" class="mods-note hidden" role="status">
+            <span>Server läuft · Änderungen an den Mods greifen erst nach einem Neustart.</span>
+            <button id="mods-restart-btn" class="btn small-btn admin-only">Jetzt neu starten</button>
+          </div>
+          <div id="mods-problems" class="mods-note is-err hidden" role="alert">
+            <b id="mods-problems-title"></b>
+            <ul id="mods-problems-list"></ul>
+          </div>
           <div class="row mods-update-row">
             <button id="mods-update-check" class="btn small-btn admin-only">Updates prüfen</button>
             <button id="mods-update-all" class="btn primary small-btn hidden admin-only"
@@ -910,6 +1128,13 @@
           <div id="mods-update-error" class="err hidden"></div>
           <ul id="detail-mods" class="mod-list compact"></ul>
           <p id="detail-mods-empty" class="empty muted hidden">Keine Mods/Modpacks installiert.</p>
+          <details id="mods-trash" class="mods-trash hidden">
+            <summary>Papierkorb <span id="mods-trash-count" class="muted"></span></summary>
+            <p class="muted small">Gelöschte und per Update ersetzte Mods bleiben
+              <span id="mods-trash-days">7</span> Tage wiederherstellbar.</p>
+            <ul id="mods-trash-list" class="mod-list compact"></ul>
+            <button id="mods-trash-empty" class="btn danger small-btn admin-only">Papierkorb leeren</button>
+          </details>
         </div>
         <div class="ws-logcol">
           <h3>Live-Log
@@ -923,17 +1148,19 @@
 
   <!-- Mods suchen -->
   <section id="tab-search" class="panel">
-    <div class="card">
+    <div class="card" id="search-card">
       <div class="search-target-row">
         <label for="search-source">Quelle</label>
         <select id="search-source">
           <option value="modrinth">Modrinth</option>
           <option value="curseforge">CurseForge</option>
         </select>
-        <label for="search-target-select">Installieren in Instanz</label>
-        <select id="search-target-select">
-          <option value="">Instanz wählen…</option>
-        </select>
+        <span class="search-target-pick">
+          <label for="search-target-select">Installieren in Instanz</label>
+          <select id="search-target-select">
+            <option value="">Instanz wählen…</option>
+          </select>
+        </span>
       </div>
       <div class="search-target-row search-filters">
         <label for="search-filter-sort">Sortierung</label>
@@ -960,20 +1187,24 @@
         <label for="search-filter-environment">Server/Client</label>
         <select id="search-filter-environment" title="Nur bei Modrinth verfügbar">
           <option value="">Alle Mods</option>
+          <option value="server_ok" selected>Läuft auf dem Server</option>
           <option value="server_required">Server: nötig</option>
           <option value="server">Server: nötig/optional</option>
           <option value="client_required">Client: nötig</option>
           <option value="client">Client: nötig/optional</option>
         </select>
+        <label for="search-filter-category">Kategorie</label>
+        <select id="search-filter-category" title="Was die Mod kann (Kategorien des Anbieters)">
+          <option value="">Alle Kategorien</option>
+        </select>
       </div>
       <input id="search-input" class="search-input" type="search"
              placeholder="Mods suchen (z. B. Lithium, Sodium, JEI …)" autocomplete="off">
       <p class="muted small" id="search-target"></p>
-      <p class="muted small">Bereits installierte Mods sind grün hervorgehoben
-        (per Datei-Hash erkannt — auch wenn der Dateiname abweicht) und lassen sich
-        nicht doppelt installieren. Pflicht-Abhängigkeiten werden automatisch
-        mitinstalliert (Modrinth aus den Versions-Metadaten, CurseForge best
-        effort) und während der Installation angezeigt.</p>
+      <p class="muted small">Bereits installierte Mods sind grün hervorgehoben.
+        „Details“ zeigt Versionen, Changelog und welche Abhängigkeiten mitkommen.
+        Mit dem Häkchen merkst du mehrere Mods vor und installierst sie zusammen;
+        gemeinsame Abhängigkeiten werden dabei nur einmal geladen.</p>
       <div id="search-loading" class="loading hidden"><span class="spinner"></span> Suche…</div>
       <div id="search-error" class="err hidden"></div>
       <div id="search-results" class="results"></div>
@@ -981,6 +1212,19 @@
         <button id="search-prev" class="btn" disabled>Zurück</button>
         <span id="search-page" class="muted small"></span>
         <button id="search-next" class="btn" disabled>Weiter</button>
+      </div>
+      <div id="mod-cart" class="mod-cart hidden" role="region" aria-label="Vorgemerkte Mods">
+        <div class="mod-cart-info">
+          <b id="mod-cart-title"></b>
+          <span id="mod-cart-detail" class="muted small"></span>
+        </div>
+        <div class="row">
+          <button id="mod-cart-clear" type="button" class="btn small-btn">Leeren</button>
+          <button id="mod-cart-install" type="button" class="btn primary small-btn admin-only">Alle installieren</button>
+        </div>
+        <div id="mod-cart-progress" class="mod-cart-progress hidden">
+          <div class="bar"><div id="mod-cart-bar" class="bar-fill" style="width:0%"></div></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1062,12 +1306,8 @@
       <div id="mp-results" class="results"></div>
       <div class="upload-box">
         <h3>Fertiges Modpack hochladen</h3>
-        <div class="upload-row">
-          <input id="mp-upload-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
-          <button id="mp-upload-btn" class="btn primary admin-only" disabled>Installieren</button>
-        </div>
-          <p class="muted small">Unterstützt: .mrpack (Modrinth-Export) und .zip (CurseForge-Export mit manifest.json) · Mit Ziel-Instanz: MC-Version/Loader werden automatisch erkannt und die Instanz passend umgestellt · Ohne Ziel: neuer Server direkt aus dem Pack</p>
-          <div id="mp-upload-error" class="err hidden"></div>
+        <p class="muted small">CurseForge-Zip (Client-Export oder „Server Files“) oder .mrpack — Minecraft-Version, Loader und RAM werden automatisch erkannt.</p>
+        <button id="mp-upload-goto" type="button" class="btn primary admin-only">Zum Modpack-Upload</button>
       </div>
     </div>
   </section>
@@ -1077,59 +1317,72 @@
     <div class="card">
       <h2>Modpack hochladen</h2>
       <p class="muted small">
-        Unterstützt: <strong>.mrpack</strong> (Modrinth-Export) und
-        <strong>.zip</strong> (CurseForge-Export mit <code>manifest.json</code> —
-        auch Server-Pack-Zips). CurseForge-Mods werden ohne API-Key über den
-        öffentlichen Website-Redirect nachgeladen; bekannte Client-only-Mods
-        (Sodium/Iris/Dark Mode Everywhere/…) werden automatisch übersprungen.
-        Details: SERVER-SETUP.md §2.
+        Einfach die Zip von CurseForge ablegen — am besten die <strong>„Server Files“</strong>
+        des Packs (CurseForge-Projektseite › Files › Additional Files), sonst den normalen
+        Client-Export (mit <code>manifest.json</code>) — oder eine <strong>.mrpack</strong> von
+        Modrinth. Minecraft-Version, Loader, Java und RAM werden automatisch erkannt;
+        vor der Installation siehst du, was erkannt wurde. Details: SERVER-SETUP.md §2.
       </p>
-      <div class="upload-row">
-        <input id="up-file" class="file-input admin-only" type="file" accept=".mrpack,.zip">
-        <button id="up-install-btn" class="btn primary admin-only" disabled>Installieren</button>
+      <label id="up-drop" class="dropzone admin-only" for="up-file">
+        <input id="up-file" class="file-input" type="file" accept=".mrpack,.zip">
+        <span class="dropzone-title">Modpack hierher ziehen</span>
+        <span class="muted small">oder klicken zum Auswählen · .zip oder .mrpack, max. 4 GiB</span>
+      </label>
+      <div id="up-analyze" class="hidden">
+        <div class="metric-head"><span id="up-analyze-phase" class="muted small"></span><span id="up-analyze-pct" class="muted small"></span></div>
+        <div class="bar"><div id="up-analyze-bar" class="bar-fill" style="width:0%"></div></div>
       </div>
-      <p id="up-file-info" class="muted small hidden"></p>
-      <div class="form-grid">
-        <label>Installationsziel
-          <select id="up-target-select">
-            <option value="">Neuen Server aus dem Pack erstellen</option>
-          </select>
-          <span class="muted small">Instanz wählen = Modpack in dieser Instanz ersetzen/aktualisieren · leer = neuer Server direkt aus dem Pack</span>
-        </label>
-        <div id="up-existing-opts">
-          <label class="check">
-            <input type="checkbox" id="up-auto-version" checked>
-            MC-Version/Loader automatisch anpassen (sonst Abbruch bei Abweichung)
-          </label>
-          <label class="check">
-            <input type="checkbox" id="up-force">
-            Bestehendes Modpack ohne Nachfrage überschreiben
-          </label>
-        </div>
-        <div id="up-new-opts" class="hidden">
-          <label>Servername
-            <input id="up-name" type="text" maxlength="64" autocomplete="off"
-                   placeholder="wird aus dem Dateinamen abgeleitet">
-          </label>
-          <label>RAM
-            <select id="up-memory">
-              <option value="">Standard (2G)</option>
-              <option value="1G">1G</option>
-              <option value="2G">2G</option>
-              <option value="4G">4G</option>
-              <option value="6G">6G</option>
-              <option value="8G">8G</option>
-              <option value="12G">12G</option>
-              <option value="16G">16G</option>
+      <div id="up-preview" class="pack-preview hidden">
+        <h3 id="up-pv-title"></h3>
+        <dl id="up-pv-facts" class="kv"></dl>
+        <ul id="up-pv-warnings" class="pv-warnings small hidden"></ul>
+        <div id="up-pv-errors" class="err hidden"></div>
+        <div class="form-grid">
+          <label>Installationsziel
+            <select id="up-target-select">
+              <option value="">Neuen Server aus dem Pack erstellen</option>
             </select>
-            <span class="muted small">Richtwerte: leichte Modpacks 4–6G · mittlere 6–10G ·
-              schwere (ATM, GT:NH) 10–16G+
-            </span>
+            <span class="muted small">Instanz wählen = Modpack in dieser Instanz ersetzen/aktualisieren · leer = neuer Server direkt aus dem Pack</span>
           </label>
-          <label class="check">
-            <input type="checkbox" id="up-eula">
-            Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
-          </label>
+          <div id="up-existing-opts">
+            <label class="check">
+              <input type="checkbox" id="up-auto-version" checked>
+              MC-Version/Loader automatisch anpassen (sonst Abbruch bei Abweichung)
+            </label>
+            <label class="check">
+              <input type="checkbox" id="up-force">
+              Bestehendes Modpack ohne Nachfrage überschreiben
+            </label>
+          </div>
+          <div id="up-new-opts" class="hidden">
+            <label>Servername
+              <input id="up-name" type="text" maxlength="64" autocomplete="off"
+                     placeholder="wird aus dem Pack abgeleitet">
+            </label>
+            <label>RAM
+              <select id="up-memory">
+                <option value="">Standard</option>
+                <option value="1G">1G</option>
+                <option value="2G">2G</option>
+                <option value="4G">4G</option>
+                <option value="6G">6G</option>
+                <option value="8G">8G</option>
+                <option value="12G">12G</option>
+                <option value="16G">16G</option>
+              </select>
+              <span id="up-memory-hint" class="muted small">Richtwerte: leichte Modpacks 4–6G · mittlere 6–10G ·
+                schwere (ATM, GT:NH) 10–16G+
+              </span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="up-eula">
+              Ich akzeptiere die <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft-EULA</a>
+            </label>
+          </div>
+        </div>
+        <div class="upload-row">
+          <button id="up-install-btn" class="btn primary admin-only" disabled>Installieren</button>
+          <button id="up-reset-btn" type="button" class="btn">Andere Datei</button>
         </div>
       </div>
       <div id="up-progress" class="hidden">
@@ -1144,6 +1397,7 @@
         <div id="up-failed-box" class="err hidden">
           <p id="up-failed-text" class="small"></p>
           <ul id="up-failed-list" class="small"></ul>
+          <button id="up-retry-btn" type="button" class="btn admin-only hidden">Nur fehlende Mods erneut laden</button>
         </div>
       </div>
     </div>
@@ -1333,6 +1587,150 @@
   </div>
 </dialog>
 
+<!-- Modbrowser: Details eines Projekts mit Versionswahl -->
+<dialog id="mod-detail" class="modal mod-detail" aria-labelledby="md-title">
+  <div class="modal-body">
+    <div class="modal-head">
+      <div class="md-head">
+        <div id="md-icon" class="result-icon"></div>
+        <div>
+          <h2 id="md-title"></h2>
+          <a id="md-link" class="muted small" target="_blank" rel="noopener"></a>
+        </div>
+      </div>
+      <button id="md-close" type="button" class="btn">Schließen</button>
+    </div>
+    <p id="md-desc" class="muted"></p>
+    <p id="md-meta" class="muted small"></p>
+    <div id="md-loading" class="loading hidden"><span class="spinner"></span> Lade Versionen…</div>
+    <div id="md-error" class="err hidden"></div>
+    <div class="md-section">
+      <div class="md-section-head">
+        <h3 id="md-versions-title">Versionen</h3>
+        <label class="small muted"><input id="md-all-versions" type="checkbox"> Alle Versionen zeigen</label>
+      </div>
+      <ul id="md-versions" class="md-versions" role="listbox" aria-labelledby="md-versions-title"></ul>
+      <p id="md-versions-empty" class="muted small hidden"></p>
+    </div>
+    <div class="md-section">
+      <h3>Änderungen</h3>
+      <pre id="md-changelog" class="md-changelog">–</pre>
+    </div>
+    <div class="md-section">
+      <h3>Wird mitinstalliert</h3>
+      <div id="md-plan" class="muted small">–</div>
+    </div>
+    <div class="md-actions">
+      <button id="md-cart" type="button" class="btn admin-only">Vormerken</button>
+      <button id="md-install" type="button" class="btn primary admin-only">Installieren</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Rückfragen im Dashboard-Stil (statt window.confirm) -->
+<!-- Spieler-Inventar (RCON: data get entity / item replace / give) -->
+<dialog id="inv-dialog" class="modal inv-modal" aria-labelledby="inv-title">
+  <div class="modal-body">
+    <div class="modal-head inv-head">
+      <img id="inv-face" class="inv-face" alt="">
+      <h2 id="inv-title">Inventar</h2>
+      <span class="badge on"><span class="dot"></span>online</span>
+      <span class="inv-spacer"></span>
+      <span id="inv-stamp" class="muted small"></span>
+      <button id="inv-reload" type="button" class="btn">Aktualisieren</button>
+      <button id="inv-close" type="button" class="btn">Schließen</button>
+    </div>
+    <div id="inv-meta" class="inv-meta"></div>
+    <div class="inv-tabs" role="tablist">
+      <button type="button" class="inv-tab active" data-inv-tab="main" role="tab">Inventar</button>
+      <button type="button" class="inv-tab" data-inv-tab="ender" role="tab">Endertruhe</button>
+      <button type="button" class="inv-tab" data-inv-tab="mods" role="tab">Mod-Slots <span class="muted small">(nur ansehen)</span></button>
+    </div>
+    <div id="inv-error" class="err hidden"></div>
+    <div class="inv-cols">
+      <div>
+        <div class="inv-mc">
+          <div id="inv-pane-main">
+            <div class="inv-top">
+              <div class="inv-armor" id="inv-armor"></div>
+              <div class="inv-stats" id="inv-stats"></div>
+              <div class="inv-off">
+                <div class="inv-lbl">Offhand</div>
+                <div id="inv-offhand"></div>
+              </div>
+            </div>
+            <div class="inv-lbl">Inventar</div>
+            <div class="inv-grid" id="inv-main"></div>
+            <div class="inv-gap"></div>
+            <div class="inv-grid" id="inv-hotbar"></div>
+          </div>
+          <div id="inv-pane-ender" class="hidden">
+            <div class="inv-lbl">Endertruhe</div>
+            <div class="inv-grid" id="inv-ender"></div>
+          </div>
+          <div id="inv-pane-mods" class="hidden">
+            <div id="inv-mods"></div>
+            <p id="inv-mods-empty" class="inv-lbl hidden">Keine Mod-Slots gefunden (z. B. Curios, Trinkets).</p>
+          </div>
+        </div>
+        <p class="muted small inv-hint admin-only">Ziehen verschiebt ein Item · Klick zeigt Details · Rechtsklick leert den Slot</p>
+      </div>
+      <div class="inv-side">
+        <div class="inv-card" id="inv-detail">
+          <p class="muted small" id="inv-detail-empty">Slot anklicken, um Details zu sehen.</p>
+          <div id="inv-detail-body" class="hidden">
+            <div class="inv-det-head">
+              <div class="inv-slot" id="inv-det-slot"></div>
+              <div class="inv-det-title">
+                <h3 id="inv-det-name"></h3>
+                <div class="inv-mono" id="inv-det-id"></div>
+              </div>
+            </div>
+            <dl class="inv-kv" id="inv-det-kv"></dl>
+            <div class="inv-acts admin-only" id="inv-det-acts">
+              <label class="muted small" for="inv-det-count">Menge</label>
+              <input id="inv-det-count" class="inv-qty" type="number" min="1" max="99">
+              <button id="inv-det-apply" type="button" class="btn">Übernehmen</button>
+              <select id="inv-det-target" class="cfg-input" title="Ziel-Slot"></select>
+              <button id="inv-det-move" type="button" class="btn">Verschieben</button>
+              <button id="inv-det-clear" type="button" class="btn danger">Löschen</button>
+            </div>
+            <p class="muted small hidden" id="inv-det-note"></p>
+          </div>
+        </div>
+        <div class="inv-card admin-only" id="inv-give">
+          <h3>Item geben</h3>
+          <div class="inv-acts inv-give-row">
+            <input id="inv-give-q" class="search-input" type="text" placeholder="Name oder ID, z. B. osmium" maxlength="64" autocomplete="off" spellcheck="false">
+            <input id="inv-give-count" class="inv-qty" type="number" min="1" max="6400" value="1">
+            <button id="inv-give-btn" type="button" class="btn primary">Geben</button>
+          </div>
+          <ul id="inv-give-results" class="inv-results"></ul>
+        </div>
+        <p class="inv-warn admin-only">Änderungen gehen sofort an den Spieler. Vor jedem Schreiben prüft das Dashboard,
+          ob der Slot noch gleich ist. Jede Änderung steht im Dashboard-Log.</p>
+        <p id="inv-readonly" class="inv-warn hidden"></p>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="confirm-dialog" class="modal confirm-dialog" aria-labelledby="cd-title">
+  <form method="dialog" class="modal-body">
+    <h2 id="cd-title"></h2>
+    <p id="cd-message"></p>
+    <ul id="cd-list" class="cd-list hidden"></ul>
+    <label id="cd-type-wrap" class="lbl-input hidden" for="cd-type">
+      <span id="cd-type-label"></span>
+      <input id="cd-type" type="text" autocomplete="off" spellcheck="false">
+    </label>
+    <div class="md-actions">
+      <button type="submit" value="cancel" class="btn" id="cd-cancel">Abbrechen</button>
+      <button type="submit" value="ok" class="btn primary" id="cd-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
 <div id="toasts" aria-live="polite"></div>
 
 <template id="tpl-result">
@@ -1349,24 +1747,31 @@
         <div class="dl-deps muted small"></div>
       </div>
     </div>
-    <button class="btn primary install admin-only">Installieren</button>
+    <div class="result-actions">
+      <button class="btn primary install admin-only">Installieren</button>
+      <button class="btn small-btn details" type="button">Details</button>
+      <label class="result-pick admin-only small" title="Zum gemeinsamen Installieren vormerken">
+        <input type="checkbox" class="pick"> Vormerken
+      </label>
+    </div>
   </article>
 </template>
 
 <template id="tpl-mod-row">
   <li class="mod-row">
     <span class="mod-ico" aria-hidden="true">
-      <img class="mod-icon hidden" alt="" loading="lazy" decoding="async">
+      <img class="mod-icon" alt="" loading="lazy" decoding="async">
       <span class="mod-letter"></span>
     </span>
     <div class="mod-info">
       <span class="mod-name"></span>
+      <span class="mod-tags"></span>
       <span class="mod-meta muted small"></span>
     </div>
     <div class="row">
       <button class="btn primary small-btn update hidden admin-only" title="Auf neueste Version aktualisieren">Update</button>
       <button class="btn toggle admin-only" title="Mod aktivieren/deaktivieren (wird beim Serverstart berücksichtigt)"></button>
-      <button class="btn danger delete admin-only">Löschen</button>
+      <button class="btn danger delete admin-only" title="In den Papierkorb verschieben">Löschen</button>
     </div>
   </li>
 </template>

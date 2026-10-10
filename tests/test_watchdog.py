@@ -31,9 +31,13 @@ def _ruhe():
         if entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)
     watchdog._expected_stops.clear()
+    watchdog._crash_times.clear()
+    watchdog._halted.clear()
     watchdog.STOP.clear()
     yield
     watchdog._expected_stops.clear()
+    watchdog._crash_times.clear()
+    watchdog._halted.clear()
     watchdog.STOP.clear()
 
 

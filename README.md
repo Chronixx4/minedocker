@@ -32,7 +32,8 @@ Dashboard.
 - **Mods & Modpacks** — Modrinth- und CurseForge-Suche je Instanz
   (Pflicht-Abhängigkeiten werden mitinstalliert), Mod an/aus-Toggle,
   Update-Check mit Versions-Chips und Mod-Icons, Modpacks als `.mrpack`/
-  CurseForge-`.zip` hochladen oder direkt aus der Suche installieren — auch als
+  CurseForge-`.zip` (Client-Export oder „Server Files“, per Drag & Drop mit
+  Vorschau und RAM-Vorschlag) hochladen oder direkt aus der Suche installieren — auch als
   **neuer Server aus einem Modpack** (Server-Pack bevorzugt, MC-Version/Loader
   automatisch aus dem Pack)
 - **Server-Update per Datei** — Tab „Update“ je Server: neue Datei ablegen
@@ -49,6 +50,11 @@ Dashboard.
 - **RCON-Konsole & Spielerverwaltung** — freie Befehle (Whitelist- oder
   Free-Modus), Whitelist-Editor mit UUID-Auflösung, op/kick/ban direkt aus der
   Übersicht
+- **Spieler-Inventar** — Inventar, Rüstung, Offhand, Endertruhe und Mod-Slots
+  (Curios/Trinkets, nur ansehen) von Online-Spielern; Admins können Mengen
+  ändern, Items verschieben/löschen und Items geben (Vanilla, Paper, Fabric,
+  Forge, NeoForge; Bearbeiten ab MC 1.17). Icons/Namen aus den Mod-JARs,
+  Vanilla-Icons einmalig aus der Mojang-Client-JAR
 - **Gamerule-Quick-Editor** — kuratierte Vanilla-1.21.x-Gamerules mit Toggles
   und Zahlenfeldern, sofort per RCON gesetzt (nur bei laufender Instanz)
 - **Datapacks** — hochladen (nur gestoppt), aktivieren/deaktivieren (bei
@@ -84,7 +90,7 @@ Dashboard.
 |---|---|
 | 8080 | Dashboard (LAN/VPN — **nie** direkt ins Internet!) |
 | 25570+ | Minecraft-Spielports der Instanzen (auf dem Host veröffentlicht) |
-| port+1000 | RCON-Endpunkt der Instanz (vom Dashboard genutzt) |
+| port+1000 | RCON-Endpunkt der Instanz (nur `127.0.0.1`, vom Dashboard genutzt) |
 
 ## Schnellstart (Docker Compose — Server/NAS)
 
@@ -139,6 +145,7 @@ ZimaOS-Import-Dialogs):
 | `INSTANCES_MEMORY` | `2G` | Default-Heap pro Instanz |
 | `INSTANCES_HOST_DIR` | *(auto)* | Host-Pfad der Instanzen (leer = automatische Erkennung) |
 | `ALERT_WEBHOOK_URL` / `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `ALERT_EVENTS` | *(leer)* | Crash-Watchdog-Alerts; leer = aus |
+| `ITEM_ICONS_VANILLA` | `true` | Inventar-Ansicht: Vanilla-Item-Icons einmal pro MC-Version aus der Mojang-Client-JAR laden (Cache unter `INSTANCES_DIR/.itemcache`); `false` = nur Mod-Icons |
 | `TZ` | UTC | Container-Lokalzeit für Scheduler-Zeiten (z. B. `Europe/Berlin`) |
 
 ## Login & Rollen

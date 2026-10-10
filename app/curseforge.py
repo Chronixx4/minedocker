@@ -12,6 +12,7 @@ import re
 import httpx
 from fastapi import HTTPException
 
+from . import searchcache
 from .config import settings
 from .security import validate_curseforge_download_url
 
@@ -126,11 +127,15 @@ _SORT_FIELDS = {"relevance": 2, "downloads": 6, "updated": 3, "newest": 9}
 
 
 async def search_mods(query: str, loader: str | None, game_version: str | None,
-                      offset: int = 0, sort: str = "relevance") -> dict:
-    """Sucht Mods (classId=6), optional gefiltert nach MC-Version und ModLoader-Typ.
+                      offset: int = 0, sort: str = "relevance",
+                      category: str | None = None) -> dict:
+    """Sucht Mods (classId=6), optional gefiltert nach MC-Version, ModLoader-Typ
+    und Kategorie (numerische CF-Kategorie-ID).
 
     loader=None bzw. game_version=None lässt den jeweiligen Filter weg."""
     _require_key()
+    if category and not _NUMERIC_RE.match(category):
+        raise HTTPException(status_code=400, detail="Ungültige Kategorie")
     if sort not in _SORT_FIELDS:
         raise HTTPException(status_code=400,
                             detail=f"Sortierung muss einer von {', '.join(_SORT_FIELDS)} sein")
@@ -153,17 +158,26 @@ async def search_mods(query: str, loader: str | None, game_version: str | None,
         params["gameVersion"] = game_version
     if (query or "").strip():
         params["searchFilter"] = query.strip()[:100]
-    async with _new_client() as client:
-        data = await _get_json(client, "/mods/search", params=params)
+    if category:
+        params["categoryId"] = category
+    cache_key = ("curseforge", tuple(sorted(params.items())))
+    cached = searchcache.cached(cache_key)
+    if cached is not None:
+        return cached
+    # Keep-Alive-Client: spart DNS/TLS-Aufbau bei jedem Seitenwechsel
+    client = searchcache.shared_client("curseforge-search", factory=_new_client)
+    data = await _get_json(client, "/mods/search", params=params)
     hits = [_hit(m) for m in (data.get("data") or []) if isinstance(m, dict)]
     pagination = data.get("pagination") or {}
-    return {
+    result = {
         "total": int(pagination.get("totalCount") or len(hits)),
         "hits": hits,
         "loader": loader,
         "game_version": game_version,
         "source": "curseforge",
     }
+    searchcache.store(cache_key, result)
+    return result
 
 
 async def search_modpacks(instance: dict, query: str, offset: int = 0) -> dict:

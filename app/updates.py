@@ -4,7 +4,8 @@ suchen — ohne die Mods vorher registriert zu haben.
 
 Ablauf:
 - Jede .jar/.jar.disabled im mods-Ordner wird einmal eingelesen; SHA1
-  (Modrinth) und CurseForge-Murmur2 werden daraus berechnet.
+  (Modrinth) und — nur mit CF_API_KEY — der CurseForge-Fingerprint
+  (Murmur2 ohne Whitespace-Bytes) werden daraus berechnet und gecacht.
 - Modrinth: /version_file/{sha1}?multiple=true identifiziert die installierte
   Version; /project/{id}/version liefert die neueste kompatible Version.
 - CurseForge: /mods/fingerprints (batchweise) identifiziert installierte
@@ -12,9 +13,11 @@ Ablauf:
 - 'Alle aktualisieren' lädt je Mod die neueste kompatible Datei atomar
   (.part → rename), entfernt die alte Datei und behält den deaktiviert-Zustand.
 """
+import array
 import asyncio
 import hashlib
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -26,7 +29,7 @@ from .config import settings
 
 _MAX_CHECKED = 300       # harte Obergrenze geprüfter Dateien pro Lauf
 _CF_CHUNK = 50           # Fingerprints pro CurseForge-Batch-Request
-_MR_CHUNK = 40           # SHA1-Hashes pro Modrinth-Batch-Lookup
+_MR_CHUNK = 100          # SHA1-Hashes pro Modrinth-Batch-Lookup
 _LOOKUP_CONCURRENCY = 8  # parallele Anbieter-Abfragen im Check
 _JOB_CONCURRENCY = 4     # parallele Downloads im Update-Job
 _INSTALLED_TTL = 60.0    # Cache-Dauer für installierte Projekte (Such-Marker)
@@ -49,15 +52,18 @@ def murmur2_cf(data: bytes) -> int:
     length = len(data)
     m = 0x5BD1E995
     h = (1 ^ length) & 0xFFFFFFFF
-    i = 0
-    for _ in range(length // 4):
-        k = (data[i] & 0xFF) | ((data[i + 1] & 0xFF) << 8) \
-            | ((data[i + 2] & 0xFF) << 16) | ((data[i + 3] & 0xFF) << 24)
+    # 4-Byte-Blöcke als Little-Endian-uint32 in C zerlegen statt Byte für
+    # Byte in Python zusammenzusetzen (deutlich schneller; reines Python
+    # bleibt es trotzdem → nur aufrufen, wenn CurseForge wirklich nötig ist)
+    words = array.array("I")
+    words.frombytes(data[:length & ~3])
+    if sys.byteorder != "little":
+        words.byteswap()
+    for k in words:
         k = (k * m) & 0xFFFFFFFF
         k ^= k >> 24  # Java 'k >>> r' (logisch, k ist 32-Bit-maskiert)
         k = (k * m) & 0xFFFFFFFF
         h = ((h * m) & 0xFFFFFFFF) ^ k
-        i += 4
     tail = length & 3
     if tail >= 3:
         h ^= (data[(length & ~3) + 2] & 0xFF) << 16
@@ -72,13 +78,31 @@ def murmur2_cf(data: bytes) -> int:
     return h - 0x100000000 if h >= 0x80000000 else h
 
 
-def hashes_for(path: Path) -> tuple:
-    """(sha1, murmur2) einer Datei in einem Durchlauf; OSError → (None, None)."""
+# CurseForge entfernt vor dem Hashen Tab, LF, CR und Leerzeichen
+_CF_WHITESPACE = b"\t\n\r "
+
+
+def cf_fingerprint(data: bytes) -> int:
+    """CurseForge-Datei-Fingerprint, wie ihn die API (/fingerprints) erwartet:
+    Murmur2 (seed=1) über die Datei OHNE Whitespace-Bytes (9, 10, 13, 32),
+    als vorzeichenloser 32-Bit-Wert."""
+    return murmur2_cf(data.translate(None, _CF_WHITESPACE)) & 0xFFFFFFFF
+
+
+def hashes_for(path: Path, with_murmur: bool = True) -> tuple:
+    """(sha1, cf_fingerprint) einer Datei; OSError → (None, None).
+
+    with_murmur=False berechnet nur SHA1 (in C, gibt den GIL frei) — der
+    CurseForge-Fingerprint läuft in reinem Python und hielt bei großen
+    Modpacks minutenlang den GIL: das ganze Dashboard stand so lange still."""
     try:
+        if not with_murmur:
+            with path.open("rb") as fh:
+                return hashlib.file_digest(fh, "sha1").hexdigest(), None
         data = path.read_bytes()
     except OSError:
         return None, None
-    return hashlib.sha1(data).hexdigest(), murmur2_cf(data)
+    return hashlib.sha1(data).hexdigest(), cf_fingerprint(data)
 
 
 # Hash-Cache je Datei: str(Pfad) → (mtime_ns, Größe, sha1, murmur2).
@@ -88,13 +112,13 @@ def hashes_for(path: Path) -> tuple:
 _HASH_CACHE: dict = {}
 
 
-def _hash_files(files) -> tuple:
+def _hash_files(files, with_murmur: bool = False) -> tuple:
     """Hasht alle Dateien (in einem Worker-Thread aufrufen!); Rückgabe
     (sha1s, murms). Unveränderte Dateien kommen aus _HASH_CACHE."""
     sha1s: list = []
     murms: list = []
     for path, _filename, _enabled in files:
-        sha1, murmur = _hash_one(path)
+        sha1, murmur = _hash_one(path, with_murmur)
         if sha1:
             sha1s.append(sha1)
         if murmur is not None:
@@ -102,29 +126,32 @@ def _hash_files(files) -> tuple:
     return sha1s, murms
 
 
-def _hash_check_files(files) -> list:
+def _hash_check_files(files, with_murmur: bool = False) -> list:
     """Hash-Daten für check_updates (in einem Worker-Thread aufrufen!),
     inkl. Nutzungs-Cache für unveränderte Dateien."""
     hashed = []
     for path, filename, enabled in files:
-        sha1, murmur = _hash_one(path)
+        sha1, murmur = _hash_one(path, with_murmur)
         hashed.append({"filename": filename, "enabled": enabled,
                        "size_bytes": path.stat().st_size if sha1 else None,
                        "sha1": sha1, "murmur": murmur})
     return hashed
 
 
-def _hash_one(path: Path) -> tuple:
-    """hashes_for mit _HASH_CACHE (mtime+Größe als Gültigkeitsprüfung)."""
+def _hash_one(path: Path, with_murmur: bool = False) -> tuple:
+    """hashes_for mit _HASH_CACHE (mtime+Größe als Gültigkeitsprüfung).
+    Der teure CF-Fingerprint wird nur berechnet, wenn er gebraucht wird
+    (with_murmur, d. h. CF_API_KEY gesetzt), und danach mitgecacht."""
     try:
         st = path.stat()
     except OSError:
         return None, None
     key = str(path)
     cached = _HASH_CACHE.get(key)
-    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+    if cached and cached[0] == st.st_mtime_ns and cached[1] == st.st_size \
+            and (cached[3] is not None or not with_murmur):
         return cached[2], cached[3]
-    sha1, murmur = hashes_for(path)
+    sha1, murmur = hashes_for(path, with_murmur)
     if sha1:
         _HASH_CACHE[key] = (st.st_mtime_ns, st.st_size, sha1, murmur)
     return sha1, murmur
@@ -278,8 +305,10 @@ def _compare(installed_date: str, latest_date: str) -> str:
 # jedem Tastendruck alle jars neu hashen muss (Mod-Install/Edit invalidiert
 # innerhalb der TTL von selbst).
 _INSTALLED_CACHE: dict = {}
-# Laufende Hintergrund-Auffrischungen (stale-while-revalidate)
-_REFRESHING: set = set()
+# Laufende Ermittlungen je Instanz (eine gleichzeitig — vorher startete jede
+# Suchanfrage, auch die vorgeladene nächste Seite, ein eigenes Hashen aller
+# jars, solange der Cache leer war)
+_INFLIGHT: dict = {}
 
 
 def invalidate_installed_cache(instance_id: str | None = None) -> None:
@@ -290,25 +319,23 @@ def invalidate_installed_cache(instance_id: str | None = None) -> None:
         _INSTALLED_CACHE.pop(instance_id, None)
 
 
-def _refresh_installed_async(instance_id: str) -> None:
-    """Auffrischen im Hintergrund (stale-while-revalidate); wirft nie."""
-    if instance_id in _REFRESHING:
-        return
-    _REFRESHING.add(instance_id)
+def _installed_task(instance_id: str) -> asyncio.Task:
+    """Laufende Ermittlung der Instanz teilen oder eine neue starten."""
+    loop = asyncio.get_running_loop()
+    task = _INFLIGHT.get(instance_id)
+    if task is not None and not task.done() and task.get_loop() is loop:
+        return task
+    task = loop.create_task(_installed_project_ids_uncached(instance_id))
 
-    async def _run():
-        try:
-            await _installed_project_ids_uncached(instance_id)
-        except Exception:
-            pass  # Hintergrund-Auffrischung darf nichts brechen
-        finally:
-            _REFRESHING.discard(instance_id)
+    def _done(t: asyncio.Task) -> None:
+        if _INFLIGHT.get(instance_id) is t:
+            _INFLIGHT.pop(instance_id, None)
+        if not t.cancelled():
+            t.exception()  # Fehler abholen (sonst „never retrieved“-Warnung)
 
-    try:
-        task = asyncio.create_task(_run())
-        task.add_done_callback(lambda _t: _REFRESHING.discard(instance_id))
-    except RuntimeError:  # kein laufender Loop (z. B. in Tests)
-        _REFRESHING.discard(instance_id)
+    task.add_done_callback(_done)
+    _INFLIGHT[instance_id] = task
+    return task
 
 
 async def installed_project_ids(instance_id: str) -> dict:
@@ -317,15 +344,36 @@ async def installed_project_ids(instance_id: str) -> dict:
     Wirft nicht — Anbieter-Fehler liefern leere Mengen; Ergebnis wird
     _INSTALLED_TTL Sekunden gecacht. Nach TTL-Ablauf kommen sofort die
     letzten bekannten Daten zurück (stale-while-revalidate), die Auffrischung
-    läuft im Hintergrund — die Suche wartet nie auf das Hashen."""
-    now = time.monotonic()
-    cached = _INSTALLED_CACHE.get(instance_id)
-    if cached is not None and now - cached[0] <= _INSTALLED_TTL:
-        return cached[1]
+    läuft im Hintergrund. Gleichzeitige Aufrufe teilen eine Ermittlung."""
+    cached = _installed_cached(instance_id)
     if cached is not None:
-        _refresh_installed_async(instance_id)
-        return cached[1]
-    return await _installed_project_ids_uncached(instance_id)
+        return cached
+    return await asyncio.shield(_installed_task(instance_id))
+
+
+async def installed_project_ids_within(instance_id: str, wait: float) -> dict | None:
+    """Wie installed_project_ids, wartet aber höchstens `wait` Sekunden auf
+    eine Erstermittlung. Dauert sie länger, kommt None zurück; die Ermittlung
+    läuft weiter und füllt den Cache — die Suche bleibt so nie an großen
+    Modpacks hängen."""
+    cached = _installed_cached(instance_id)
+    if cached is not None:
+        return cached
+    try:
+        return await asyncio.wait_for(asyncio.shield(_installed_task(instance_id)), wait)
+    except TimeoutError:
+        return None
+
+
+def _installed_cached(instance_id: str) -> dict | None:
+    """Cache-Treffer oder None; abgelaufene Einträge werden sofort geliefert
+    und im Hintergrund aufgefrischt (stale-while-revalidate)."""
+    cached = _INSTALLED_CACHE.get(instance_id)
+    if cached is None:
+        return None
+    if time.monotonic() - cached[0] > _INSTALLED_TTL:
+        _installed_task(instance_id)
+    return cached[1]
 
 
 async def _installed_project_ids_uncached(instance_id: str) -> dict:
@@ -341,15 +389,19 @@ async def _installed_project_ids_uncached(instance_id: str) -> dict:
     # Hashing in einen Worker-Thread auslagern: mehrere GB Jar-Daten im
     # Event-Loop blockierten sonst das GESAMTE Dashboard (Suche, Katalog,
     # Status-Polls — Symptom: „Suche dauert ewig / Katalog nicht erreichbar“).
-    sha1s, murms = await asyncio.to_thread(_hash_files, files)
+    sha1s, murms = await asyncio.to_thread(_hash_files, files, _cf_available())
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # Modrinth: Batch-Lookup der SHA1s → Versionen (oder null) → Projekt-IDs
+        # Modrinth: Batch-Lookup POST /version_files {hashes, algorithm} →
+        # {sha1: Version}. (GET /version_file/{hash} nimmt nur EINEN Hash —
+        # kommagetrennte Listen liefern 404, dann wurde nichts als
+        # installiert erkannt.)
         for start in range(0, len(sha1s), _MR_CHUNK):
             chunk = sha1s[start:start + _MR_CHUNK]
             try:
-                resp = await client.get(
-                    f"{settings.modrinth_api}/version_file/{','.join(chunk)}",
-                    params={"multiple": "true"}, headers=modrinth._headers())
+                resp = await client.post(
+                    f"{settings.modrinth_api}/version_files",
+                    json={"hashes": chunk, "algorithm": "sha1"},
+                    headers=modrinth._headers())
             except httpx.HTTPError:
                 continue
             if resp.status_code != 200:
@@ -358,9 +410,9 @@ async def _installed_project_ids_uncached(instance_id: str) -> dict:
                 versions = resp.json()
             except ValueError:
                 continue
-            if not isinstance(versions, list):
+            if not isinstance(versions, dict):
                 continue
-            for version in versions:
+            for version in versions.values():
                 if isinstance(version, dict) and version.get("project_id"):
                     out["modrinth"].add(str(version["project_id"]))
         # CurseForge: Fingerprints batchweise → Mod-IDs (nur mit CF_API_KEY)
@@ -374,18 +426,23 @@ async def _installed_project_ids_uncached(instance_id: str) -> dict:
     return out
 
 
-async def check_updates(instance_id: str) -> dict:
+async def check_updates(instance_id: str, target: dict | None = None) -> dict:
     """Prüft alle Mods der Instanz gegen Modrinth (+ CurseForge mit Key).
+    target ({"loader", "game_version"}) sucht die neueste Version für eine
+    andere Minecraft-Version/einen anderen Loader (Versionswechsel); erkannt
+    werden die installierten Dateien weiter am aktuellen Stand.
     Wirft HTTPException nur für 404/400; Anbieter-Ausfälle pro Mod toleriert."""
     instance = instances.get_instance(instance_id)
     loader = instance["loader"]
     game_version = instance["game_version"]
+    want_loader = (target or {}).get("loader") or loader
+    want_version = (target or {}).get("game_version") or game_version
     files = _iter_mod_files(instance_id)
     if len(files) > _MAX_CHECKED:
         raise HTTPException(status_code=400,
                             detail=f"Zu viele Mods (max. {_MAX_CHECKED} prüfbar)")
 
-    hashed = await asyncio.to_thread(_hash_check_files, files)
+    hashed = await asyncio.to_thread(_hash_check_files, files, _cf_available())
 
     use_cf = _cf_available() and any(h["murmur"] is not None for h in hashed)
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -419,10 +476,10 @@ async def check_updates(instance_id: str) -> dict:
                 if info["source"] == "modrinth":
                     return await _modrinth_latest(client, info["installed"]
                                                   .get("project_id") or "",
-                                                  loader, game_version)
+                                                  want_loader, want_version)
                 cf_files = await _cf_files(client, str(info["installed_file"]
                                                        .get("modId") or ""),
-                                           game_version, loader)
+                                           want_version, want_loader)
                 from . import curseforge
                 try:
                     return curseforge._pick_file(cf_files, jar_preferred=True)
@@ -442,6 +499,14 @@ async def check_updates(instance_id: str) -> dict:
             "installed": None, "latest": None,
         }
         if info is None or latest is None:
+            if info is not None:
+                # Mod erkannt, aber keine passende Version (z. B. für die
+                # Zielversion eines Versionswechsels)
+                base["source"] = info["source"]
+                base["project_id"] = (info["installed"].get("project_id")
+                                      if info["source"] == "modrinth"
+                                      else str(info["installed_file"].get("modId") or ""))
+                base["no_compatible"] = True
             items.append(base)
             continue
         if info["source"] == "modrinth":
@@ -592,9 +657,11 @@ async def _resolve_latest(plan_item: dict, instance: dict,
     }
 
 
-async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
+async def _run_update_job(job: dict, instance: dict, plan: list,
+                          snapshot: bool = True) -> None:
     """Führt den Update-Plan aus: je Mod die neueste Datei laden und ersetzen.
-    Fehler einzelner Mods brechen den Job nicht ab (Ergebnisliste)."""
+    Fehler einzelner Mods brechen den Job nicht ab (Ergebnisliste).
+    snapshot=False: der Aufrufer hat schon ein Sicherheits-Backup angelegt."""
     from . import curseforge
     mods_root = instances.mods_dir(instance["id"])
     sem = asyncio.Semaphore(_JOB_CONCURRENCY)
@@ -615,13 +682,27 @@ async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
                     raise RuntimeError(f"Zieldatei '{target_name}' existiert bereits")
                 headers = curseforge._headers() \
                     if item["source"] == "curseforge" else modrinth._headers()
-                await _download_to(
-                    client, latest["url"], new_path, latest["size"],
-                    sha1=latest["sha1"], headers=headers,
-                    verify_url=item["source"] == "curseforge")
+                # Alte Version vorher in den Papierkorb sichern (Rückweg,
+                # falls die neue Version Probleme macht)
+                backup = None
+                if old_path.is_file():
+                    backup = await asyncio.to_thread(
+                        instances.move_to_trash, instance["id"], old_path,
+                        "update", True)
+                try:
+                    await _download_to(
+                        client, latest["url"], new_path, latest["size"],
+                        sha1=latest["sha1"], headers=headers,
+                        verify_url=item["source"] == "curseforge")
+                except Exception:
+                    if backup:
+                        instances.discard_trash_entry(instance["id"], backup)
+                    raise
                 if new_path.resolve() != old_path.resolve() and old_path.is_file():
                     old_path.unlink()
                 entry["new_filename"] = target_name
+                if backup:
+                    entry["backup"] = backup
             except Exception as exc:
                 entry["status"] = S_ERROR
                 entry["error"] = str(exc) or exc.__class__.__name__
@@ -630,6 +711,23 @@ async def _run_update_job(job: dict, instance: dict, plan: list) -> None:
             job["results"].append(entry)
 
     job["results"] = []
+    # Sicherheits-Backup (inkl. Welt): eine neue Mod-Version kann beim
+    # ersten Start Weltdaten umschreiben. Ohne Backup kein Update.
+    if snapshot:
+        job["phase"] = "Sicherheits-Backup"
+        try:
+            from . import backups  # lazy, vermeidet Import-Zirkel
+            snap = await asyncio.to_thread(
+                backups.safety_backup, instance["id"],
+                instances.instance_dir(instance["id"]), "pre-update")
+            job["backup"] = snap["name"]
+        except Exception as exc:
+            job["phase"] = "abgebrochen"
+            job["status"] = "error"
+            job["error"] = f"Sicherheits-Backup fehlgeschlagen, nichts geändert: {exc}"
+            modrinth.persist_job(job)
+            return
+    job["phase"] = f"Aktualisiere (0/{job['total']})"
     client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0),
                                follow_redirects=True)
     try:
@@ -673,6 +771,7 @@ __all__ = [
     "check_updates",
     "hashes_for",
     "installed_project_ids",
+    "installed_project_ids_within",
     "invalidate_installed_cache",
     "murmur2_cf",
     "start_update",

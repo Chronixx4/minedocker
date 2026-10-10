@@ -3,7 +3,7 @@ import json
 import re
 
 from playwright.sync_api import expect
-from uihelpers import simulate_running
+from uihelpers import plain_headers, simulate_running
 
 SLOTS = ["uebersicht", "konsole", "spieler", "mods", "welt",
          "dateien", "backups", "zeitplan", "einstellungen"]
@@ -133,3 +133,67 @@ def test_update_tab_erkennt_datei_und_wendet_an(page, make_instance):
     page.locator("#upd-apply").click()
     expect(page.locator("#upd-done")).to_be_visible(timeout=15000)
     expect(page.locator("#upd-done-list")).to_contain_text("1 Datei(en) installiert")
+
+
+def _detail_ohne_speicher(page, inst):
+    """Detail-Antwort so umschreiben, als liefe die Speicher-Zählung noch."""
+    def detail(route):
+        resp = route.fetch()
+        data = resp.json()
+        data["disk"] = None
+        data["disk_pending"] = True
+        route.fulfill(response=resp, body=json.dumps(data),
+                      headers=plain_headers(resp.headers))
+
+    page.route(f"**/api/instances/{inst['id']}", detail)
+
+
+def test_speicher_wird_berechnet(page, make_instance):
+    inst = make_instance("Grosse-Welt")
+    _detail_ohne_speicher(page, inst)
+    page.route(f"**/api/instances/{inst['id']}/disk",
+               lambda route: route.fulfill(status=503, json={"detail": "noch nicht"}))
+    _open(page, inst)
+    expect(page.locator("#detail-info")).to_contain_text("wird berechnet…")
+
+
+def test_speicher_wird_nachgeladen(page, make_instance):
+    inst = make_instance("Grosse-Welt")
+    _detail_ohne_speicher(page, inst)
+    page.route(f"**/api/instances/{inst['id']}/disk", lambda route: route.fulfill(json={
+        "total_bytes": 3 * 1024 ** 3, "mods_bytes": 0, "world_bytes": 3 * 1024 ** 3,
+        "packs_bytes": 0, "rest_bytes": 0, "world_dir": "world", "world_exists": True}))
+    _open(page, inst)
+    expect(page.locator("#detail-info")).to_contain_text("Welt 3")
+    expect(page.locator("#detail-info")).not_to_contain_text("wird berechnet")
+
+
+def test_server_loeschen_aus_einstellungen(page, make_instance):
+    inst = make_instance("Wegwerf-Welt")
+    _open(page, inst)
+    page.keyboard.press("9")  # Einstellungen
+    page.locator("#inst-delete-btn").click()
+    dlg = page.locator("#confirm-dialog")
+    expect(dlg).to_be_visible()
+    expect(page.locator("#cd-title")).to_contain_text("Wegwerf-Welt")
+    ok = page.locator("#cd-ok")
+    expect(ok).to_be_disabled()
+    page.locator("#cd-type").fill("Wegwerf")
+    expect(ok).to_be_disabled()
+    page.locator("#cd-type").fill("Wegwerf-Welt")
+    expect(ok).to_be_enabled()
+    ok.click()
+    expect(page.locator("#toasts")).to_contain_text('Server "Wegwerf-Welt" gelöscht.')
+    expect(page.locator(f'#inst-tabs .inst-tab[data-id="{inst["id"]}"]')).to_have_count(0)
+    expect(page.locator("#inst-detail")).to_be_hidden()
+
+
+def test_server_loeschen_abbrechen(page, make_instance):
+    inst = make_instance("Bleibt-Da")
+    _open(page, inst)
+    page.keyboard.press("9")
+    page.locator("#inst-delete-btn").click()
+    page.locator("#cd-cancel").click()
+    expect(page.locator("#confirm-dialog")).to_be_hidden()
+    expect(page.locator("#detail-title")).to_have_text("Bleibt-Da")
+    expect(page.locator(f'#inst-tabs .inst-tab[data-id="{inst["id"]}"]')).to_have_count(1)

@@ -45,6 +45,9 @@ class Settings:
         self.instances_dir = Path(os.getenv("INSTANCES_DIR", "/data/instances")).resolve()
         self.instances_port_base = int(os.getenv("INSTANCES_PORT_BASE", "25570"))
         self.instances_memory = os.getenv("INSTANCES_MEMORY", "2G").strip()
+        # Backups woanders ablegen (z. B. zweite Platte); leer = /data/backups
+        backups_dir = os.getenv("BACKUPS_DIR", "").strip()
+        self.backups_dir = Path(backups_dir).resolve() if backups_dir else None
         # Host-Pfad des Instanz-Ordners (für Docker-Binds); leer = automatische
         # Erkennung über /proc/self/mountinfo
         self.instances_host_dir = os.getenv("INSTANCES_HOST_DIR", "").strip()
@@ -58,6 +61,10 @@ class Settings:
             for token in os.getenv("RCON_CONSOLE_WHITELIST", "").split(",")
             if token.strip()
         ]
+        # Inventar-Ansicht: Vanilla-Item-Icons einmal pro MC-Version aus der
+        # Mojang-Client-JAR laden (false = nur Mod-Icons aus den Mod-JARs)
+        self.item_icons_vanilla = os.getenv("ITEM_ICONS_VANILLA", "true").strip().lower() \
+            not in ("0", "false", "no", "off")
         # Persistenter Statistik-Verlauf (SQLite): DB-Pfad, Sampling-Intervall
         # und Aufbewahrung. Default: neben INSTANCES_DIR (im Container /data).
         env_history_db = os.getenv("HISTORY_DB", "").strip()

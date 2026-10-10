@@ -24,7 +24,10 @@ Checkliste, Dashboard-Schnellstart).
     (eigene Session); neue Instanz-Routen: /files (Datei-Browser:
     Liste/content GET+PUT/download/upload/mkdir/rename/DELETE),
     /datapacks (Liste/upload/enable/disable/DELETE), /gamerules
-    (GET/POST), /players/playtime (Spielzeit-Leaderboard)
+    (GET/POST), /players/playtime (Spielzeit-Leaderboard),
+    /players/{name}/inventory (GET Inventar, POST set_count/clear/move/give
+    mit Fingerabdruck-Prüfung → 409), /items (Namen per ids= oder Suche q=),
+    /items/icon (PNG)
   - config.py – Settings aus Env + MC-Version-Autoerkennung; Multi-Server:
     INSTANCES_DIR, INSTANCES_PORT_BASE (25570), INSTANCES_MEMORY, INSTANCES_HOST_DIR,
     FILEBROWSER_MAX_UPLOAD_MB (300)
@@ -57,9 +60,29 @@ Checkliste, Dashboard-Schnellstart).
       ID/Port, 409 bei laufender Quelle, Zeitplan UND Tags werden übernommen),
      find_world_dir()/world_dir() (Welt-Erkennung über level-name aus
      server.properties → 'world' → erster Unterordner mit level.dat),
-     disk_usage() (total/mods/world/packs/rest + world_dir)
+     disk_usage() (total/mods/world/packs/rest + world_dir; 60 s Cache, pro
+     Instanz nur ein Durchlauf gleichzeitig, disk_usage_cached() liefert auch
+     ältere Werte; GET /instances/{id} wartet max. 1 s darauf, sonst
+     disk_pending=true und das Frontend holt GET /instances/{id}/disk nach;
+     Ping nur bei laufendem Container; Server-Timing-Header mit Teilzeiten,
+     Anfragen ab 1 s werden geloggt)
   - rcon.py – minimaler RCON-Client (Source-RCON-Protokoll, stdlib-only):
-    command(host, port, password, cmd) + parse_list_output() für 'list'
+    command(host, port, password, cmd) + parse_list_output() für 'list';
+    commands() schickt mehrere Befehle über eine Verbindung (Antwortende per
+    Marker-Paket Typ 0 → "Unknown request", mehrteilige Antworten werden
+    zusammengesetzt)
+  - inventory.py – Spieler-Inventar: SNBT-Parser/-Serializer (Zahlen behalten
+    Typ-Suffix), Slot-Zuordnung für alle Formate (bis 1.20.4 Count/tag +
+    Slot 100-103/-106, ab 1.20.5 count/components, ab 1.21.5 equipment),
+    Endertruhe, Mod-Slots (Curios/Trinkets) aus neoforge:attachments/ForgeCaps/
+    cardinal_components (nur Anzeige), Befehlsbau 'item replace'/'give'
+    (Server liest Item selbst, Browser schickt nur Slots + Fingerabdruck;
+    max. ~1400 Byte pro RCON-Befehl), Bearbeiten ab 1.17
+  - itemassets.py – Item-Icons/-Namen: Index über Mod-JARs (+ Vanilla-ZIP)
+    je Instanz (neu bei geänderten JARs), Icon-Auflösung items/ → models/item
+    → Eltern-Modelle → Textur; Vanilla-Teilmenge der Mojang-Client-JAR +
+    de_de.json aus dem Asset-Index unter {INSTANCES_DIR}/.itemcache/
+    (Hintergrund-Download, 10 min Pause nach Fehler, ITEM_ICONS_VANILLA)
   - runtime.py – Docker-Runtime pro Instanz (docker SDK): Container itzg/minecraft-server
     (mc-inst-{id}), Env je Loader (FABRIC/FORGE/NEOFORGE/QUILT/PAPER/BUKKIT) +
     RCON aktiv (ENABLE_RCON=TRUE, RCON_PASSWORD = deterministisch aus Salt-Datei
@@ -69,6 +92,31 @@ Checkliste, Dashboard-Schnellstart).
   - catalog.py – Katalog: Mojang-Versionen (Releases/Snapshots) + Loader-Versionen
     (Fabric/Quilt-Meta, Forge-Promotions, NeoForge-Maven, Paper Fill-API v3,
     Bukkit/Spigot-BuildTools-Hinweis); 10-min-Cache, nie werfend je Loader
+  - modmeta.py – (Cache gespiegelt in {INSTANCES_DIR}/.modmeta-cache.json,
+    überlebt Neustarts) Mod-Metadaten aus der .jar (fabric.mod.json, quilt.mod.json,
+    (neoforge.)mods.toml; Jar-in-Jar eine Ebene tief) + Problem-Erkennung
+    (fehlende/deaktivierte Pflicht-Abhängigkeit, falscher Loader, reine
+    Client-Mod, doppelte Mod-ID); instances.mods_overview() liefert Mods +
+    Probleme + mods_changed_at (Hinweis „Neustart nötig“). Mod-Papierkorb
+    unter {INSTANCES_DIR}/../mod-trash/{id}/ (Löschen und Mod-Updates legen
+    die alte .jar dort ab, 7 Tage, Routen /instances/{id}/mod-trash)
+  - modinstall.py – Modbrowser: Projekt-Details mit Versionsliste
+    (Modrinth/CurseForge, gefiltert auf Loader+MC-Version der Instanz oder
+    alle), Installationsplan für eine oder mehrere vorgemerkte Mods mit
+    gemeinsam aufgelösten Pflicht-Abhängigkeiten (/instances/{id}/mods/plan),
+    gebündelte Installation als ein Job (/instances/{id}/mods/install; 409
+    bei vorhandenen Dateien, mit overwrite landen die alten im Papierkorb);
+    Frontend: Suche im Server-Bereich unter Mods › Hinzufügen (Karte wird
+    zwischen Tab „Mods suchen“ und Workspace verschoben), Detail-Dialog,
+    Vormerk-Leiste, eigene Rückfragen (confirmDialog statt window.confirm)
+  - searchcache.py – Mod-Suche schneller: Keep-Alive-Client je Event-Loop
+    (kein TLS-Aufbau pro Seite) + 5-min-Cache für Ergebnisseiten; das
+    Frontend lädt die nächste Seite im Hintergrund vor. Suche und
+    Installiert-Abgleich (updates.installed_project_ids, Modrinth-Batch
+    POST /version_files) laufen parallel
+  - modcategories.py – Kategorie-Filter des Modbrowsers (/mods/categories):
+    Listen von Modrinth (/tag/category) bzw. CurseForge (/categories),
+    deutsche Namen für bekannte Kategorien, 1 Tag Cache
   - packs.py – Modpack-Installer: Modrinth-Suche, mrpack-Download+Entpacken,
     Upload-Installation (.mrpack + CurseForge-.zip mit manifest.json),
     Index-Normalisierung (mrpack/CF -> internes Schema: title, game_version,
@@ -290,7 +338,26 @@ Checkliste, Dashboard-Schnellstart).
     der Restart-Policy ab); optionale Alerts: ALERT_WEBHOOK_URL (Discord-
     kompatibel) und/oder Telegram (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID),
     Ereignisauswahl via ALERT_EVENTS (Default crash,start,stop); wirft nie,
-    reconnectet bei Docker-Fehlern endlos, stoppt sauber beim Shutdown
+    reconnectet bei Docker-Fehlern endlos, stoppt sauber beim Shutdown;
+    bei Crash Diagnose über crashinfo.diagnose → instance.json last_crash,
+    Absturzschleife (3 Crashes in 10 min) → Server anhalten, Status bleibt
+    'error' (forget_crashes() beim manuellen Start)
+  - crashinfo.py – Crash-Diagnose aus Log-Ende + neuestem crash-reports/-
+    Bericht (max. 15 min alt): Muster für Java-Version, fehlende Mod-
+    Abhängigkeit, RAM (auch Exit 137), Client-Mod, Port, EULA, doppelte Mods,
+    Mixin, Welt; verdächtige Mods; Routen POST /instances/{id}/crash/analyze,
+    DELETE /instances/{id}/crash
+  - versionchange.py – MC-Version/Loader wechseln: POST
+    /instances/{id}/version/check (Vorschau: available/missing/unknown über
+    updates.check_updates(target=…)), POST /instances/{id}/version (Job
+    kind 'version': pre-update-Backup → Mods prüfen → instance.json umstellen
+    → fehlende Mods deaktivieren → Mods per _run_update_job(snapshot=False)
+    ersetzen); nur gestoppt, Downgrade nur mit allow_downgrade
+  - Schlafmodus: instance.json hibernate {mode off/pause/stop, minutes};
+    runtime._hibernate_env setzt ENABLE_AUTOPAUSE bzw. ENABLE_AUTOSTOP
+    (pause: ohne no-new-privileges wegen knockd-Capability; stop: Restart-
+    Policy on-failure); instances.is_paused() = /data/.paused, dann kein
+    Ping/RCON durch Detail, Live-Liste, Verlauf, Vorwarnung, Backup
 - scheduler.py – Geplante Aufgaben je Instanz (Daemon-Thread aus dem
     Lifespan, Tick alle 30 s, Zustand in /data/scheduler_state.json mit
     Atomic-Write; wirft nie, räumt verwaiste Einträge gelöschter Instanzen
@@ -557,7 +624,8 @@ Whitelist-Modus), HISTORY_DB (SQLite-Verlauf, Default /data/history.db),
 HISTORY_INTERVAL (Sampling-Sekunden, Default 30, min 10),
 HISTORY_RETENTION_DAYS (Default 30),
 FILEBROWSER_MAX_UPLOAD_MB (Default 300 — Upload-Limit je Datei im
-Datei-Browser).
+Datei-Browser), ITEM_ICONS_VANILLA (Default true — Vanilla-Item-Icons aus
+der Mojang-Client-JAR für die Inventar-Ansicht).
 Login & Rollen (keine Pflicht-Env): Benutzer in /data/users.json
 (geschwisterlich zu scheduler_state.json), Session-Secret in
 /data/.auth_secret (0600, einmalig generiert); ohne DASHBOARD_API_KEY und

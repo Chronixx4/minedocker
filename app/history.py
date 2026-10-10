@@ -127,6 +127,7 @@ def sample_tick(now: int | None = None) -> int:
     rows: list[tuple] = []
     ping_targets: list[tuple[str, dict, tuple]] = []
     running_ids: set = set()
+    names_by_instance: dict = {}
     try:
         resources = runtime.docker_resources()
     except Exception:
@@ -143,10 +144,14 @@ def sample_tick(now: int | None = None) -> int:
             running_ids.add(inst_id)
             try:
                 inst = instances_get(inst_id)
+                if _is_paused(inst_id):
+                    # Schlafmodus: der Ping würde den Server wecken; niemand online
+                    rows.append((ts, "players", inst_id, None, None, 0, 0))
+                    names_by_instance[inst_id] = []
+                    continue
                 ping_targets.append((inst_id, inst, instance_ping_target(inst_id)))
             except Exception:
                 continue  # Instanz gelöscht? nächsten Tick neu prüfen
-    names_by_instance: dict = {}
     if ping_targets:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             futures = {pool.submit(_ping_players, inst, target): inst_id
@@ -176,6 +181,11 @@ def instances_get(inst_id: str):
     """Instanz-Metadaten (lazy import, wirft bei Unbekannten)."""
     from . import instances  # lazy, vermeidet Import-Zirkel
     return instances.get_instance(inst_id)
+
+
+def _is_paused(inst_id: str) -> bool:
+    from . import instances  # lazy, vermeidet Import-Zirkel
+    return instances.is_paused(inst_id)
 
 
 def instance_ping_target(inst_id: str):
@@ -571,3 +581,43 @@ __all__ = [
     "sampler_loop",
     "update_sessions",
 ]
+
+
+def player_sessions(instance: str, player: str, limit: int = 50,
+                    db_path: Path | None = None, now: int | None = None) -> dict:
+    """Sitzungen eines Spielers auf einer Instanz (neueste zuerst), inkl.
+    laufender Sitzung, plus Kennzahlen (Anzahl, längste, Durchschnitt,
+    erste Sicht). Ältere Sitzungen fallen der Aufbewahrungsfrist zum Opfer."""
+    now = int(now or time.time())
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT start_ts, end_ts, seconds FROM player_sessions "
+            "WHERE instance = ? AND player = ? ORDER BY start_ts DESC",
+            (instance, player)).fetchall()
+    sessions: list[dict] = [
+        {"start": int(s), "end": int(e) if e is not None else None,
+         "seconds": int(sec or 0), "open": False} for s, e, sec in rows]
+    with _sessions_lock:
+        current = _OPEN_SESSIONS.get((str(instance), player))
+        if current:
+            sessions.insert(0, {"start": int(current["start"]), "end": None,
+                                "seconds": max(0, now - int(current["start"])),
+                                "open": True})
+    longest = max(sessions, key=lambda s: s["seconds"], default=None)
+    total = sum(s["seconds"] for s in sessions)
+    return {
+        "sessions": sessions[:max(1, limit)],
+        "count": len(sessions),
+        "total_seconds": total,
+        "avg_seconds": total // len(sessions) if sessions else 0,
+        "longest": longest,
+        "first_seen": min((s["start"] for s in sessions), default=None),
+        "current_start": sessions[0]["start"] if sessions and sessions[0]["open"] else None,
+    }
+
+
+def open_session_starts(instance: str) -> dict:
+    """{Spieler: Start der laufenden Sitzung} für eine Instanz."""
+    with _sessions_lock:
+        return {k[1]: int(v["start"]) for k, v in _OPEN_SESSIONS.items()
+                if k[0] == str(instance)}

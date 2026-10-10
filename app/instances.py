@@ -331,10 +331,68 @@ def set_status(instance_id: str, status: str, error: str | None = None) -> None:
         _save_meta(instance)
 
 
+def set_crash(instance_id: str, crash: dict | None) -> None:
+    """Speichert die Diagnose des letzten Absturzes (None = verwerfen)."""
+    with _META_LOCK:
+        instance = _load_meta(instance_id)
+        if crash is None:
+            instance.pop("last_crash", None)
+        else:
+            instance["last_crash"] = crash
+        _save_meta(instance)
+
+
+# Schlafmodus (itzg): "pause" friert den Java-Prozess ein, wenn niemand
+# spielt, und weckt ihn beim nächsten Verbindungsversuch; "stop" beendet den
+# Server (spart auch RAM), Start dann wieder übers Dashboard.
+HIBERNATE_MODES = ("off", "pause", "stop")
+HIBERNATE_MINUTES = (5, 1440, 30)  # min, max, Standard
+PAUSED_FLAG = ".paused"  # legt itzg beim Pausieren in /data an
+
+
+def _validate_hibernate(data: object) -> dict:
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Schlafmodus: Objekt erwartet")
+    mode = data.get("mode", "off")
+    if mode not in HIBERNATE_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Schlafmodus muss einer von {', '.join(HIBERNATE_MODES)} sein")
+    lo, hi, default = HIBERNATE_MINUTES
+    try:
+        minutes = int(data.get("minutes", default))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Schlafmodus: Minuten müssen eine Zahl sein")
+    if not lo <= minutes <= hi:
+        raise HTTPException(status_code=400,
+                            detail=f"Schlafmodus: Minuten zwischen {lo} und {hi}")
+    return {"mode": mode, "minutes": minutes}
+
+
+def hibernate_settings(instance: dict) -> dict:
+    """Schlafmodus einer Instanz mit Standardwerten (Bestandsinstanzen: aus)."""
+    raw = instance.get("hibernate")
+    try:
+        return _validate_hibernate(raw) if raw else {"mode": "off",
+                                                     "minutes": HIBERNATE_MINUTES[2]}
+    except HTTPException:
+        return {"mode": "off", "minutes": HIBERNATE_MINUTES[2]}
+
+
+def is_paused(instance_id: str) -> bool:
+    """True, wenn itzg den Server gerade schlafen gelegt hat (Datei .paused).
+    Nur bei laufendem Container aussagekräftig: nach einem Stop im
+    Schlafzustand kann die Datei liegen bleiben."""
+    try:
+        return (instance_dir(instance_id) / PAUSED_FLAG).exists()
+    except (HTTPException, OSError):
+        return False
+
+
 def update_settings(instance_id: str, *, name=None, memory=None,
                     jvm_opts=None, use_aikar=None,
-                    tags=None, port=None) -> dict:
-    """Ändert Instanz-Einstellungen (Name, RAM, JVM-Flags, Tags, Port).
+                    tags=None, port=None, java=None, hibernate=None) -> dict:
+    """Ändert Instanz-Einstellungen (Name, RAM, JVM-Flags, Java, Tags, Port).
     Nur übergebene Felder werden geändert; JVM-/Port-Änderungen wirken
     beim nächsten (Neu-)Start. Port nur bei gestoppter Instanz änderbar."""
     instance = _load_meta(instance_id)
@@ -357,6 +415,17 @@ def update_settings(instance_id: str, *, name=None, memory=None,
     if use_aikar is not None:
         instance["use_aikar"] = bool(use_aikar)
         changed.append("use_aikar")
+    if java is not None:
+        from . import runtime  # lazy, vermeidet Import-Zirkel
+        if java not in runtime.JAVA_CHOICES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Java-Version muss eine von {', '.join(runtime.JAVA_CHOICES)} sein")
+        instance["java"] = java
+        changed.append("java")
+    if hibernate is not None:
+        instance["hibernate"] = _validate_hibernate(hibernate)
+        changed.append("hibernate")
     if tags is not None:
         instance["tags"] = _validate_tags(tags)
         changed.append("tags")
@@ -516,6 +585,7 @@ def delete_instance(instance_id: str, force: bool = False) -> dict:
         shutil.rmtree(directory)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Löschen fehlgeschlagen: {exc}")
+    shutil.rmtree(trash_dir(instance_id), ignore_errors=True)
     return {"deleted": instance_id, "name": instance["name"]}
 
 
@@ -638,36 +708,96 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-# Kurzer Cache für disk_usage: Welten mit vielen Dateien sind teuer zu
-# vermessen; das Öffnen/Neuladen des Workspace darf nicht jedes Mal den
-# kompletten Instanz-Ordner durchwandern.
+def _dir_sizes(path: Path, buckets: dict) -> dict:
+    """Größe eines Ordners in EINEM Durchlauf, aufgeteilt nach Unterordnern
+    (buckets: Pfad → Name; alles andere zählt als 'rest'). Vorher wurde die
+    Welt zweimal durchwandert (einzeln und im Gesamtordner)."""
+    sizes = {name: 0 for name in buckets.values()}
+    sizes.setdefault("world", 0)
+    sizes["rest"] = 0
+    stack = [(str(path), "rest")]
+    while stack:
+        current, bucket = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append((entry.path, buckets.get(entry.path, bucket)))
+                        elif entry.is_file(follow_symlinks=False):
+                            sizes[bucket] += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return sizes
+
+
+# Cache für disk_usage: Welten mit vielen Dateien sind teuer zu vermessen
+# (auf einer HDD/NAS mehrere Sekunden). Ein Wert gilt 60 s als frisch; ältere
+# Werte darf die Detail-Ansicht weiter anzeigen, während im Hintergrund neu
+# gezählt wird (disk_usage_cached). Pro Instanz zählt immer nur ein Thread —
+# Detail-Ansicht und Welt-Info warten sonst beide einen eigenen Durchlauf ab.
 _DISK_CACHE: dict = {}
-_DISK_CACHE_TTL = 30.0
+_DISK_CACHE_TTL = 60.0
+_DISK_GEN: dict = {}
+_DISK_LOCKS: dict = {}
+_DISK_LOCKS_GUARD = threading.Lock()
 
 
 def invalidate_disk_cache(instance_id: str | None = None) -> None:
     """Vergessenen Speicher-Cache ungültig machen (nach Uploads/Installation)."""
-    if instance_id is None:
-        _DISK_CACHE.clear()
-    else:
-        _DISK_CACHE.pop(instance_id, None)
+    with _DISK_LOCKS_GUARD:
+        if instance_id is None:
+            _DISK_CACHE.clear()
+            for key in list(_DISK_GEN):
+                _DISK_GEN[key] += 1
+        else:
+            _DISK_CACHE.pop(instance_id, None)
+            _DISK_GEN[instance_id] = _DISK_GEN.get(instance_id, 0) + 1
+
+
+def disk_usage_cached(instance_id: str) -> tuple:
+    """(letztes Ergebnis oder None, frisch?) — ohne zu zählen."""
+    cached = _DISK_CACHE.get(instance_id)
+    if cached is None:
+        return None, False
+    return cached[1], time.monotonic() - cached[0] < _DISK_CACHE_TTL
 
 
 def disk_usage(instance_id: str) -> dict:
     """Speicherverbrauch der Instanz, aufgeschlüsselt nach Mods, Welt,
     packs und Rest (Welt = gefundener level.dat-Ordner). Ergebnis wird
-    kurz (30 s) gecacht, damit häufiges Öffnen/Neuladen schnell bleibt."""
-    now = time.monotonic()
-    cached = _DISK_CACHE.get(instance_id)
-    if cached is not None and now - cached[0] < _DISK_CACHE_TTL:
-        return cached[1]
+    60 s gecacht; parallele Aufrufe warten auf denselben Durchlauf."""
+    cached, fresh = disk_usage_cached(instance_id)
+    if fresh:
+        return cached
+    with _DISK_LOCKS_GUARD:
+        lock = _DISK_LOCKS.setdefault(instance_id, threading.Lock())
+        gen = _DISK_GEN.get(instance_id, 0)
+    with lock:
+        cached, fresh = disk_usage_cached(instance_id)
+        if fresh:
+            return cached
+        result = _measure_disk(instance_id)
+        with _DISK_LOCKS_GUARD:
+            # Während des Zählens invalidiert (Upload, Weltwechsel …)? Dann
+            # nicht als frisch speichern — der nächste Aufruf zählt neu.
+            if _DISK_GEN.get(instance_id, 0) == gen:
+                _DISK_CACHE[instance_id] = (time.monotonic(), result)
+        return result
+
+
+def _measure_disk(instance_id: str) -> dict:
     directory = instance_dir(instance_id)
     world_path = find_world_dir(directory)
-    world = _dir_size(world_path) if world_path else 0
-    mods = _dir_size(directory / "mods")
-    packs = _dir_size(directory / "packs")
-    total = _dir_size(directory)
-    result = {
+    buckets = {str(directory / "mods"): "mods", str(directory / "packs"): "packs"}
+    if world_path:
+        buckets[str(world_path)] = "world"
+    sizes = _dir_sizes(directory, buckets)
+    world, mods, packs = sizes["world"], sizes["mods"], sizes["packs"]
+    total = sum(sizes.values())
+    return {
         "total_bytes": total,
         "mods_bytes": mods,
         "world_bytes": world,
@@ -676,17 +806,17 @@ def disk_usage(instance_id: str) -> dict:
         "world_dir": world_path.name if world_path else None,
         "world_exists": world_path is not None,
     }
-    _DISK_CACHE[instance_id] = (now, result)
-    return result
 
 
-def list_mods(instance_id: str) -> list:
+def list_mods(instance_id: str, with_meta: bool = False) -> list:
     """Mods einer einzelnen Instanz (getrennt von anderen Instanzen)."""
-    return list_mods_in(mods_dir(instance_id))
+    return list_mods_in(mods_dir(instance_id), with_meta=with_meta)
 
 
-def list_mods_in(directory) -> list:
-    """Mods in einem mods-Ordner; deaktivierte (*.jar.disabled) inklusive."""
+def list_mods_in(directory, with_meta: bool = False) -> list:
+    """Mods in einem mods-Ordner; deaktivierte (*.jar.disabled) inklusive.
+    with_meta=True liest zusätzlich Name/Version/Abhängigkeiten aus der .jar."""
+    from . import modmeta  # lazy, nur für die Mod-Liste nötig
     mods = []
     try:
         for path in directory.glob("*.jar*"):
@@ -697,16 +827,37 @@ def list_mods_in(directory) -> list:
                 stat = path.stat()
             except OSError:
                 continue
-            mods.append({
+            entry = {
                 "filename": path.name,
                 "enabled": path.suffix == ".jar",
                 "size_bytes": stat.st_size,
                 "modified": int(stat.st_mtime),
-            })
+            }
+            if with_meta:
+                entry["meta"] = modmeta.read_meta(path)
+            mods.append(entry)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Mods-Ordner nicht lesbar: {exc}")
+    if with_meta:
+        modmeta.save_cache()  # neu gelesene .jar-Infos für den nächsten Start sichern
     mods.sort(key=lambda m: m["filename"].lower())
     return mods
+
+
+def mods_overview(instance_id: str) -> dict:
+    """Mod-Liste mit Metadaten und erkannten Problemen (Detail-Ansicht)."""
+    from . import modmeta
+    instance = get_instance(instance_id)
+    mods = list_mods(instance_id, with_meta=True)
+    problems = modmeta.analyze(mods, instance.get("loader") or "",
+                               instance.get("game_version") or "")
+    try:
+        changed = int(mods_dir(instance_id).stat().st_mtime)
+    except OSError:
+        changed = None
+    # mods_changed_at: letzte Änderung am mods-Ordner (Installieren,
+    # Löschen, An/Aus) — das Frontend vergleicht mit dem Containerstart
+    return {"mods": mods, "problems": problems, "mods_changed_at": changed}
 
 
 def toggle_mod(instance_id: str, filename: str, enabled: bool) -> dict:
@@ -856,15 +1007,129 @@ def toggle_mod_in(directory, filename: str, enabled: bool) -> dict:
 
 
 def delete_mod(instance_id: str, filename: str) -> str:
+    """Mod in den Papierkorb der Instanz verschieben (wiederherstellbar)."""
     from .security import safe_mods_path
     path = safe_mods_path(mods_dir(instance_id), filename)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Mod in dieser Instanz nicht gefunden")
     try:
-        path.unlink()
+        move_to_trash(instance_id, path, "deleted")
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Löschen fehlgeschlagen: {exc}")
     return filename
+
+
+# ---------------------------------------------------------------------------
+# Mod-Papierkorb: gelöschte und per Update ersetzte .jar-Dateien bleiben
+# TRASH_DAYS Tage wiederherstellbar. Liegt außerhalb des Instanz-Ordners
+# (kein Bind-Mount in den Container, nicht in Backups).
+# ---------------------------------------------------------------------------
+
+TRASH_DAYS = 7
+_TRASH_REASONS = ("deleted", "update")
+_TRASH_RE = re.compile(r"^(\d{10,13})-(\d{1,6})__(deleted|update)__(.+)$")
+
+
+def trash_dir(instance_id: str) -> Path:
+    validate_identifier(instance_id, "Instanz-ID")
+    return _root().parent / "mod-trash" / instance_id
+
+
+def move_to_trash(instance_id: str, path: Path, reason: str,
+                  copy: bool = False) -> str:
+    """Verschiebt (copy=True: kopiert) eine Mod-Datei in den Papierkorb;
+    liefert die Eintrags-ID."""
+    if reason not in _TRASH_REASONS:
+        raise ValueError(reason)
+    directory = trash_dir(instance_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = int(time.time())
+    for n in range(1000):
+        entry = f"{stamp}-{n}__{reason}__{path.name}"
+        if not (directory / entry).exists():
+            break
+    if copy:
+        shutil.copy2(path, directory / entry)
+    else:
+        shutil.move(str(path), str(directory / entry))
+    return entry
+
+
+def _trash_entries(instance_id: str) -> list:
+    directory = trash_dir(instance_id)
+    out: list[dict] = []
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return out
+    cutoff = time.time() - TRASH_DAYS * 86400
+    for name in names:
+        match = _TRASH_RE.match(name)
+        if not match:
+            continue
+        path = directory / name
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        stamp = int(match.group(1))
+        if stamp < cutoff:  # abgelaufen → endgültig weg
+            path.unlink(missing_ok=True)
+            continue
+        out.append({"id": name, "filename": match.group(4),
+                    "reason": match.group(3), "trashed_at": stamp,
+                    "size_bytes": st.st_size})
+    out.sort(key=lambda e: e["id"], reverse=True)
+    return out
+
+
+def discard_trash_entry(instance_id: str, entry: str) -> None:
+    """Eintrag endgültig entfernen (z. B. Sicherung eines gescheiterten Updates)."""
+    if _TRASH_RE.match(entry or "") and "/" not in entry and "\\" not in entry:
+        (trash_dir(instance_id) / entry).unlink(missing_ok=True)
+
+
+def list_trash(instance_id: str) -> list:
+    get_instance(instance_id)
+    return _trash_entries(instance_id)
+
+
+def _trash_path(instance_id: str, entry: str) -> tuple[Path, str]:
+    match = _TRASH_RE.match(entry or "")
+    if not match or "/" in entry or "\\" in entry or "\x00" in entry:
+        raise HTTPException(status_code=400, detail="Ungültiger Papierkorb-Eintrag")
+    path = trash_dir(instance_id) / entry
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Eintrag nicht im Papierkorb")
+    return path, match.group(4)
+
+
+def restore_from_trash(instance_id: str, entry: str) -> dict:
+    """Legt eine Mod aus dem Papierkorb zurück in den mods-Ordner."""
+    get_instance(instance_id)
+    src, filename = _trash_path(instance_id, entry)
+    dest = safe_mods_path(mods_dir(instance_id), filename)
+    if dest.exists():
+        raise HTTPException(status_code=409,
+                            detail=f"'{filename}' liegt bereits im mods-Ordner")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Wiederherstellen fehlgeschlagen: {exc}")
+    return {"restored": filename}
+
+
+def empty_trash(instance_id: str) -> dict:
+    get_instance(instance_id)
+    removed = 0
+    for item in _trash_entries(instance_id):
+        try:
+            (trash_dir(instance_id) / item["id"]).unlink()
+            removed += 1
+        except OSError:
+            continue
+    return {"removed": removed}
 
 
 def pack_dir(instance_id: str):
@@ -1120,6 +1385,7 @@ __all__ = [
     "delete_instance",
     "delete_mod",
     "disk_usage",
+    "disk_usage_cached",
     "find_world_dir",
     "get_instance",
     "instance_dir",

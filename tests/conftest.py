@@ -30,6 +30,22 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def _leere_suchcaches():
+    """Such-/Kategorie-Caches und geteilte HTTP-Clients pro Test zurücksetzen
+    — sonst liefert ein Test die gecachten Treffer eines anderen Mocks."""
+    from app import main, modcategories, packs, searchcache
+
+    searchcache.clear()
+    modcategories.clear()
+    packs._update_check_cache.clear()
+    main._status_cache.update(at=0.0, value=None, task=None)
+    yield
+    searchcache.clear()
+    modcategories.clear()
+    packs._update_check_cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isoliere_auth():
     """users.json/.auth_secret vor und nach JEDEM Test löschen — die Dateien
     liegen im geteilten conftest-tmp; ohne Reset würde ein Login-Test, der
@@ -66,6 +82,10 @@ class FakeContainer:
 
     def stop(self, timeout=None):
         self.attrs["State"]["Running"] = False
+
+    def exec_run(self, cmd, **kwargs):
+        self.execs = [*getattr(self, "execs", []), cmd]
+        return (0, b"")
 
     def remove(self, force=False):
         self.removed = True
