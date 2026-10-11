@@ -131,6 +131,23 @@ class TestErkennung:
 
 
 class TestAnwenden:
+    def test_mod_name_mit_apostroph_und_leerzeichen(self, client):
+        inst = _create("forge", "1.21.1")
+        name = "L_Ender's Cataclysm 1.21.1-3.33.jar"
+        token = _analyze(client, inst, name, _jar()).json()["token"]
+        job = _run(inst, token)
+        assert job["status"] == "done", job
+        assert job["summary"]["skipped"] == []
+        assert (instances.instance_dir(inst["id"]) / "mods" / name).is_file()
+
+    def test_jar_name_pruefung_sicher(self):
+        ok = serverupdate._JAR_NAME_RE.match
+        assert ok("L_Ender's Cataclysm 1.21.1-3.33.jar")
+        assert ok("Jäger_Mod, v2.jar")
+        for bad in ("../evil.jar", "a/b.jar", "a\\b.jar", ".hidden.jar", "x\x00.jar",
+                    "evil.jar.txt"):
+            assert not ok(bad), bad
+
     def test_mod_ersetzt_aeltere_version(self, client):
         inst = _create("fabric", "1.21.4")
         mods = instances.instance_dir(inst["id"]) / "mods"

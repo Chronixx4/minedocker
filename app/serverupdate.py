@@ -43,8 +43,11 @@ logger = logging.getLogger("minecraft-dashboard")
 MAX_UPLOAD_BYTES = packs._MAX_PACK_BYTES
 _TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 _FILENAME_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9 _.\-()\[\]+]*\.(mrpack|zip|tar\.gz|jar)$", re.IGNORECASE)
-_JAR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.\-()\[\]+]*\.jar$", re.IGNORECASE)
+    r'^(?!\.)[^/\\\x00-\x1f:*?"<>|]+\.(mrpack|zip|tar\.gz|jar)$', re.IGNORECASE)
+# Mod-Dateinamen kommen aus dem Dateisystem (nur Basename), enthalten aber legitim
+# Apostrophe, Kommas, Umlaute usw. ("L_Ender's Cataclysm ...jar"). Abgelehnt werden
+# nur Pfadtrenner, Steuerzeichen, unter Windows verbotene Zeichen und führende Punkte.
+_JAR_NAME_RE = re.compile(r'^(?!\.)[^/\\\x00-\x1f:*?"<>|]+\.jar$', re.IGNORECASE)
 _STAGE_TTL = 3600          # Analyse-Ergebnisse verfallen nach 1 h
 _MAX_DATAPACK_BYTES = 256 * 1024 * 1024
 
