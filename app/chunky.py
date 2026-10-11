@@ -120,7 +120,7 @@ def parse_progress(output: str) -> dict:
     'rate', 'current', 'text'}; state = running | paused | idle | unknown."""
     text = clean(output)
     low = text.lower()
-    result = {"state": "unknown", "world": None, "chunks": None, "percent": None,
+    result: dict = {"state": "unknown", "world": None, "chunks": None, "percent": None,
               "eta": None, "rate": None, "current": None, "text": text}
     if "no tasks" in low or "no task" in low:
         result["state"] = "idle"
