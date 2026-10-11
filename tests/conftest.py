@@ -139,10 +139,36 @@ class FakeNetworks:
         return net
 
 
+class FakeImage:
+    def __init__(self, labels):
+        self.labels = labels
+
+
+class FakeImages:
+    def __init__(self):
+        self._items = {}
+        self.builds = []
+        self.build_error = None
+
+    def get(self, tag):
+        if tag not in self._items:
+            raise NotFoundError(f"Image {tag} not found")
+        return self._items[tag]
+
+    def build(self, **kwargs):
+        if self.build_error:
+            raise self.build_error
+        self.builds.append(kwargs)
+        text = kwargs["fileobj"].read().decode()
+        rev = text.split("gpu-image-rev=\"")[1].split("\"")[0]
+        self._items[kwargs["tag"]] = FakeImage({"mc-dashboard.gpu-image-rev": rev})
+
+
 class FakeDockerClient:
     def __init__(self):
         self.containers = FakeContainers()
         self.networks = FakeNetworks()
+        self.images = FakeImages()
 
 
 @pytest.fixture()

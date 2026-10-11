@@ -11,6 +11,7 @@ Architektur:
   Dashboard-Containers gehängt, damit der Dashboard SLP-Pings ausführen kann.
 """
 import hashlib
+import io
 import logging
 import re
 import secrets
@@ -144,6 +145,62 @@ def java_tag(instance: dict) -> str:
 
 def image_for(instance: dict) -> str:
     return f"{IMAGE_REPO}:{java_tag(instance)}"
+
+
+# GPU-Image: das itzg-Image (Ubuntu 24.04) enthält keinen OpenCL-ICD-Loader.
+# Die NVIDIA-Runtime mountet zwar libnvidia-opencl und die nvidia.icd vom Host,
+# aber nicht libOpenCL.so.1 - ohne diesen Loader scheitert LWJGL (C2ME-OpenCL)
+# mit „Failed to locate library: libOpenCL.so". Das Dashboard baut deshalb
+# einmalig ein abgeleitetes Image je Java-Tag (Docker-Layer-Cache des Hosts,
+# bleibt über Stop/Start/Neuerstellung der Instanz erhalten; Instanzdaten
+# liegen im Volume und bleiben unberührt).
+GPU_IMAGE_REPO = "mc-dashboard-minecraft-opencl"
+GPU_IMAGE_REV = "1"  # bei Änderung des Dockerfiles erhöhen → Neubau
+_GPU_DOCKERFILE = """FROM {base}
+RUN set -eux; \\
+    apt-get update; \\
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+        ocl-icd-libopencl1 clinfo; \\
+    libdir="$(dirname "$(dpkg -L ocl-icd-libopencl1 | grep 'libOpenCL\\.so\\.1$' | head -n1)")"; \\
+    ln -sf libOpenCL.so.1 "$libdir/libOpenCL.so"; \\
+    mkdir -p /etc/OpenCL/vendors; \\
+    echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd; \\
+    ldconfig; \\
+    rm -rf /var/lib/apt/lists/*
+LABEL mc-dashboard.gpu-image-rev="{rev}"
+"""
+_GPU_BUILD_LOCK = threading.Lock()
+
+
+def gpu_image_for(base_image: str) -> str:
+    """Tag des OpenCL-Images zu einem itzg-Basis-Image (…:java25 → …:java25)."""
+    return f"{GPU_IMAGE_REPO}:{base_image.rsplit(':', 1)[-1]}"
+
+
+def _ensure_gpu_image(client, base_image: str) -> str:
+    """Stellt das OpenCL-Image bereit (baut es beim ersten Bedarf) und liefert
+    dessen Tag. Wirft RuntimeError mit verständlicher Meldung bei Fehlern."""
+    tag = gpu_image_for(base_image)
+    with _GPU_BUILD_LOCK:
+        try:
+            image = client.images.get(tag)
+            labels = (getattr(image, "labels", None) or {})
+            if labels.get("mc-dashboard.gpu-image-rev") == GPU_IMAGE_REV:
+                return tag
+        except Exception:  # nicht vorhanden → bauen
+            pass
+        logger.info("Baue OpenCL-Image %s auf Basis %s", tag, base_image)
+        dockerfile = _GPU_DOCKERFILE.format(base=base_image, rev=GPU_IMAGE_REV)
+        try:
+            client.images.build(fileobj=io.BytesIO(dockerfile.encode()), tag=tag,
+                                rm=True, pull=True)
+        except Exception as exc:
+            raise RuntimeError(
+                f"OpenCL-Image für die GPU-Instanz konnte nicht gebaut werden: {exc}. "
+                "Der Docker-Host braucht beim ersten Start Internetzugang "
+                "(Basis-Image + apt: ocl-icd-libopencl1, clinfo). "
+                "Der Server wurde bewusst nicht ohne OpenCL gestartet.") from exc
+    return tag
 
 
 def _env(instance: dict) -> list:
@@ -439,6 +496,7 @@ def start_instance(instance: dict) -> None:
     if gpu["enabled"]:
         # Nur für diesen Container, kein globaler Runtime-Wechsel, kein privileged
         kwargs["runtime"] = "nvidia"
+        kwargs["image"] = _ensure_gpu_image(client, kwargs["image"])
         env += [f"NVIDIA_VISIBLE_DEVICES={gpu['id']}",
                 "NVIDIA_DRIVER_CAPABILITIES=compute,utility"]
     try:

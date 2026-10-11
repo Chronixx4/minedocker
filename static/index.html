@@ -846,8 +846,10 @@
               <code>nvidia</code> mit der angegebenen GPU (Index, z. B. <code>0</code>, oder
               UUID) frei. Änderungen gelten erst, wenn die Instanz gestoppt und wieder
               gestartet wird &ndash; ein laufender Server wird nicht automatisch neu
-              gestartet. Fehlt die Runtime, schlägt der Start mit einer Meldung fehl
-              (kein stiller Start ohne GPU). Voraussetzungen und Prüfung:
+              gestartet. Der erste GPU-Start baut einmalig ein Image mit OpenCL-Loader
+              (Internet am Docker-Host nötig, dauert etwa eine Minute). Fehlt die
+              Runtime, schlägt der Start mit einer Meldung fehl (kein stiller Start
+              ohne GPU). C2ME-OpenCL braucht Java 25. Voraussetzungen und Prüfung:
               INSTALL-ZIMAOS.md, Abschnitt &bdquo;NVIDIA-GPU&ldquo;.</p>
             <div class="row" style="margin-top: 0.5rem;">
               <button id="gpu-save" class="btn primary admin-only">Speichern</button>
