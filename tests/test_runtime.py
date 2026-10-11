@@ -302,6 +302,8 @@ class TestGpu:
         runtime.start_instance(inst)
         kwargs = fake_docker.containers.run_kwargs
         assert kwargs["runtime"] == "nvidia"
+        # abgeleitetes Image mit OpenCL-Loader statt des Basis-Images
+        assert kwargs["image"] == "mc-dashboard-minecraft-opencl:java21"
         env = kwargs["environment"]
         assert "NVIDIA_VISIBLE_DEVICES=0" in env
         assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility" in env
@@ -357,6 +359,49 @@ class TestGpu:
         with pytest.raises(RuntimeError, match="nicht ohne GPU gestartet"):
             runtime.start_instance(instances.get_instance(instanz["id"]))
         assert len(calls) == 1  # kein zweiter Versuch ohne GPU
+
+
+class TestGpuImage:
+    def test_image_wird_einmal_gebaut_und_wiederverwendet(self, fake_docker, instanz):
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        inst = instances.get_instance(instanz["id"])
+        runtime.start_instance(inst)
+        runtime.stop_instance(inst)
+        runtime.start_instance(inst)  # Neuerstellung des Containers
+        assert len(fake_docker.images.builds) == 1
+        build = fake_docker.images.builds[0]
+        assert build["tag"] == "mc-dashboard-minecraft-opencl:java21"
+        assert build["pull"] is True
+
+    def test_dockerfile_installiert_loader(self):
+        text = runtime._GPU_DOCKERFILE.format(base="itzg/minecraft-server:java25", rev="1")
+        assert text.startswith("FROM itzg/minecraft-server:java25\n")
+        assert "ocl-icd-libopencl1" in text and "clinfo" in text
+        assert "libOpenCL.so" in text and "ldconfig" in text
+
+    def test_veraltetes_image_wird_neu_gebaut(self, fake_docker, instanz):
+        fake_docker.images._items["mc-dashboard-minecraft-opencl:java21"] = \
+            runtime_fake_image({"mc-dashboard.gpu-image-rev": "0"})
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert len(fake_docker.images.builds) == 1
+
+    def test_ohne_gpu_kein_build_und_basis_image(self, fake_docker, instanz):
+        runtime.start_instance(instanz)
+        assert fake_docker.images.builds == []
+        assert fake_docker.containers.run_kwargs["image"] == "itzg/minecraft-server:java21"
+
+    def test_build_fehler_kein_start(self, fake_docker, instanz):
+        fake_docker.images.build_error = RuntimeError("network down")
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        with pytest.raises(RuntimeError, match=r"OpenCL-Image.*nicht gebaut"):
+            runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert fake_docker.containers.run_kwargs is None
+
+
+def runtime_fake_image(labels):
+    from conftest import FakeImage
+    return FakeImage(labels)
 
 
 class TestGpuSettings:

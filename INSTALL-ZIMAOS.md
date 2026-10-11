@@ -246,28 +246,44 @@ sudo docker exec <container> printenv NVIDIA_VISIBLE_DEVICES NVIDIA_DRIVER_CAPAB
 zeigt `HostConfig.Runtime` den Docker-Standard und die `NVIDIA_*`-Variablen
 fehlen.
 
-### 4. C2ME / OpenCL: was GPU-Freigabe allein nicht liefert
+### 4. C2ME / OpenCL
 
-`nvidia-smi` beweist nur, dass Treiber (`utility`) durchgereicht werden. Für
-OpenCL im Container braucht es zusätzlich:
+`nvidia-smi` beweist nur, dass der Treiber (`utility`) durchgereicht wird.
+Für das OpenCL-Zusatzmodul von C2ME gilt zusätzlich:
 
 | Voraussetzung | Stand |
 |---|---|
-| Capability `compute` (liefert `libnvidia-opencl.so.1` und die ICD-Datei `/etc/OpenCL/vendors/nvidia.icd` vom Host-Treiber) | wird vom Dashboard gesetzt |
-| OpenCL-ICD-Loader `libOpenCL.so.1` (Ubuntu-Paket `ocl-icd-libopencl1`) im Image | **nicht geprüft**, im itzg-Image voraussichtlich nicht enthalten; das Toolkit liefert den Loader nicht mit |
-| Von C2ME geladene Java-OpenCL-Anbindung und passende MC-/C2ME-Version | **nicht geprüft** |
+| Java 25 (das Modul ist mit class file version 69 kompiliert; Java 21 meldet `UnsupportedClassVersionError`) | pro Instanz unter Einstellungen → „JVM & RAM" → Java = 25 einstellen |
+| `libnvidia-opencl.so.1` + `/etc/OpenCL/vendors/nvidia.icd` vom Host-Treiber | liefert die NVIDIA-Runtime (Capability `compute`, wird vom Dashboard gesetzt) |
+| OpenCL-ICD-Loader `libOpenCL.so.1` / `libOpenCL.so` (LWJGL) | fehlt im itzg-Image (Ubuntu 24.04, geprüft: kein OpenCL-Loader). Das Dashboard baut dafür bei der ersten GPU-Instanz automatisch ein abgeleitetes Image |
 
-In dieser Entwicklungsumgebung stand weder Docker-Daemon noch GPU zur
-Verfügung; die Aussagen zum Image-Inhalt sind deshalb nicht am Image
-verifiziert. Prüfung auf dem Host:
+**GPU-Image:** Bei aktivierter GPU-Option startet der Container nicht mit
+`itzg/minecraft-server:<java-tag>`, sondern mit `mc-dashboard-minecraft-opencl:<java-tag>`.
+Das Dashboard baut es beim ersten Start einmalig über den Docker-Socket
+(`FROM itzg/minecraft-server:<java-tag>` + `apt-get install ocl-icd-libopencl1 clinfo`,
+Symlink `libOpenCL.so` → `libOpenCL.so.1`, `ldconfig`, Fallback-Eintrag
+`/etc/OpenCL/vendors/nvidia.icd`). Der **Docker-Host braucht dafür beim ersten
+Start Internetzugang**; der Bau dauert etwa eine Minute. Das Image liegt
+danach im Image-Speicher des Hosts und bleibt über Stoppen, Starten und
+Neuerstellen der Instanz erhalten; Welten und Instanzdaten liegen im
+Volume und werden nicht angefasst. Ohne GPU-Option ändert sich nichts (Standard-Image).
+Schlägt der Bau fehl, startet die Instanz nicht und das Dashboard meldet den Grund.
+
+Prüfung im laufenden Minecraft-Container:
 
 ```bash
-sudo docker exec <container> sh -c 'ls /etc/OpenCL/vendors/; ldconfig -p | grep -i -E "OpenCL|nvidia-opencl"'
+sudo docker exec <container> ldconfig -p | grep -i opencl     # libOpenCL.so + libOpenCL.so.1
+sudo docker exec <container> ls /etc/OpenCL/vendors/            # nvidia.icd
+sudo docker exec <container> clinfo -l                          # Platform: NVIDIA CUDA / Device: NVIDIA GeForce GTX 1060 6GB
 ```
 
-Erwartet: `nvidia.icd`, `libnvidia-opencl.so.1` **und** `libOpenCL.so.1`. Fehlt
-`libOpenCL.so.1`, muss ein eigenes Image mit `ocl-icd-libopencl1` verwendet
-werden (Dashboard-Image-Wahl für Instanzen gibt es derzeit nicht). Ob C2ME mit
-dieser Konfiguration tatsächlich OpenCL nutzt, zeigt nur das Server-Log beim
-Start (nach „OpenCL"/„C2ME" suchen); eine Kompatibilität wird hier nicht
-zugesichert.
+Zeigt `clinfo -l` „Number of platforms 0", kommt `libnvidia-opencl.so.1` vom
+Host nicht im Container an: Capability (`compute`), Treiber und
+Container-Toolkit prüfen (`docker inspect <container> --format '{{.Config.Env}}'`).
+
+**Was geprüft ist und was nicht:** Geprüft sind der Image-Bau, dass
+`libOpenCL.so.1`/`libOpenCL.so` im abgeleiteten Image liegen und im
+ldconfig-Cache stehen und dass `clinfo` den Loader laden kann. Dass die
+GTX 1060 als OpenCL-Gerät erscheint und C2ME-OpenCL damit funktioniert, ist
+**nicht** in der Entwicklungsumgebung (keine GPU) geprüft, sondern nur auf
+deinem Host mit den Befehlen oben prüfbar.
