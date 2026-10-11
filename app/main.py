@@ -49,6 +49,7 @@ from . import (
     versionchange,
     worlds,
 )
+from . import chunky as chunky_mod
 from . import datapacks as datapacks_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
@@ -428,6 +429,17 @@ class GameruleSetRequest(BaseModel):
     """Gamerule setzen (name aus kuratierter Liste, value bool/int)."""
     name: str = Field(min_length=1, max_length=64)
     value: bool | int | str | None = None
+
+
+class ChunkyRequest(BaseModel):
+    """Chunky-Pregeneration: Aktion plus optionale Einstellungen."""
+    action: str = Field(pattern=r"^(start|pause|continue|cancel|progress|apply|worldborder)$")
+    world: str | None = Field(default=None, max_length=64)
+    center_x: int | str | None = None
+    center_z: int | str | None = None
+    radius: int | str | None = None
+    shape: str | None = Field(default=None, max_length=16)
+    pattern: str | None = Field(default=None, max_length=16)
 
 
 class TimeWeatherRequest(BaseModel):
@@ -2558,6 +2570,42 @@ async def instance_time_weather(instance_id: str, req: TimeWeatherRequest):
     instances.get_instance(instance_id)
     return await asyncio.to_thread(gamerules_mod.set_time_weather,
                                    instance_id, req.time, req.weather)
+
+
+# ---------------------------------------------------------------------------
+# Chunky: Pregeneration per RCON (nur wenn Chunky installiert ist)
+# ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/chunky")
+async def instance_chunky_get(instance_id: str):
+    """Chunky erkannt? Bei laufendem Server zusätzlich der Fortschritt."""
+    instance = instances.get_instance(instance_id)
+    info = await asyncio.to_thread(chunky_mod.find_chunky, instance_id)
+    info["running"] = await asyncio.to_thread(runtime.is_running, instance)
+    info["progress"] = None
+    if info["installed"] and info["running"]:
+        try:
+            out = await _rcon_run(instance, "chunky progress")
+            info["progress"] = chunky_mod.parse_progress(out)
+        except HTTPException as exc:
+            info["progress_error"] = exc.detail
+    return info
+
+
+@api.post("/instances/{instance_id}/chunky")
+async def instance_chunky_post(instance_id: str, req: ChunkyRequest):
+    """Chunky-Einstellungen setzen bzw. start/pause/continue/cancel/progress."""
+    instance = instances.get_instance(instance_id)
+    cmds = chunky_mod.build_commands(req.model_dump())
+    if not chunky_mod.find_chunky(instance_id)["installed"]:
+        raise HTTPException(status_code=409,
+                            detail="Chunky ist auf dieser Instanz nicht installiert")
+    outputs = await _rcon_many(instance, [*cmds, "chunky progress"])
+    logger.info("Chunky %s: %s", instance_id, "; ".join(cmds))
+    return {"commands": cmds,
+            "output": "\n".join(f"> {c}\n{chunky_mod.clean(o)}".rstrip()
+                                for c, o in zip(cmds, outputs, strict=False)),
+            "progress": chunky_mod.parse_progress(outputs[-1])}
 
 
 # ---------------------------------------------------------------------------

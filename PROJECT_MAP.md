@@ -23,7 +23,7 @@ Checkliste, Dashboard-Schnellstart).
     logout, me, setup-available, users-CRUD (Admin), change-password
     (eigene Session); neue Instanz-Routen: /files (Datei-Browser:
     Liste/content GET+PUT/download/upload/mkdir/rename/DELETE),
-    /datapacks (Liste/upload/enable/disable/DELETE), /gamerules
+    /datapacks (Liste/upload/enable/disable/DELETE), /chunky (GET Status+Fortschritt, POST Aktion), /gamerules
     (GET/POST), /players/playtime (Spielzeit-Leaderboard),
     /players/{name}/inventory (GET Inventar, POST set_count/clear/move/give
     mit Fingerabdruck-Prüfung → 409), /items (Namen per ids= oder Suche q=),
@@ -271,6 +271,10 @@ Checkliste, Dashboard-Schnellstart).
     Hinweis, dass es beim nächsten Start lädt), disable + delete bei
     laufender Instanz RCON-ZUERST (fail-closed: RCON-Fehler = 503 und
     NICHTS an Dateien ändern), delete ohne RCON nur gestoppt
+  - chunky.py – Chunky-Tab: erkennt Chunky-.jar in mods/ oder plugins/, baut
+    validierte 'chunky …'-Kommandos (Welt, Mittelpunkt, Radius, Form, Muster;
+    start/pause/continue/cancel/progress/worldborder) und parst 'chunky
+    progress' (Prozent, Chunks, ETA, Rate). Tests: tests/test_chunky.py.
   - gamerules.py – Gamerule-Quick-Editor: kuratierte Vanilla-1.21.x-Liste
     (~48 Regeln, bool/int mit Default + Bereich; pvp/showCoordinates
     bewusst weggelassen — Bedrock-only), GET = RCON 'gamerule' (Listen-
