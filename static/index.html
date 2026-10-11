@@ -833,6 +833,28 @@
             <div id="hib-error" class="err hidden"></div>
           </div>
 
+          <!-- NVIDIA-GPU-Freigabe (Container-Runtime nvidia, je Instanz) -->
+          <div class="upload-box">
+            <h3>NVIDIA-GPU <span class="muted small">(wirksam beim nächsten Stoppen und Starten)</span></h3>
+            <div class="row">
+              <label><input id="gpu-enabled" type="checkbox"> NVIDIA-GPU aktivieren</label>
+              <label class="muted small" for="gpu-id">GPU-ID</label>
+              <input id="gpu-id" type="text" class="sched-num" value="0" maxlength="100"
+                     placeholder="0" style="width: 6rem;">
+            </div>
+            <p class="muted small">Gibt dem Container dieser Instanz die Docker-Runtime
+              <code>nvidia</code> mit der angegebenen GPU (Index, z. B. <code>0</code>, oder
+              UUID) frei. Änderungen gelten erst, wenn die Instanz gestoppt und wieder
+              gestartet wird &ndash; ein laufender Server wird nicht automatisch neu
+              gestartet. Fehlt die Runtime, schlägt der Start mit einer Meldung fehl
+              (kein stiller Start ohne GPU). Voraussetzungen und Prüfung:
+              INSTALL-ZIMAOS.md, Abschnitt &bdquo;NVIDIA-GPU&ldquo;.</p>
+            <div class="row" style="margin-top: 0.5rem;">
+              <button id="gpu-save" class="btn primary admin-only">Speichern</button>
+            </div>
+            <div id="gpu-error" class="err hidden"></div>
+          </div>
+
           <!-- Zeitplan (Auto-Start, geplanter Neustart, Backups, Update-Check) -->
           <div class="upload-box">
             <h3>Zeitplan <span class="muted small">(Container-Lokalzeit, geprüft alle 30 s)</span></h3>

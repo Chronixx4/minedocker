@@ -379,6 +379,35 @@ def hibernate_settings(instance: dict) -> dict:
         return {"mode": "off", "minutes": HIBERNATE_MINUTES[2]}
 
 
+# NVIDIA-GPU-Freigabe (optional, je Instanz): setzt beim Containerstart
+# runtime=nvidia + NVIDIA_VISIBLE_DEVICES (siehe runtime.start_instance).
+GPU_DEFAULT_ID = "0"
+_GPU_ID_RE = re.compile(r"^(\d{1,2}(,\d{1,2}){0,15}|GPU-[0-9A-Fa-f-]{8,40}|MIG-[0-9A-Za-z/-]{8,80})$")
+
+
+def _validate_gpu(data: object) -> dict:
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="GPU: Objekt erwartet")
+    enabled = data.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="GPU: 'enabled' muss true/false sein")
+    gpu_id = str(data.get("id", GPU_DEFAULT_ID) or GPU_DEFAULT_ID).strip().replace(" ", "")
+    if not _GPU_ID_RE.match(gpu_id):
+        raise HTTPException(
+            status_code=400,
+            detail="GPU-ID: Index (z. B. 0), Liste (0,1) oder UUID (GPU-…) erwartet")
+    return {"enabled": enabled, "id": gpu_id}
+
+
+def gpu_settings(instance: dict) -> dict:
+    """GPU-Freigabe einer Instanz mit Standardwerten (Bestandsinstanzen: aus)."""
+    raw = instance.get("gpu")
+    try:
+        return _validate_gpu(raw) if raw else {"enabled": False, "id": GPU_DEFAULT_ID}
+    except HTTPException:
+        return {"enabled": False, "id": GPU_DEFAULT_ID}
+
+
 def is_paused(instance_id: str) -> bool:
     """True, wenn itzg den Server gerade schlafen gelegt hat (Datei .paused).
     Nur bei laufendem Container aussagekräftig: nach einem Stop im
@@ -391,7 +420,8 @@ def is_paused(instance_id: str) -> bool:
 
 def update_settings(instance_id: str, *, name=None, memory=None,
                     jvm_opts=None, use_aikar=None,
-                    tags=None, port=None, java=None, hibernate=None) -> dict:
+                    tags=None, port=None, java=None, hibernate=None,
+                    gpu=None) -> dict:
     """Ändert Instanz-Einstellungen (Name, RAM, JVM-Flags, Java, Tags, Port).
     Nur übergebene Felder werden geändert; JVM-/Port-Änderungen wirken
     beim nächsten (Neu-)Start. Port nur bei gestoppter Instanz änderbar."""
@@ -426,6 +456,9 @@ def update_settings(instance_id: str, *, name=None, memory=None,
     if hibernate is not None:
         instance["hibernate"] = _validate_hibernate(hibernate)
         changed.append("hibernate")
+    if gpu is not None:
+        instance["gpu"] = _validate_gpu(gpu)
+        changed.append("gpu")
     if tags is not None:
         instance["tags"] = _validate_tags(tags)
         changed.append("tags")
@@ -629,6 +662,7 @@ def clone_instance(source_id: str, name: str | None = None) -> dict:
             "memory": source.get("memory"),
             "jvm_opts": source.get("jvm_opts"),
             "use_aikar": source.get("use_aikar", False),
+            "gpu": source.get("gpu"),
             "schedule": source.get("schedule"),
             "tags": list(source.get("tags") or []),
             "created_at": int(time.time()),

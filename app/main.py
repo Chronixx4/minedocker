@@ -331,6 +331,12 @@ class VersionChangeRequest(VersionTargetRequest):
     allow_downgrade: bool = False
 
 
+class GpuModel(BaseModel):
+    enabled: bool = False
+    # Index ("0"), Liste ("0,1") oder UUID ("GPU-…"); Feinprüfung in instances.py
+    id: str = Field(default="0", max_length=100)
+
+
 class UpdateInstanceRequest(BaseModel):
     """Instanz-Einstellungen ändern (Name, RAM, JVM-Flags, Tags, Port, Zeitplan)."""
     name: str | None = Field(default=None, min_length=1, max_length=64)
@@ -345,6 +351,8 @@ class UpdateInstanceRequest(BaseModel):
     schedule: ScheduleModel | None = None
     # Schlafmodus: {"mode": "off"|"pause"|"stop", "minutes": 5-1440}
     hibernate: HibernateModel | None = None
+    # Optionale NVIDIA-GPU-Freigabe: {"enabled": bool, "id": "0"}
+    gpu: GpuModel | None = None
 
 
 class AuthSetupRequest(BaseModel):
@@ -1394,7 +1402,7 @@ async def instance_update(instance_id: str, req: UpdateInstanceRequest):
     if not body and schedule is None:
         raise HTTPException(status_code=400,
                             detail="Keine Änderungen übergeben "
-                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule/hibernate)")
+                                   "(name/memory/jvm_opts/use_aikar/java/tags/port/schedule/hibernate/gpu)")
     result = {"instance": instances.get_instance(instance_id), "changed": []}
     if schedule is not None:
         result = instances.update_schedule(
