@@ -117,6 +117,12 @@ class TestStartStop:
         assert bind == {"bind": "/data", "mode": "rw"}
         assert next(iter(volumes)).endswith(instanz["id"])
 
+    def test_start_ohne_gpu_setzt_keine_nvidia_optionen(self, fake_docker, instanz):
+        runtime.start_instance(instanz)
+        kwargs = fake_docker.containers.run_kwargs
+        assert "runtime" not in kwargs
+        assert not any(e.startswith("NVIDIA_") for e in kwargs["environment"])
+
     def test_start_laeuft_bereits(self, fake_docker, instanz):
         runtime.start_instance(instanz)
         with pytest.raises(RuntimeError, match="läuft bereits"):
@@ -286,3 +292,114 @@ class TestRamNachtraeglich:
         assert kwargs["mem_limit"] == 4 * 1024 ** 3  # 3G Heap + 1G Headroom
         env = dict(item.split("=", 1) for item in kwargs["environment"])
         assert env["MEMORY"] == "3G"
+
+
+class TestGpu:
+    def test_start_mit_gpu(self, fake_docker, instanz):
+        ohne = runtime._env(instanz)
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        inst = instances.get_instance(instanz["id"])
+        runtime.start_instance(inst)
+        kwargs = fake_docker.containers.run_kwargs
+        assert kwargs["runtime"] == "nvidia"
+        env = kwargs["environment"]
+        assert "NVIDIA_VISIBLE_DEVICES=0" in env
+        assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility" in env
+        # Bestehende Einstellungen bleiben erhalten
+        assert env[:len(ohne)] == ohne
+        assert kwargs["ports"] == {"25565/tcp": inst["port"],
+                                   "25575/tcp": ("127.0.0.1", inst["rcon_port"])}
+        assert kwargs["volumes"][next(iter(kwargs["volumes"]))] == {"bind": "/data", "mode": "rw"}
+        assert kwargs["security_opt"] == ["no-new-privileges:true"]
+        assert "privileged" not in kwargs
+
+    def test_gpu_id_wird_uebernommen(self, fake_docker, instanz):
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "1"})
+        runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert "NVIDIA_VISIBLE_DEVICES=1" in fake_docker.containers.run_kwargs["environment"]
+
+    def test_deaktiviert_mit_gespeicherter_id_setzt_nichts(self, fake_docker, instanz):
+        instances.update_settings(instanz["id"], gpu={"enabled": False, "id": "1"})
+        runtime.start_instance(instances.get_instance(instanz["id"]))
+        kwargs = fake_docker.containers.run_kwargs
+        assert "runtime" not in kwargs
+        assert not any(e.startswith("NVIDIA_") for e in kwargs["environment"])
+
+    def test_fehlende_runtime_klare_meldung(self, fake_docker, instanz):
+        fake_docker.info = lambda: {"Runtimes": {"runc": {}}}
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        with pytest.raises(RuntimeError, match="Runtime „nvidia“"):
+            runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert fake_docker.containers.run_kwargs is None  # kein Start ohne GPU
+
+    def test_runtime_vorhanden_startet(self, fake_docker, instanz):
+        fake_docker.info = lambda: {"Runtimes": {"runc": {}, "nvidia": {}}}
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert fake_docker.containers.run_kwargs["runtime"] == "nvidia"
+
+    def test_gpu_start_fehler_wird_uebersetzt(self, fake_docker, instanz):
+        def boom(**kwargs):
+            raise RuntimeError("Unknown runtime specified nvidia")
+        fake_docker.containers.run = boom
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        with pytest.raises(RuntimeError, match=r"nvidia.*fehlt"):
+            runtime.start_instance(instances.get_instance(instanz["id"]))
+
+    def test_gpu_start_anderer_fehler_kein_stiller_fallback(self, fake_docker, instanz):
+        calls = []
+
+        def boom(**kwargs):
+            calls.append(kwargs)
+            raise RuntimeError("nvidia-container-cli: device error")
+        fake_docker.containers.run = boom
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        with pytest.raises(RuntimeError, match="nicht ohne GPU gestartet"):
+            runtime.start_instance(instances.get_instance(instanz["id"]))
+        assert len(calls) == 1  # kein zweiter Versuch ohne GPU
+
+
+class TestGpuSettings:
+    def test_standard_ist_aus(self, instanz):
+        assert instances.gpu_settings(instanz) == {"enabled": False, "id": "0"}
+        assert "gpu" not in instanz
+
+    def test_bestandsinstanz_ohne_feld(self):
+        assert instances.gpu_settings({"id": "abc"}) == {"enabled": False, "id": "0"}
+        assert instances.gpu_settings({"gpu": "kaputt"}) == {"enabled": False, "id": "0"}
+
+    def test_speichern_dauerhaft(self, instanz):
+        res = instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "1"})
+        assert res["changed"] == ["gpu"]
+        assert instances.get_instance(instanz["id"])["gpu"] == {"enabled": True, "id": "1"}
+
+    def test_leere_id_wird_standard(self, instanz):
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": ""})
+        assert instances.get_instance(instanz["id"])["gpu"]["id"] == "0"
+
+    @pytest.mark.parametrize("bad", ["a;b", "0 FOO=1", "-1", "../x", "0,", "1\nX=1"])
+    def test_ungueltige_id_abgelehnt(self, instanz, bad):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc:
+            instances.update_settings(instanz["id"], gpu={"enabled": True, "id": bad})
+        assert exc.value.status_code == 400
+
+    @pytest.mark.parametrize("ok", ["0", "0,1", "GPU-1a2b3c4d-1111-2222-3333-444455556666"])
+    def test_gueltige_ids(self, instanz, ok):
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": ok})
+        assert instances.get_instance(instanz["id"])["gpu"]["id"] == ok
+
+    def test_klon_uebernimmt_gpu(self, instanz):
+        instances.update_settings(instanz["id"], gpu={"enabled": True, "id": "0"})
+        clone = instances.clone_instance(instanz["id"], "Run-Klon")
+        assert instances.gpu_settings(clone) == {"enabled": True, "id": "0"}
+
+    def test_api_patch_und_detail(self, client, instanz):
+        r = client.patch(f"/api/instances/{instanz['id']}",
+                         json={"gpu": {"enabled": True, "id": "0"}})
+        assert r.status_code == 200
+        assert r.json()["gpu"] == {"enabled": True, "id": "0"}
+        assert instances.get_instance(instanz["id"])["gpu"]["enabled"] is True
+        bad = client.patch(f"/api/instances/{instanz['id']}",
+                           json={"gpu": {"enabled": True, "id": "a;b"}})
+        assert bad.status_code == 400

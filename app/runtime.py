@@ -348,9 +348,39 @@ _LOG_CONFIG = {
 _NET_NAME = "mc-dashboard-net"
 
 
+def _check_nvidia_runtime(client) -> None:
+    """Bricht mit verständlicher Meldung ab, wenn der Docker-Daemon keine
+    Runtime „nvidia“ kennt. Ist die Abfrage selbst nicht möglich, entscheidet
+    der Containerstart (Fehler wird dort übersetzt)."""
+    try:
+        runtimes = (client.info() or {}).get("Runtimes")
+    except Exception:
+        return
+    if isinstance(runtimes, dict) and "nvidia" not in runtimes:
+        raise RuntimeError(
+            "NVIDIA-GPU ist aktiviert, aber Docker kennt keine Runtime „nvidia“. "
+            "Auf dem Host NVIDIA-Treiber und Container-Toolkit installieren und "
+            "prüfen: docker info | grep -i runtimes — oder die GPU-Option dieser "
+            "Instanz deaktivieren (siehe INSTALL-ZIMAOS.md, Abschnitt NVIDIA-GPU).")
+
+
+def _gpu_start_error(exc: Exception, gpu_id: str) -> str:
+    low = str(exc).lower()
+    if "unknown runtime" in low or "runtime \"nvidia\"" in low or "runtime nvidia" in low:
+        return ("NVIDIA-GPU ist aktiviert, aber die Docker-Runtime „nvidia“ fehlt "
+                f"oder ist nicht nutzbar: {exc}")
+    return (f"Container-Start mit NVIDIA-GPU (ID {gpu_id}) fehlgeschlagen: {exc}. "
+            "Der Server wurde bewusst nicht ohne GPU gestartet. GPU-ID und Treiber "
+            "prüfen (nvidia-smi auf dem Host) oder die GPU-Option deaktivieren.")
+
+
 def start_instance(instance: dict) -> None:
     """Startet (synchron) den Container einer Instanz; wirft RuntimeError bei Fehlern."""
     client = _get_client()
+    from . import instances  # lazy, vermeidet Import-Zirkel
+    gpu = instances.gpu_settings(instance)
+    if gpu["enabled"]:
+        _check_nvidia_runtime(client)
     name = container_name(instance["id"])
     existing = _get_container(client, instance)
     if existing is not None:
@@ -375,18 +405,18 @@ def start_instance(instance: dict) -> None:
     if not host_dir.name:
         raise RuntimeError("Instanz-Host-Pfad ergibt kein gültiges Verzeichnis")
     network = _network_of_dashboard(client)
-    from . import instances  # lazy, vermeidet Import-Zirkel
     hib_mode = instances.hibernate_settings(instance)["mode"]
     # Liegengebliebene Schlaf-Markierung (Stop im Schlafzustand) entfernen
     try:
         (instances.instance_dir(instance["id"]) / instances.PAUSED_FLAG).unlink(missing_ok=True)
     except OSError:
         pass
-    kwargs = {
+    env = _env(instance)
+    kwargs: dict = {
         "image": image_for(instance),
         "name": name,
         "detach": True,
-        "environment": _env(instance),
+        "environment": env,
         "ports": ports,
         "volumes": {str(host_dir): {"bind": "/data", "mode": "rw"}},
         # Schlafmodus "stop" beendet den Server mit Exit-Code 0: dann darf
@@ -406,9 +436,16 @@ def start_instance(instance: dict) -> None:
     }
     if network:
         kwargs["network"] = network
+    if gpu["enabled"]:
+        # Nur für diesen Container, kein globaler Runtime-Wechsel, kein privileged
+        kwargs["runtime"] = "nvidia"
+        env += [f"NVIDIA_VISIBLE_DEVICES={gpu['id']}",
+                "NVIDIA_DRIVER_CAPABILITIES=compute,utility"]
     try:
         client.containers.run(**kwargs)
     except Exception as exc:
+        if gpu["enabled"]:
+            raise RuntimeError(_gpu_start_error(exc, gpu["id"])) from exc
         raise RuntimeError(f"Container-Start fehlgeschlagen: {exc}") from exc
     logger.info("Instanz-Container gestartet: %s (Port %s)", name, instance["port"])
 

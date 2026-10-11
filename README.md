@@ -229,7 +229,7 @@ Eigenheiten).
 | Datei | Inhalt |
 |---|---|
 | [SERVER-SETUP.md](SERVER-SETUP.md) | Ausführlicher Setup-Guide: Hardware-Planung, Modpack-Server-Packs, Java-Matrix, Netzwerk/Portforwarding, Backups, JVM-Flags, ZimaOS (§11) |
-| [INSTALL-ZIMAOS.md](INSTALL-ZIMAOS.md) | ZimaOS-App-Import mit fertigen Images |
+| [INSTALL-ZIMAOS.md](INSTALL-ZIMAOS.md) | ZimaOS-App-Import mit fertigen Images; optionale NVIDIA-GPU je Instanz (inkl. nvidia-smi-/OpenCL-Prüfung) |
 | [PROJECT_MAP.md](PROJECT_MAP.md) | Interne Projektlandkarte (Struktur, alle Endpunkte, Verhalten) |
 
 ## Tech-Stack

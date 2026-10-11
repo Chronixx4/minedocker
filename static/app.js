@@ -2950,6 +2950,7 @@
       $("#jvm-aikar").checked = !!cached.use_aikar;
       $("#jvm-java").value = cached.java || "auto";
       loadHibernate(cached);
+      loadGpu(cached);
       setRamFields(cached.memory);
       state.detailMemory = (cached.memory || "2G").toUpperCase();
       loadSchedule(cached);
@@ -3007,6 +3008,7 @@
       $("#jvm-aikar").checked = !!detail.use_aikar;
       $("#jvm-java").value = detail.java || "auto";
       loadHibernate(detail);
+      loadGpu(detail);
       setRamFields(detail.memory);
       state.detailMemory = (detail.memory || "2G").toUpperCase();
       show($("#jvm-error"), false);
@@ -5767,6 +5769,39 @@
     }
   });
 
+  /* ---------- NVIDIA-GPU je Instanz ---------- */
+  function loadGpu(inst) {
+    const gpu = inst.gpu || {};
+    $("#gpu-enabled").checked = !!gpu.enabled;
+    $("#gpu-id").value = gpu.id || "0";
+    show($("#gpu-error"), false);
+  }
+
+  $("#gpu-save").addEventListener("click", async () => {
+    const btn = $("#gpu-save");
+    btn.disabled = true;
+    show($("#gpu-error"), false);
+    const gpu = { enabled: $("#gpu-enabled").checked, id: $("#gpu-id").value.trim() || "0" };
+    try {
+      const inst = await api(`/api/instances/${state.detailId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gpu }),
+      });
+      loadGpu(inst);
+      const cached = (state.instList || []).find((i) => i.id === state.detailId);
+      if (cached) cached.gpu = inst.gpu;
+      toast(state.detailRunning
+        ? "GPU-Einstellung gespeichert, wirksam nach Stoppen und erneutem Starten."
+        : "GPU-Einstellung gespeichert, wirksam beim nächsten Start.", "success");
+    } catch (e) {
+      setText($("#gpu-error"), `Speichern fehlgeschlagen: ${e.message}`);
+      show($("#gpu-error"), true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   /* ---------- Zeitplan je Instanz (Scheduler) ---------- */
   function schedInt(value, lo, hi, fallback) {
     const num = parseInt(value, 10);
@@ -8352,6 +8387,7 @@
       ["#cfg-toggle", "einstellungen"],   // server.properties
       ["#jvm-save", "einstellungen"],     // JVM & RAM
       ["#hib-save", "einstellungen"],     // Schlafmodus
+      ["#gpu-save", "einstellungen"],     // NVIDIA-GPU
       ["#ver-check", "einstellungen"],    // Version wechseln
       ["#tags-save", "einstellungen"],    // Tags & Port
       ["#inst-delete-btn", "einstellungen"], // Server löschen

@@ -186,3 +186,88 @@ Die Release-Notes nennen immer das passende Image-Tag
   sonst bleibt der Container auf der falschen Bridge).
 - Restore-Befehle: `SERVER-SETUP.md` §5 (hier `1.tgz`/`latest.tgz` aus
   `/DATA/AppData/mc-dashboard/backups` verwenden).
+
+## Optional: NVIDIA-GPU für einzelne Minecraft-Instanzen
+
+Das Dashboard kann einem einzelnen Minecraft-Container eine NVIDIA-GPU
+freigeben (Einstellungen der Instanz → „NVIDIA-GPU"). Gedacht ist das z. B.
+für das OpenCL-Zusatzmodul von C2ME. Die Freigabe gilt **pro Instanz**: das
+Dashboard startet den Container mit `runtime="nvidia"`,
+`NVIDIA_VISIBLE_DEVICES=<GPU-ID>` und `NVIDIA_DRIVER_CAPABILITIES=compute,utility`.
+Es wird weder die Docker-Standard-Runtime geändert noch `privileged`
+verwendet. Eine GPU-Freigabe am Dashboard-Service in der Compose-Datei ist
+**nicht** nötig und hilft den Instanzen auch nicht.
+
+### 1. Voraussetzungen auf dem Host (einmalig, per SSH)
+
+```bash
+nvidia-smi                                  # Treiber läuft, GPU sichtbar
+sudo docker info | grep -i runtimes         # Liste muss "nvidia" enthalten
+```
+
+Fehlt `nvidia` in der Runtime-Liste, ist auf ZimaOS der NVIDIA-Treiber bzw.
+das Container-Toolkit nicht eingerichtet (in ZimaOS über den
+NVIDIA-Treiber-Eintrag im App Store / die ZimaOS-Hardware-Einstellungen).
+Ohne die Runtime startet eine Instanz mit aktivierter GPU **nicht** und das
+Dashboard meldet das (es wird nie stillschweigend ohne GPU gestartet).
+
+Test mit dem Minecraft-Image, unabhängig vom Dashboard:
+
+```bash
+sudo docker run --rm --runtime=nvidia \
+  -e NVIDIA_VISIBLE_DEVICES=0 \
+  -e NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+  --entrypoint nvidia-smi itzg/minecraft-server:java21
+```
+
+### 2. Im Dashboard aktivieren
+
+1. Instanz öffnen → Reiter „Einstellungen" → Kasten „NVIDIA-GPU".
+2. „NVIDIA-GPU aktivieren" anhaken, GPU-ID eintragen (Standard `0`; Index,
+   Liste wie `0,1` oder UUID `GPU-…`; `nvidia-smi -L` zeigt sie), speichern.
+3. Die Änderung wirkt erst nach **Stoppen und erneutem Starten** der Instanz.
+   Laufende Server werden nicht automatisch neu gestartet.
+
+Standard ist „aus"; bestehende Instanzen ohne gespeicherte GPU-Einstellung
+starten unverändert ohne GPU. Beim Klonen einer Instanz wird die Einstellung
+übernommen.
+
+### 3. Prüfung im echten Minecraft-Container
+
+Nach dem Start der Instanz (Container-Name: `docker ps --filter label=mc-dashboard.managed=true`):
+
+```bash
+sudo docker exec <container> nvidia-smi
+sudo docker inspect <container> --format '{{.HostConfig.Runtime}}'   # → nvidia
+sudo docker exec <container> printenv NVIDIA_VISIBLE_DEVICES NVIDIA_DRIVER_CAPABILITIES
+```
+
+`nvidia-smi` im Container muss die GTX 1060 anzeigen. Ohne aktivierte Option
+zeigt `HostConfig.Runtime` den Docker-Standard und die `NVIDIA_*`-Variablen
+fehlen.
+
+### 4. C2ME / OpenCL: was GPU-Freigabe allein nicht liefert
+
+`nvidia-smi` beweist nur, dass Treiber (`utility`) durchgereicht werden. Für
+OpenCL im Container braucht es zusätzlich:
+
+| Voraussetzung | Stand |
+|---|---|
+| Capability `compute` (liefert `libnvidia-opencl.so.1` und die ICD-Datei `/etc/OpenCL/vendors/nvidia.icd` vom Host-Treiber) | wird vom Dashboard gesetzt |
+| OpenCL-ICD-Loader `libOpenCL.so.1` (Ubuntu-Paket `ocl-icd-libopencl1`) im Image | **nicht geprüft**, im itzg-Image voraussichtlich nicht enthalten; das Toolkit liefert den Loader nicht mit |
+| Von C2ME geladene Java-OpenCL-Anbindung und passende MC-/C2ME-Version | **nicht geprüft** |
+
+In dieser Entwicklungsumgebung stand weder Docker-Daemon noch GPU zur
+Verfügung; die Aussagen zum Image-Inhalt sind deshalb nicht am Image
+verifiziert. Prüfung auf dem Host:
+
+```bash
+sudo docker exec <container> sh -c 'ls /etc/OpenCL/vendors/; ldconfig -p | grep -i -E "OpenCL|nvidia-opencl"'
+```
+
+Erwartet: `nvidia.icd`, `libnvidia-opencl.so.1` **und** `libOpenCL.so.1`. Fehlt
+`libOpenCL.so.1`, muss ein eigenes Image mit `ocl-icd-libopencl1` verwendet
+werden (Dashboard-Image-Wahl für Instanzen gibt es derzeit nicht). Ob C2ME mit
+dieser Konfiguration tatsächlich OpenCL nutzt, zeigt nur das Server-Log beim
+Start (nach „OpenCL"/„C2ME" suchen); eine Kompatibilität wird hier nicht
+zugesichert.
