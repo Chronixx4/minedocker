@@ -6524,6 +6524,109 @@
   }
   loadConsoleMode();
 
+  /* ---------- Chunky (Pregeneration per RCON) ---------- */
+  const chunky = { timer: null, busy: false };
+
+  function chunkyStop() {
+    clearInterval(chunky.timer);
+    chunky.timer = null;
+  }
+
+  function chunkyEnter() {
+    chunkyStop();
+    chunkyLoad();
+    chunky.timer = setInterval(() => {
+      if (state.wsTab !== "chunky" || !state.detailId || document.hidden) return;
+      chunkyLoad(true);
+    }, 4000);
+  }
+
+  function chunkyRenderProgress(p) {
+    const fill = $("#chunky-bar-fill");
+    const text = $("#chunky-progress-text");
+    const pct = p && typeof p.percent === "number" ? Math.min(100, p.percent) : 0;
+    fill.style.width = `${pct}%`;
+    if (!p) { text.textContent = "Kein Fortschritt verfügbar."; return; }
+    if (p.state === "idle") { text.textContent = "Keine Pregeneration aktiv."; return; }
+    const parts = [p.state === "paused" ? "Pausiert" : "Läuft"];
+    if (p.world) parts.push(p.world);
+    if (typeof p.percent === "number") parts.push(`${p.percent.toFixed(2)} %`);
+    if (p.chunks != null) parts.push(`${p.chunks.toLocaleString("de-DE")} Chunks`);
+    if (p.rate != null) parts.push(`${p.rate} Chunks/s`);
+    if (p.eta) parts.push(`noch ${p.eta}`);
+    if (p.state === "unknown" && p.text) parts.push(p.text);
+    text.textContent = parts.join(" · ");
+  }
+
+  async function chunkyLoad(silent = false) {
+    const id = state.detailId;
+    if (!id) return;
+    if (!silent) authError("#chunky-error", "");
+    try {
+      const data = await api(`/api/instances/${id}/chunky`);
+      if (id !== state.detailId) return;
+      const missing = $("#chunky-missing");
+      show($("#chunky-main"), data.installed);
+      show(missing, !data.installed);
+      if (!data.installed) {
+        setText(missing, data.disabled
+          ? "Chunky ist installiert, aber deaktiviert — unter „Mods & Packs“ aktivieren und den Server neu starten."
+          : "Chunky ist auf diesem Server nicht installiert. Mod bzw. Plugin „Chunky“ unter „Mods & Packs › Hinzufügen“ installieren und den Server neu starten.");
+        return;
+      }
+      setText($("#chunky-hint"), `Steuert ${data.kind === "plugin" ? "das Plugin" : "den Mod"} ${data.jar} per RCON. Der Server muss laufen.`);
+      chunkyRenderProgress(data.running ? data.progress : null);
+      if (!data.running) setText($("#chunky-progress-text"), "Server läuft nicht — starten, um Chunky zu steuern.");
+      else if (data.progress_error && !silent) authError("#chunky-error", data.progress_error);
+    } catch (e) {
+      if (!silent) authError("#chunky-error", e.message);
+    }
+  }
+
+  async function chunkyAction(action, btn, confirmText) {
+    if (!state.detailId || chunky.busy) return;
+    if (confirmText && !window.confirm(confirmText)) return;
+    const body = { action };
+    if (action === "start" || action === "apply" || action === "worldborder") {
+      body.world = $("#chunky-world").value.trim() || null;
+      body.shape = $("#chunky-shape").value || null;
+      body.pattern = $("#chunky-pattern").value || null;
+      if (action !== "worldborder") {
+        body.center_x = $("#chunky-cx").value.trim() || null;
+        body.center_z = $("#chunky-cz").value.trim() || null;
+        body.radius = $("#chunky-radius").value.trim() || null;
+      }
+    }
+    chunky.busy = true;
+    if (btn) btn.disabled = true;
+    authError("#chunky-error", "");
+    try {
+      const data = await api(`/api/instances/${state.detailId}/chunky`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const out = $("#chunky-output");
+      out.textContent = data.output || "";
+      show(out, !!data.output);
+      chunkyRenderProgress(data.progress);
+    } catch (e) {
+      authError("#chunky-error", e.message);
+    } finally {
+      chunky.busy = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  $("#chunky-reload").addEventListener("click", () => chunkyLoad());
+  $("#chunky-start").addEventListener("click", (e) => chunkyAction("start", e.currentTarget));
+  $("#chunky-pause").addEventListener("click", (e) => chunkyAction("pause", e.currentTarget));
+  $("#chunky-continue").addEventListener("click", (e) => chunkyAction("continue", e.currentTarget));
+  $("#chunky-cancel").addEventListener("click", (e) =>
+    chunkyAction("cancel", e.currentTarget, "Pregeneration wirklich abbrechen?"));
+  $("#chunky-apply").addEventListener("click", (e) => chunkyAction("apply", e.currentTarget));
+  $("#chunky-border").addEventListener("click", (e) => chunkyAction("worldborder", e.currentTarget));
+
   /* ---------- Gamerule-Quick-Editor ---------- */
   state.grRules = [];
 
@@ -8154,11 +8257,13 @@
     ["zeitplan", "Zeitplan", "clock"],
     ["einstellungen", "Einstellungen", "anvil"],
     ["update", "Update", "arrow"],
+    ["chunky", "Chunky", "grid"], // ohne Zifferntaste (nur 1–9)
   ];
 
   const SLOT_ICONS = {
     compass: pixelIcon(["..ssss..", ".sYYYYs.", "sYyrryYs", "sYyrRyYs", "sYybbyYs", "sYybbyYs", ".sYYYYs.", "..ssss.."]),
     cmd: pixelIcon(["oooooooo", "oSSSSSSo", "oSwSSSSo", "oSSwSSSo", "oSwSSSSo", "oSSSwwSo", "oSSSSSSo", "oooooooo"]),
+    grid: pixelIcon(["gggg.ggg", "gGGg.gGg", "gGGg.ggg", "gggg....", "....dddd", "ggg.dDDd", "gGg.dDDd", "ggg.dddd"]),
     head: pixelIcon(["kkkkkkkk", "kkkkkkkk", "kttttttk", "twkttkwt", "tttttttt", "tttttttt", "ttRRRRtt", "tttttttt"]),
     book: pixelIcon([".RRRRRR.", ".RwwwwR.", ".RwkkwR.", ".RwwwwR.", ".RwkkwR.", ".RwwwwR.", ".RRRRRR.", "..YYYY.."]),
     globe: pixelIcon(["..bbbb..", ".bgbbgb.", "bggbbbgb", "bbggbbbb", "bbbgggbb", "bgbbggbb", ".bbbbgb.", "..bbbb.."]),
@@ -8270,6 +8375,7 @@
     if (key === "welt" && state.detailId && state.wsLoaded?.has("welt")) loadWorldInfo();
     else if (key !== "welt" && typeof resetMapFrame === "function") resetMapFrame();
     loadWsTabData(key);
+    if (key === "chunky") chunkyEnter(); else chunkyStop();
     pliveSync();
     // Spieler-Slot: Liste direkt laden, wenn der Server läuft
     if (key === "spieler" && state.detailId
@@ -8422,11 +8528,11 @@
       b.type = "button";
       b.className = "slot";
       b.dataset.wsTab = key;
-      b.title = `${label} (Taste ${i + 1})`;
+      b.title = i < 9 ? `${label} (Taste ${i + 1})` : label;
       b.setAttribute("aria-label", label);
       const num = document.createElement("span");
       num.className = "slot-num";
-      num.textContent = String(i + 1);
+      num.textContent = i < 9 ? String(i + 1) : "";
       const img = document.createElement("img");
       img.src = SLOT_ICONS[icon];
       img.alt = "";
@@ -8894,7 +9000,7 @@
       WS_TABS.forEach(([slot, label, icon], i) => {
         add("Bereiche", isCur ? label : `${inst.name} › ${label}`, {
           icon: SLOT_ICONS[icon],
-          hint: isCur ? `Taste ${i + 1}` : "",
+          hint: isCur && i < 9 ? `Taste ${i + 1}` : "",
           keywords: inst.name,
           deep: !isCur,
           run: () => openServer(inst.id, slot),

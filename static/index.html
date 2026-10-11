@@ -455,6 +455,80 @@
         <div class="ws-panel hidden" data-ws-panel="dateien"></div>
         <div class="ws-panel hidden" data-ws-panel="spieler"></div>
         <div class="ws-panel hidden" data-ws-panel="konsole"></div>
+        <div class="ws-panel hidden" data-ws-panel="chunky">
+          <div class="upload-box" id="chunky-box">
+            <h3>Chunky <span class="muted small">(Welt vorgenerieren)</span>
+              <button id="chunky-reload" class="btn small-btn" title="Status und Fortschritt laden">Aktualisieren</button>
+            </h3>
+            <p class="muted small" id="chunky-hint">Steuert den Mod/das Plugin
+              <strong>Chunky</strong> per RCON. Der Server muss laufen.</p>
+            <div id="chunky-missing" class="err hidden"></div>
+            <div id="chunky-main" class="hidden">
+              <div id="chunky-progress" class="chunky-progress">
+                <div class="chunky-bar"><div id="chunky-bar-fill" class="chunky-bar-fill"></div></div>
+                <p id="chunky-progress-text" class="muted small">Kein Fortschritt geladen.</p>
+              </div>
+              <div class="rcon-actions admin-only">
+                <button id="chunky-start" class="btn primary" title="Einstellungen übernehmen und Pregeneration starten">Starten</button>
+                <button id="chunky-pause" class="btn" title="Laufende Pregeneration pausieren">Pause</button>
+                <button id="chunky-continue" class="btn" title="Pausierte Pregeneration fortsetzen">Fortsetzen</button>
+                <button id="chunky-cancel" class="btn danger" title="Pregeneration abbrechen">Abbrechen</button>
+              </div>
+              <h4 class="chunky-sub">Einstellungen</h4>
+              <div class="chunky-form">
+                <label>Welt
+                  <input id="chunky-world" class="search-input" type="text" list="chunky-worlds"
+                         placeholder="minecraft:overworld" maxlength="64" autocomplete="off">
+                  <datalist id="chunky-worlds">
+                    <option value="minecraft:overworld"></option>
+                    <option value="minecraft:the_nether"></option>
+                    <option value="minecraft:the_end"></option>
+                    <option value="world"></option>
+                    <option value="world_nether"></option>
+                    <option value="world_the_end"></option>
+                  </datalist>
+                </label>
+                <label>Mittelpunkt X
+                  <input id="chunky-cx" class="search-input" type="number" step="1" placeholder="0">
+                </label>
+                <label>Mittelpunkt Z
+                  <input id="chunky-cz" class="search-input" type="number" step="1" placeholder="0">
+                </label>
+                <label>Radius (Blöcke)
+                  <input id="chunky-radius" class="search-input" type="number" min="1" step="1" placeholder="z. B. 2000">
+                </label>
+                <label>Form
+                  <select id="chunky-shape" class="search-input">
+                    <option value="">(unverändert)</option>
+                    <option value="square">Quadrat</option>
+                    <option value="circle">Kreis</option>
+                    <option value="diamond">Raute</option>
+                    <option value="triangle">Dreieck</option>
+                    <option value="pentagon">Fünfeck</option>
+                    <option value="hexagon">Sechseck</option>
+                    <option value="star">Stern</option>
+                  </select>
+                </label>
+                <label>Muster
+                  <select id="chunky-pattern" class="search-input">
+                    <option value="">(unverändert)</option>
+                    <option value="concentric">Konzentrisch</option>
+                    <option value="loop">Schleife</option>
+                    <option value="spiral">Spirale</option>
+                    <option value="region">Region für Region</option>
+                    <option value="world">Ganze Welt</option>
+                  </select>
+                </label>
+              </div>
+              <div class="rcon-actions admin-only">
+                <button id="chunky-apply" class="btn" title="Einstellungen setzen, ohne zu starten">Nur übernehmen</button>
+                <button id="chunky-border" class="btn" title="Mittelpunkt und Radius der Weltgrenze übernehmen">Weltgrenze übernehmen</button>
+              </div>
+              <pre id="chunky-output" class="logs rcon-log hidden"></pre>
+            </div>
+            <div id="chunky-error" class="err hidden"></div>
+          </div>
+        </div>
         <div class="ws-panel hidden" data-ws-panel="einstellungen"></div>
         <div class="ws-panel hidden" data-ws-panel="zeitplan"></div>
         <div class="ws-panel hidden" data-ws-panel="backups"></div>
