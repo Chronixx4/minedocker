@@ -188,7 +188,7 @@ def _call(cfg: dict, action: str, args: dict | None = None) -> dict:
                              "Passwort und Recht „FRITZ!Box Einstellungen“ prüfen")
         fields = _parse(resp.text)
         code = fields.get("errorCode", "")
-        if resp.status_code == 404 or code in ("401", "402"):
+        if resp.status_code == 404 or code == "401":
             last = (f"Fritzbox-Fehler {code or 404} bei {action} "
                     f"({path.rsplit('/', 1)[-1]}): "
                     f"{fields.get('errorDescription', 'Dienst nicht gefunden')}")
@@ -299,10 +299,22 @@ def instance_status(instance: dict) -> dict:
 
 
 def open_ports(instance: dict) -> list:
+    """Gibt alle nötigen Ports frei. Schon passende Freigaben (z. B. von Hand
+    angelegt) bleiben stehen; schlägt ein Port fehl, werden die übrigen trotzdem
+    versucht und alle Fehler mit Portnummer gemeldet."""
     cfg = _cfg_ready()
-    done = []
     try:
-        for item in required_ports(instance):
+        existing = {(m["port"], m["proto"]): m for m in list_mappings(cfg)}
+    except FritzError as exc:
+        raise _wrap(exc) from exc
+    done, errors = [], []
+    for item in required_ports(instance):
+        entry = existing.get((item["port"], item["proto"]))
+        if entry and entry["enabled"] and entry["client"] == cfg["lan_ip"] \
+                and entry["internal_port"] == item["port"]:
+            done.append(item)  # steht schon richtig
+            continue
+        try:
             _call(cfg, "AddPortMapping", {
                 "NewRemoteHost": "", "NewExternalPort": item["port"],
                 "NewProtocol": item["proto"].upper(), "NewInternalPort": item["port"],
@@ -310,8 +322,14 @@ def open_ports(instance: dict) -> list:
                 "NewPortMappingDescription": f"{PREFIX}: {item['label']}"[:60],
                 "NewLeaseDuration": 0})
             done.append(item)
-    except FritzError as exc:
-        raise _wrap(exc) from exc
+        except FritzError as exc:
+            hint = ""
+            if entry:
+                hint = (f" (Es existiert schon eine Freigabe für {entry['client']}:"
+                        f"{entry['internal_port']} — „{entry['description']}“)")
+            errors.append(f"{item['port']}/{item['proto'].upper()}: {exc}{hint}")
+    if errors:
+        raise HTTPException(status_code=502, detail="; ".join(errors))
     logger.info("Fritzbox: %d Port(s) freigegeben für %s", len(done), instance["id"])
     return done
 

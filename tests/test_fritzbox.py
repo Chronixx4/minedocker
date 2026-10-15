@@ -65,7 +65,7 @@ class TestCalls:
         _setup()
         calls = []
         table = [{"NewExternalPort": "25570", "NewProtocol": "TCP", "NewInternalPort": "25570",
-                  "NewInternalClient": "192.168.178.20", "NewEnabled": "1",
+                  "NewInternalClient": "192.168.178.99", "NewEnabled": "1",
                   "NewPortMappingDescription": "minedocker: A Spiel"},
                  {"NewExternalPort": "80", "NewProtocol": "TCP", "NewInternalPort": "80",
                   "NewInternalClient": "192.168.178.5", "NewEnabled": "1",
@@ -164,3 +164,34 @@ class TestDienstWahl:
         out = fritzbox._call(fritzbox.load(), "GetExternalIPAddress")
         assert out["NewExternalIPAddress"] == "1.2.3.4"
         assert fritzbox._working["192.168.178.1"][0].endswith("/b")
+
+
+class TestOpenPortsFehler:
+    def _fake(self, calls, table, fail_port=None):
+        def fake(cfg, action, args=None):
+            if action == "GetGenericPortMappingEntry":
+                i = args["NewPortMappingIndex"]
+                if i >= len(table):
+                    raise fritzbox.FritzError("Fritzbox-Fehler 713: x")
+                return table[i]
+            calls.append(args["NewExternalPort"])
+            if args["NewExternalPort"] == fail_port:
+                raise fritzbox.FritzError("Fritzbox-Fehler 402 bei AddPortMapping: Invalid Args")
+            return {}
+        return fake
+
+    def test_passende_freigabe_wird_uebersprungen_und_rest_versucht(self, monkeypatch):
+        from fastapi import HTTPException
+
+        _setup()
+        calls = []
+        table = [{"NewExternalPort": "25570", "NewProtocol": "TCP", "NewInternalPort": "25570",
+                  "NewInternalClient": "192.168.178.20", "NewEnabled": "1",
+                  "NewPortMappingDescription": "manuell"}]
+        monkeypatch.setattr(fritzbox, "_call", self._fake(calls, table, fail_port=27570))
+        inst = {"id": "a", "name": "A", "port": 25570,
+                "map": {"enabled": True, "port": 27570, "public": True}}
+        with pytest.raises(HTTPException) as exc:
+            fritzbox.open_ports(inst)
+        assert calls == [27570]  # 25570 steht schon richtig
+        assert "27570/TCP" in exc.value.detail and "402" in exc.value.detail
