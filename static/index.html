@@ -1214,8 +1214,16 @@
           <div class="mods-toolbar">
             <input id="mods-filter-input" class="search-input" type="search"
                    placeholder="Mods filtern …" autocomplete="off">
+            <select id="mods-status-filter" class="search-input" aria-label="Mods nach Status filtern"
+                    style="flex: 0 0 auto; width: auto;">
+              <option value="all">Alle</option>
+              <option value="active">Aktiv</option>
+              <option value="off">Deaktiviert</option>
+              <option value="problem">Mit Problem</option>
+              <option value="update">Update verfügbar</option>
+            </select>
             <button id="mods-size-btn" class="btn small-btn"
-                    title="Zwischen kompakter und großer Ansicht wechseln">Große Ansicht</button>
+                    title="Zwischen kompakter und großer Ansicht wechseln">Kompakte Ansicht</button>
             <button id="mods-collapse-btn" class="btn small-btn"
                     title="Mod-Liste ein-/ausklappen">Einklappen</button>
           </div>

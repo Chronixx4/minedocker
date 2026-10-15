@@ -770,4 +770,4 @@ fail-closed bei RCON-Fehler, Routen, Viewer-403) in tests/test_datapacks.py,
 - BlueMap: Port standardmäßig nur 127.0.0.1 (Zugriff über Dashboard-Proxy); `PUT /instances/{id}/map/public` bindet ihn auf 0.0.0.0 für direkten Zugriff von außen
 - app/modconfig.py – Mod-Einstellungen: `GET /instances/{id}/modconfigs` (config/, plugins/), `GET|PUT …/modconfigs/file` (.properties/.toml zeilenweise mit Kommentaren, sha1-Fingerabdruck → 409)
 - app/extraports.py – zusätzliche Ports je Instanz (`GET|PUT /instances/{id}/ports`, z. B. Voice-Chat UDP 24454); runtime.start_instance veröffentlicht sie, Kollisionsschutz über instances._used_port_sets
-- Mods-Liste: umschaltbare große Ansicht (Beschreibung, größere Icons)
+- Mods-Liste: große Karten-Ansicht als Standard (umschaltbar auf kompakt, Wahl in localStorage), Statusfilter (aktiv/deaktiviert/Problem/Update)
