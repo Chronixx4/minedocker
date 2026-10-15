@@ -638,6 +638,21 @@ input[type="checkbox"] { accent-color: var(--accent); width: 1.05em; height: 1.0
 .mod-list.compact .btn { padding: 0.22rem 0.55rem; font-size: 0.74rem; }
 .mod-list.compact .btn.toggle { min-width: 2.4rem; }
 .mod-list.collapsed { display: none; }
+.mod-desc { display: none; }
+/* Große Ansicht: mehr Platz, größere Icons, Beschreibung sichtbar */
+.mod-list.big { max-height: 70vh; gap: 0.6rem; }
+.mod-list.big .mod-row { padding: 0.7rem 0.9rem; gap: 0.8rem; }
+.mod-list.big .mod-ico { width: 44px; height: 44px; border-radius: 9px; }
+.mod-list.big .mod-letter { font-size: 0.85rem; }
+.mod-list.big .mod-info { flex-direction: column; align-items: flex-start; gap: 0.15rem; }
+.mod-list.big .mod-name { font-size: 0.98rem; white-space: normal; }
+.mod-list.big .mod-meta { font-size: 0.8rem; white-space: normal; }
+.mod-list.big .mod-desc { display: block; font-size: 0.8rem; max-width: 60ch; }
+.mod-list.big .btn { padding: 0.35rem 0.8rem; font-size: 0.82rem; }
+.modcfg-editor { margin-top: 0.6rem; }
+.modcfg-editor .cfg-form { max-height: 55vh; overflow-y: auto; }
+.modcfg-raw { max-height: 45vh; overflow: auto; font-size: 0.78rem; white-space: pre-wrap; }
+.mod-list .mod-row.sel { border-color: var(--accent, #4ade80); }
 
 /* Hinweise über der Mod-Liste (Neustart nötig / erkannte Probleme) */
 .mods-note {

@@ -461,6 +461,12 @@ def start_instance(instance: dict) -> None:
             ("0.0.0.0", web_port) if livemap.is_public(instance)
             else ("127.0.0.1", web_port))
 
+    for extra in (instance.get("extra_ports") or []):
+        try:
+            ports[f"{int(extra['port'])}/{extra['proto']}"] = int(extra["port"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
     host_dir = Path(_host_instances_root()) / instance["id"]
     if not host_dir.name:
         raise RuntimeError("Instanz-Host-Pfad ergibt kein gültiges Verzeichnis")

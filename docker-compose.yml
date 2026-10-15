@@ -119,7 +119,7 @@ services:
       BACKUP_WEBDAV_USER: "${BACKUP_WEBDAV_USER:-}"
       BACKUP_WEBDAV_PASSWORD: "${BACKUP_WEBDAV_PASSWORD:-}"
       ALERT_DISK_FREE_GB: "${ALERT_DISK_FREE_GB:-5}"  # Alert „disk_low“ unter diesem freien Platz
-      PUBLIC_HOST: "${PUBLIC_HOST:-}"  # z. B. meinserver.ddns.net (No-IP) — wird als Server-Adresse angezeigt
+      PUBLIC_HOST: "${PUBLIC_HOST:-claw-games.ddns.net}"  # No-IP-Domain, wird als Server-Adresse angezeigt (per .env überschreibbar)
       ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}" # Discord-kompatibler Webhook; leer = aus
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}" # alternativ Telegram (Token + Chat-ID)
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
