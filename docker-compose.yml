@@ -115,6 +115,7 @@ services:
       # Backups auf zweiter Platte: nur aktiv, wenn DASHBOARD_BACKUPS_DIR gesetzt ist
       BACKUPS_DIR: "${DASHBOARD_BACKUPS_DIR:+/backups}"
       # --- Crash-Watchdog/Alerts (optional, siehe SERVER-SETUP.md §8) ---
+      PUBLIC_HOST: "${PUBLIC_HOST:-}"  # z. B. meinserver.ddns.net (No-IP) — wird als Server-Adresse angezeigt
       ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}" # Discord-kompatibler Webhook; leer = aus
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}" # alternativ Telegram (Token + Chat-ID)
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"

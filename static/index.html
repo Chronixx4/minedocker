@@ -737,6 +737,14 @@
               <button id="map-restart" class="btn primary admin-only hidden">Jetzt neu starten</button>
               <button id="map-disable" class="btn danger admin-only hidden">Karte deaktivieren</button>
             </div>
+            <div id="map-public" class="map-setup admin-only hidden">
+              <label class="check" for="map-public-toggle">
+                <input type="checkbox" id="map-public-toggle">
+                <span>Karte direkt von außen erreichbar machen (ohne Dashboard-Login, nur ansehen).
+                  Dafür den Karten-Port in der Fritzbox freigeben; wirksam nach Neustart.</span>
+              </label>
+              <p id="map-public-url" class="muted small hidden"></p>
+            </div>
             <div id="map-frame-wrap" class="map-frame hidden">
               <iframe id="map-frame" title="Live-Karte" referrerpolicy="no-referrer"></iframe>
             </div>

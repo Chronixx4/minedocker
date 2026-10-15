@@ -86,6 +86,9 @@ class Settings:
             self.filebrowser_max_upload_mb = 300
         # Crash-Watchdog/Alerts (optional): Discord-kompatibler Webhook und/oder
         # Telegram; ALERT_EVENTS wählt die Ereignisse (crash/start/stop).
+        # Öffentlicher Hostname (z. B. No-IP-Domain der Fritzbox) für die
+        # Server-Adresse und den Karten-Link im Dashboard.
+        self.public_host = os.getenv("PUBLIC_HOST", "").strip()
         self.alert_webhook_url = os.getenv("ALERT_WEBHOOK_URL", "").strip()
         self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()

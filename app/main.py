@@ -425,6 +425,11 @@ class MapToggleRequest(BaseModel):
     accept_download: bool = False
 
 
+class MapPublicRequest(BaseModel):
+    """Karten-Port direkt im Netzwerk/Internet freigeben (ohne Dashboard-Login)."""
+    public: bool
+
+
 class GameruleSetRequest(BaseModel):
     """Gamerule setzen (name aus kuratierter Liste, value bool/int)."""
     name: str = Field(min_length=1, max_length=64)
@@ -2381,6 +2386,20 @@ async def instance_map_toggle(instance_id: str, req: MapToggleRequest):
     if req.enabled:
         return await livemap_mod.enable(instance_id, req.accept_download)
     return await asyncio.to_thread(livemap_mod.disable, instance_id)
+
+
+@api.get("/public-host")
+async def public_host():
+    """Öffentlicher Hostname (PUBLIC_HOST) für Adress-Anzeige im Frontend."""
+    return {"public_host": settings.public_host}
+
+
+@api.put("/instances/{instance_id}/map/public")
+async def instance_map_public(instance_id: str, req: MapPublicRequest):
+    """Karten-Port auf allen Interfaces statt nur 127.0.0.1 veröffentlichen
+    (wirksam beim nächsten Start)."""
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(livemap_mod.set_public, instance_id, req.public)
 
 
 # ---------------------------------------------------------------------------

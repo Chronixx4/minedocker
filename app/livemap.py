@@ -223,12 +223,28 @@ async def enable(instance_id: str, accept_download: bool) -> dict:
             "port": port,
             "file": files[0]["filename"],
             "world": _level_name(instance),
+            "public": is_public(instance),
         }
         instances.update_instance(instance)
     instances.invalidate_disk_cache(instance_id)
     logger.info("Live-Karte aktiviert: %s (Port %s, %s)", instance_id, port,
                 ", ".join(installed) or "bereits installiert")
     return status(instance) | {"installed": installed}
+
+
+def is_public(instance: dict) -> bool:
+    return bool(settings_of(instance).get("public"))
+
+
+def set_public(instance_id: str, public: bool) -> dict:
+    """Karten-Port direkt veröffentlichen (ohne Dashboard-Login, read-only)."""
+    with instances._LOCK:
+        instance = instances.get_instance(instance_id)
+        if not enabled(instance):
+            raise HTTPException(status_code=409, detail="Die Karte ist nicht aktiviert")
+        instance["map"] = {**settings_of(instance), "public": bool(public)}
+        instances.update_instance(instance)
+    return status(instance)
 
 
 def disable(instance_id: str) -> dict:
@@ -290,6 +306,7 @@ def status(instance: dict) -> dict:
         "supported": supported(instance.get("loader")),
         "enabled": bool(data.get("enabled")),
         "port": map_port(instance),
+        "public": is_public(instance),
         "file": data.get("file"),
         "installed": file_present,
         "download_accepted": _download_accepted(instance),

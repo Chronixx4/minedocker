@@ -456,7 +456,10 @@ def start_instance(instance: dict) -> None:
                    "25575/tcp": ("127.0.0.1", rcon_port(instance))}
     web_port = livemap.map_port(instance)
     if livemap.enabled(instance) and web_port:
-        ports[f"{livemap.WEB_PORT}/tcp"] = ("127.0.0.1", web_port)
+        # Standard nur lokal; "public" gibt den Port für Zugriff von außen frei
+        ports[f"{livemap.WEB_PORT}/tcp"] = (
+            ("0.0.0.0", web_port) if livemap.is_public(instance)
+            else ("127.0.0.1", web_port))
 
     host_dir = Path(_host_instances_root()) / instance["id"]
     if not host_dir.name:

@@ -127,6 +127,18 @@ class TestPortsUndStart:
         ports = fake_docker.containers.run_kwargs["ports"]
         assert ports["8100/tcp"] == ("127.0.0.1", inst["port"] + 2000)
 
+    def test_public_bindet_kartenport_auf_allen_interfaces(self, client, modrinth_fake, fake_docker):
+        inst = _create()
+        r = client.put(f"/api/instances/{inst['id']}/map/public", json={"public": True})
+        assert r.status_code == 409  # Karte noch nicht aktiviert
+        client.put(f"/api/instances/{inst['id']}/map",
+                   json={"enabled": True, "accept_download": True})
+        r = client.put(f"/api/instances/{inst['id']}/map/public", json={"public": True})
+        assert r.status_code == 200 and r.json()["public"] is True
+        runtime.start_instance(instances.get_instance(inst["id"]))
+        ports = fake_docker.containers.run_kwargs["ports"]
+        assert ports["8100/tcp"] == ("0.0.0.0", inst["port"] + 2000)
+
     def test_ausschalten_entfernt_jar_und_port(self, client, modrinth_fake, fake_docker):
         inst = _create()
         client.put(f"/api/instances/{inst['id']}/map",
