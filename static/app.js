@@ -2482,7 +2482,8 @@
   state.detailLogTimer = null;
   state.detailMods = [];     // letzte Mod-Liste der Detail-Ansicht (ungefiltert)
   state.modsCollapsed = false; // eingeklappte Mod-Liste
-  try { state.modsBig = localStorage.getItem("modsBig") === "1"; } catch (e) { state.modsBig = false; }
+  // Große Karten-Ansicht ist der Standard; die Wahl „kompakt“ bleibt gespeichert
+  try { state.modsBig = localStorage.getItem("modsBig") !== "0"; } catch (e) { state.modsBig = true; }
   state.cfgOpen = false;     // server.properties-Editor ausgeklappt?
   state.cfgProps = [];       // geparste server.properties (ungefiltert)
   state.cfgSchema = [];      // Schema bekannter Eigenschaften (vom Backend)
@@ -3494,13 +3495,22 @@
     list.textContent = "";
     const all = state.detailMods;
     const q = ($("#mods-filter-input").value || "").trim().toLowerCase();
-    const mods = q ? all.filter((m) => [m.filename, m.meta?.name, m.meta?.mod_id]
-      .some((v) => (v || "").toLowerCase().includes(q))) : all;
+    const statusFilter = $("#mods-status-filter").value;
+    const matchStatus = (m) => {
+      if (statusFilter === "active") return m.enabled;
+      if (statusFilter === "off") return !m.enabled;
+      if (statusFilter === "problem") return Array.isArray(m.problems) && m.problems.length > 0;
+      if (statusFilter === "update") return state.detailUpdates?.[m.filename]?.status === "update_available";
+      return true;
+    };
+    const mods = all.filter((m) => matchStatus(m) && (!q || [m.filename, m.meta?.name, m.meta?.mod_id]
+      .some((v) => (v || "").toLowerCase().includes(q))));
+    const filtered = q || statusFilter !== "all";
 
     const active = all.filter((m) => m.enabled).length;
     const bytes = all.reduce((s, m) => s + (m.size_bytes || 0), 0);
     setText($("#detail-mods-count"),
-      q ? `(${mods.length} von ${all.length})` : `(${all.length})`);
+      filtered ? `(${mods.length} von ${all.length})` : `(${all.length})`);
     setText($("#mods-summary"), all.length
       ? `${active} aktiv · ${all.length - active} deaktiviert · ${fmtBytes(bytes)} gesamt`
       : "");
@@ -3985,6 +3995,7 @@
 
   // Mod-Liste: Filter + Ein-/Ausklappen
   $("#mods-filter-input").addEventListener("input", applyModFilter);
+  $("#mods-status-filter").addEventListener("change", () => applyModFilter());
   $("#mods-size-btn").addEventListener("click", () => {
     state.modsBig = !state.modsBig;
     try { localStorage.setItem("modsBig", state.modsBig ? "1" : "0"); } catch (e) { /* egal */ }
