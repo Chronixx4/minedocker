@@ -138,3 +138,29 @@ class TestApi:
 
     def test_ungueltige_lan_ip_400(self, client):
         assert client.put("/api/fritzbox", json={"lan_ip": "1.2.3.4"}).status_code == 400
+
+
+class TestDienstWahl:
+    def test_ungueltige_aktion_probiert_naechsten_dienst(self, monkeypatch):
+        import httpx
+
+        _setup()
+        fritzbox._working.clear()
+        monkeypatch.setattr(fritzbox, "_discover", lambda cfg: [
+            ("/upnp/control/a", "urn:x:WANIPConnection:1"),
+            ("/upnp/control/b", "urn:x:WANPPPConnection:1")])
+        fault = ("<s:Envelope xmlns:s='x'><s:Body><s:Fault><detail><UPnPError>"
+                 "<errorCode>401</errorCode><errorDescription>Invalid Action"
+                 "</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>")
+        ok = ("<s:Envelope xmlns:s='x'><s:Body><u:R xmlns:u='y'>"
+              "<NewExternalIPAddress>1.2.3.4</NewExternalIPAddress></u:R></s:Body></s:Envelope>")
+
+        def fake_post(url, **kw):
+            if url.endswith("/a"):
+                return httpx.Response(500, text=fault)
+            return httpx.Response(200, text=ok)
+
+        monkeypatch.setattr(httpx, "post", fake_post)
+        out = fritzbox._call(fritzbox.load(), "GetExternalIPAddress")
+        assert out["NewExternalIPAddress"] == "1.2.3.4"
+        assert fritzbox._working["192.168.178.1"][0].endswith("/b")

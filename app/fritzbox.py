@@ -138,10 +138,42 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+_working: dict = {}  # host -> (Steuer-URL, Service-Typ), das zuletzt funktioniert hat
+
+
+def _discover(cfg: dict) -> list:
+    """Steuer-URLs der WAN-Verbindungsdienste aus tr64desc.xml; Fallback auf
+    die Standardpfade. Welche Variante (IP/PPP, ggf. mehrere) die Box für
+    Portfreigaben anbietet, hängt von Modell und Anschlussart ab."""
+    found = []
+    try:
+        resp = httpx.get(f"http://{cfg['host']}:{PORT}/tr64desc.xml", timeout=8.0)
+        root = ET.fromstring(resp.text)
+        for svc in root.iter():
+            if _local(svc.tag) != "service":
+                continue
+            info = {_local(c.tag): (c.text or "").strip() for c in svc}
+            stype = info.get("serviceType", "")
+            if ("WANIPConnection" in stype or "WANPPPConnection" in stype) \
+                    and info.get("controlURL"):
+                found.append((info["controlURL"], stype))
+    except (httpx.HTTPError, ET.ParseError):
+        pass
+    for item in _SERVICES:
+        if item not in found:
+            found.append(item)
+    return found
+
+
 def _call(cfg: dict, action: str, args: dict | None = None) -> dict:
-    """SOAP-Aufruf; probiert IP- und PPP-Service. Wirft FritzError."""
+    """SOAP-Aufruf; probiert alle WAN-Verbindungsdienste der Box (Fehler 401
+    „Invalid Action“/404 = Dienst kennt die Aktion nicht → nächster Dienst).
+    Wirft FritzError."""
+    cached = _working.get(cfg["host"])
+    candidates = [cached] if cached else []
+    candidates += [c for c in _discover(cfg) if c != cached]
     last = "Fritzbox nicht erreichbar"
-    for path, service in _SERVICES:
+    for path, service in candidates:
         url = f"http://{cfg['host']}:{PORT}{path}"
         headers = {"Content-Type": 'text/xml; charset="utf-8"',
                    "SOAPACTION": f'"{service}#{action}"'}
@@ -154,15 +186,19 @@ def _call(cfg: dict, action: str, args: dict | None = None) -> dict:
         if resp.status_code == 401:
             raise FritzError("Anmeldung an der Fritzbox fehlgeschlagen — Benutzer, "
                              "Passwort und Recht „FRITZ!Box Einstellungen“ prüfen")
-        if resp.status_code == 404:
-            last = "Dienst nicht gefunden"
-            continue
         fields = _parse(resp.text)
+        code = fields.get("errorCode", "")
+        if resp.status_code == 404 or code in ("401", "402"):
+            last = (f"Fritzbox-Fehler {code or 404} bei {action} "
+                    f"({path.rsplit('/', 1)[-1]}): "
+                    f"{fields.get('errorDescription', 'Dienst nicht gefunden')}")
+            continue
         if resp.status_code >= 400:
-            code = fields.get("errorCode", "")
-            raise FritzError(f"Fritzbox-Fehler {code or resp.status_code}: "
+            raise FritzError(f"Fritzbox-Fehler {code or resp.status_code} bei {action}: "
                              f"{fields.get('errorDescription', 'unbekannt')}")
+        _working[cfg["host"]] = (path, service)
         return fields
+    _working.pop(cfg["host"], None)
     raise FritzError(last)
 
 
