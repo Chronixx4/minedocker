@@ -51,6 +51,7 @@ from . import (
 )
 from . import chunky as chunky_mod
 from . import datapacks as datapacks_mod
+from . import extraports as extraports_mod
 from . import filebrowser as filebrowser_mod
 from . import gamerules as gamerules_mod
 from . import history as history_mod
@@ -58,6 +59,7 @@ from . import icon as icon_mod
 from . import inventory as inventory_mod
 from . import itemassets as itemassets_mod
 from . import livemap as livemap_mod
+from . import modconfig as modconfig_mod
 from . import players as players_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
@@ -424,6 +426,17 @@ class MapToggleRequest(BaseModel):
     Download der Minecraft-Client-Ressourcen durch BlueMap (Mojang-EULA)."""
     enabled: bool
     accept_download: bool = False
+
+
+class ModConfigSaveRequest(BaseModel):
+    """Geänderte Einstellungen einer Mod-Konfigurationsdatei."""
+    path: str = Field(min_length=1, max_length=512)
+    sha: str = Field(min_length=1, max_length=64)
+    changes: list[dict] = Field(max_length=500)
+
+
+class ExtraPortsRequest(BaseModel):
+    ports: list[dict] = Field(max_length=10)
 
 
 class MapPublicRequest(BaseModel):
@@ -2387,6 +2400,42 @@ async def instance_map_toggle(instance_id: str, req: MapToggleRequest):
     if req.enabled:
         return await livemap_mod.enable(instance_id, req.accept_download)
     return await asyncio.to_thread(livemap_mod.disable, instance_id)
+
+
+@api.get("/instances/{instance_id}/modconfigs")
+async def instance_modconfigs(instance_id: str):
+    """Konfigurationsdateien der Mods/Plugins (config/, plugins/)."""
+    instances.get_instance(instance_id)
+    return {"files": await asyncio.to_thread(modconfig_mod.list_configs, instance_id)}
+
+
+@api.get("/instances/{instance_id}/modconfigs/file")
+async def instance_modconfig_file(instance_id: str, path: str):
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(modconfig_mod.read_file, instance_id, path)
+
+
+@api.put("/instances/{instance_id}/modconfigs/file")
+async def instance_modconfig_save(instance_id: str, req: ModConfigSaveRequest):
+    instances.get_instance(instance_id)
+    result = await asyncio.to_thread(
+        modconfig_mod.save_changes, instance_id, req.path, req.sha, req.changes)
+    logger.info("Mod-Einstellung gespeichert: %s (%d Änderungen) → %s",
+                req.path, len(req.changes), instance_id)
+    return result
+
+
+@api.get("/instances/{instance_id}/ports")
+async def instance_extra_ports_get(instance_id: str):
+    instance = instances.get_instance(instance_id)
+    return {"ports": extraports_mod.get_ports(instance)}
+
+
+@api.put("/instances/{instance_id}/ports")
+async def instance_extra_ports_put(instance_id: str, req: ExtraPortsRequest):
+    """Zusätzliche Ports (z. B. Voice-Chat UDP) — wirksam beim nächsten Start."""
+    instances.get_instance(instance_id)
+    return {"ports": await asyncio.to_thread(extraports_mod.set_ports, instance_id, req.ports)}
 
 
 @api.get("/public-host")

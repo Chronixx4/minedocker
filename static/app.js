@@ -2482,6 +2482,7 @@
   state.detailLogTimer = null;
   state.detailMods = [];     // letzte Mod-Liste der Detail-Ansicht (ungefiltert)
   state.modsCollapsed = false; // eingeklappte Mod-Liste
+  try { state.modsBig = localStorage.getItem("modsBig") === "1"; } catch (e) { state.modsBig = false; }
   state.cfgOpen = false;     // server.properties-Editor ausgeklappt?
   state.cfgProps = [];       // geparste server.properties (ungefiltert)
   state.cfgSchema = [];      // Schema bekannter Eigenschaften (vom Backend)
@@ -3506,6 +3507,8 @@
     show($("#detail-mods-empty"), mods.length === 0);
 
     list.classList.toggle("collapsed", state.modsCollapsed);
+    list.classList.toggle("big", state.modsBig);
+    setText($("#mods-size-btn"), state.modsBig ? "Kompakte Ansicht" : "Große Ansicht");
     setText($("#mods-collapse-btn"), state.modsCollapsed ? "Ausklappen" : "Einklappen");
 
     for (const mod of mods) {
@@ -3517,6 +3520,7 @@
       // Tooltip: Beschreibung, Mod-ID und voller Dateiname
       nameEl.title = [meta?.description, meta?.mod_id ? `Mod-ID: ${meta.mod_id}` : "",
         mod.filename].filter(Boolean).join("\n");
+      setText(node.querySelector(".mod-desc"), meta?.description || "");
       const tags = node.querySelector(".mod-tags");
       const problems = Array.isArray(mod.problems) ? mod.problems : [];
       const tagLabels = {
@@ -3981,6 +3985,248 @@
 
   // Mod-Liste: Filter + Ein-/Ausklappen
   $("#mods-filter-input").addEventListener("input", applyModFilter);
+  $("#mods-size-btn").addEventListener("click", () => {
+    state.modsBig = !state.modsBig;
+    try { localStorage.setItem("modsBig", state.modsBig ? "1" : "0"); } catch (e) { /* egal */ }
+    applyModFilter();
+  });
+
+  /* ---------- Mod-Einstellungen (config/, plugins/) ---------- */
+  const modcfg = { files: [], path: null, sha: null, entries: [], inputs: new Map() };
+
+  function modcfgError(msg) {
+    setText($("#modcfg-error"), msg || "");
+    show($("#modcfg-error"), !!msg);
+  }
+
+  async function loadModConfigs() {
+    if (!state.detailId) return;
+    modcfgError("");
+    if (modcfg.inst !== state.detailId) {
+      modcfg.inst = state.detailId;
+      modcfg.path = null;
+      show($("#modcfg-editor"), false);
+    }
+    try {
+      const r = await api(`/api/instances/${state.detailId}/modconfigs`);
+      modcfg.files = r.files || [];
+    } catch (e) {
+      modcfgError(`Einstellungen nicht ladbar: ${e.message}`);
+      return;
+    }
+    renderModConfigList();
+  }
+
+  function renderModConfigList() {
+    const q = ($("#modcfg-filter").value || "").trim().toLowerCase();
+    const list = $("#modcfg-list");
+    list.textContent = "";
+    const files = modcfg.files.filter((f) => !q || f.path.toLowerCase().includes(q));
+    setText($("#modcfg-count"), `(${modcfg.files.length})`);
+    for (const f of files) {
+      const li = document.createElement("li");
+      li.className = "mod-row" + (f.path === modcfg.path ? " sel" : "");
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = f.name;
+      name.title = f.path;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = `${f.group} · ${fmtBytes(f.size)}${f.structured ? "" : " · Rohtext"}`;
+      info.append(name, meta);
+      const btn = document.createElement("button");
+      btn.className = "btn small-btn";
+      btn.textContent = f.structured ? "Bearbeiten" : "Ansehen";
+      btn.addEventListener("click", () => openModConfig(f.path));
+      li.append(info, btn);
+      list.appendChild(li);
+    }
+  }
+
+  async function openModConfig(path) {
+    modcfgError("");
+    let data;
+    try {
+      data = await api(`/api/instances/${state.detailId}/modconfigs/file?path=${encodeURIComponent(path)}`);
+    } catch (e) {
+      modcfgError(`Datei nicht lesbar: ${e.message}`);
+      return;
+    }
+    modcfg.path = data.path;
+    modcfg.sha = data.sha;
+    modcfg.entries = data.entries;
+    modcfg.inputs = new Map();
+    show($("#modcfg-editor"), true);
+    setText($("#modcfg-title"), data.path);
+    const form = $("#modcfg-form");
+    form.textContent = "";
+    const raw = $("#modcfg-raw");
+    show(raw, !data.structured);
+    show(form, data.structured);
+    show($("#modcfg-save"), data.structured);
+    show($("#modcfg-open-raw"), !data.structured);
+    raw.textContent = data.structured ? "" : data.content;
+    // Hinweis für Simple Voice Chat: UDP-Port muss veröffentlicht werden
+    const hint = $("#modcfg-hint");
+    const port = data.entries.find((e) => e.key === "port");
+    show(hint, false);
+    if (/voicechat/i.test(data.path) && port) {
+      hint.textContent = `Voice-Chat nutzt UDP-Port ${port.value}. Er muss unter „Zusätzliche Ports“ `
+        + "eingetragen und in der Fritzbox (UDP) freigegeben sein.";
+      show(hint, true);
+    }
+    let lastSection = null;
+    for (const e of data.entries) {
+      if (e.section !== lastSection) {
+        lastSection = e.section;
+        if (e.section) {
+          const h = document.createElement("h5");
+          h.textContent = e.section;
+          form.appendChild(h);
+        }
+      }
+      const row = document.createElement("label");
+      row.className = "cfg-row";
+      const k = document.createElement("span");
+      k.className = "cfg-key";
+      k.textContent = e.key;
+      if (e.comment) k.title = e.comment;
+      let input;
+      if (e.type === "bool") {
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = e.value === "true";
+      } else {
+        input = document.createElement("input");
+        input.type = e.type === "int" || e.type === "float" ? "number" : "text";
+        if (e.type === "float") input.step = "any";
+        input.value = e.value;
+        input.disabled = e.type === "raw";
+        input.className = "search-input";
+      }
+      modcfg.inputs.set(e.line, input);
+      row.append(k, input);
+      if (e.comment) {
+        const c = document.createElement("span");
+        c.className = "muted small";
+        c.textContent = e.comment;
+        row.appendChild(c);
+      }
+      form.appendChild(row);
+    }
+    renderModConfigList();
+  }
+
+  $("#modcfg-filter").addEventListener("input", renderModConfigList);
+  $("#modcfg-box").addEventListener("toggle", (ev) => {
+    if (ev.target.open) loadModConfigs();
+  });
+  $("#modcfg-open-raw").addEventListener("click", () => {
+    if (modcfg.path) fbOpenEditor(modcfg.path);
+  });
+  $("#modcfg-save").addEventListener("click", async () => {
+    const changes = [];
+    for (const e of modcfg.entries) {
+      const input = modcfg.inputs.get(e.line);
+      if (!input || e.type === "raw") continue;
+      const value = input.type === "checkbox" ? String(input.checked) : input.value;
+      if (value !== e.value) changes.push({ line: e.line, key: e.key, value });
+    }
+    if (!changes.length) {
+      toast("Keine Änderungen.", "info");
+      return;
+    }
+    try {
+      await api(`/api/instances/${state.detailId}/modconfigs/file`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: modcfg.path, sha: modcfg.sha, changes }),
+      });
+      toast("Gespeichert. Gilt nach einem Neustart des Servers.", "success");
+      openModConfig(modcfg.path);
+    } catch (e) {
+      modcfgError(`Speichern fehlgeschlagen: ${e.message}`);
+    }
+  });
+
+  /* ---------- Zusätzliche Ports (z. B. Voice-Chat UDP) ---------- */
+  const extraPorts = { list: [] };
+
+  function portsError(msg) {
+    setText($("#ports-error"), msg || "");
+    show($("#ports-error"), !!msg);
+  }
+
+  function renderPorts() {
+    const list = $("#ports-list");
+    list.textContent = "";
+    setText($("#ports-count"), extraPorts.list.length ? `(${extraPorts.list.length})` : "");
+    for (const [idx, p] of extraPorts.list.entries()) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = `${p.port}/${p.proto.toUpperCase()}`;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = p.label || "";
+      info.append(name, meta);
+      const del = document.createElement("button");
+      del.className = "btn danger small-btn admin-only";
+      del.textContent = "Entfernen";
+      del.addEventListener("click", () => saveExtraPorts(extraPorts.list.filter((_, i) => i !== idx)));
+      li.append(info, del);
+      list.appendChild(li);
+    }
+  }
+
+  async function loadExtraPorts() {
+    if (!state.detailId) return;
+    try {
+      extraPorts.list = (await api(`/api/instances/${state.detailId}/ports`)).ports || [];
+      portsError("");
+      renderPorts();
+    } catch (e) {
+      portsError(`Ports nicht ladbar: ${e.message}`);
+    }
+  }
+
+  async function saveExtraPorts(ports) {
+    try {
+      const r = await api(`/api/instances/${state.detailId}/ports`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ports }),
+      });
+      extraPorts.list = r.ports;
+      portsError("");
+      renderPorts();
+      if (state.detailRunning) toast("Gilt nach dem nächsten Neustart des Servers.", "info");
+    } catch (e) {
+      portsError(e.message);
+    }
+  }
+
+  $("#ports-box").addEventListener("toggle", (ev) => {
+    if (ev.target.open) loadExtraPorts();
+  });
+  $("#ports-add").addEventListener("click", () => {
+    const port = parseInt($("#ports-new").value, 10);
+    if (!port) {
+      portsError("Bitte einen Port eingeben.");
+      return;
+    }
+    saveExtraPorts([...extraPorts.list, {
+      port, proto: $("#ports-proto").value, label: $("#ports-label").value.trim(),
+    }]);
+    $("#ports-new").value = "";
+    $("#ports-label").value = "";
+  });
+
   $("#mods-collapse-btn").addEventListener("click", () => {
     state.modsCollapsed = !state.modsCollapsed;
     applyModFilter();

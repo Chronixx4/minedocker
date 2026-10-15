@@ -132,6 +132,12 @@ def _used_port_sets(existing: list) -> tuple:
             map_port = 0
         if map_port:
             game.add(map_port)
+        # Zusätzliche Ports (z. B. Voice-Chat) sind ebenfalls belegt
+        for extra in (i.get("extra_ports") or []):
+            try:
+                game.add(int(extra["port"]))
+            except (KeyError, TypeError, ValueError):
+                continue
     return game, rcon
 
 

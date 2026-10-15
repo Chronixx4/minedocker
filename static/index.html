@@ -1214,6 +1214,8 @@
           <div class="mods-toolbar">
             <input id="mods-filter-input" class="search-input" type="search"
                    placeholder="Mods filtern …" autocomplete="off">
+            <button id="mods-size-btn" class="btn small-btn"
+                    title="Zwischen kompakter und großer Ansicht wechseln">Große Ansicht</button>
             <button id="mods-collapse-btn" class="btn small-btn"
                     title="Mod-Liste ein-/ausklappen">Einklappen</button>
           </div>
@@ -1239,6 +1241,40 @@
           <div id="mods-update-error" class="err hidden"></div>
           <ul id="detail-mods" class="mod-list compact"></ul>
           <p id="detail-mods-empty" class="empty muted hidden">Keine Mods/Modpacks installiert.</p>
+          <details id="modcfg-box" class="mods-trash">
+            <summary>Mod-Einstellungen <span id="modcfg-count" class="muted"></span></summary>
+            <p class="muted small">Konfigurationsdateien der Mods und Plugins (config/, plugins/).
+              Änderungen wirken meist erst nach einem Neustart.</p>
+            <input id="modcfg-filter" class="search-input" type="search"
+                   placeholder="Einstellungen filtern …" autocomplete="off">
+            <ul id="modcfg-list" class="mod-list compact"></ul>
+            <div id="modcfg-editor" class="modcfg-editor hidden">
+              <h4 id="modcfg-title"></h4>
+              <p id="modcfg-hint" class="mods-note hidden"></p>
+              <div id="modcfg-form" class="cfg-form"></div>
+              <pre id="modcfg-raw" class="modcfg-raw hidden"></pre>
+              <div class="row">
+                <button id="modcfg-save" class="btn primary admin-only">Speichern</button>
+                <button id="modcfg-open-raw" class="btn small-btn hidden">Im Datei-Browser öffnen</button>
+              </div>
+            </div>
+            <div id="modcfg-error" class="err hidden"></div>
+          </details>
+          <details id="ports-box" class="mods-trash">
+            <summary>Zusätzliche Ports <span id="ports-count" class="muted"></span></summary>
+            <p class="muted small">Für Mods mit eigenem Port, z. B. Simple Voice Chat (UDP 24454).
+              Der Port wird beim nächsten Start veröffentlicht und muss in der Fritzbox freigegeben werden.</p>
+            <ul id="ports-list" class="mod-list compact"></ul>
+            <div class="row">
+              <input id="ports-new" class="search-input" type="number" min="1024" max="65535"
+                     placeholder="Port" style="max-width: 7rem">
+              <select id="ports-proto"><option value="udp">UDP</option><option value="tcp">TCP</option></select>
+              <input id="ports-label" class="search-input" type="text" maxlength="32"
+                     placeholder="Name (z. B. Voice-Chat)" style="max-width: 12rem">
+              <button id="ports-add" class="btn small-btn admin-only">Hinzufügen</button>
+            </div>
+            <div id="ports-error" class="err hidden"></div>
+          </details>
           <details id="mods-trash" class="mods-trash hidden">
             <summary>Papierkorb <span id="mods-trash-count" class="muted"></span></summary>
             <p class="muted small">Gelöschte und per Update ersetzte Mods bleiben
@@ -1878,6 +1914,7 @@
       <span class="mod-name"></span>
       <span class="mod-tags"></span>
       <span class="mod-meta muted small"></span>
+      <span class="mod-desc muted small"></span>
     </div>
     <div class="row">
       <button class="btn primary small-btn update hidden admin-only" title="Auf neueste Version aktualisieren">Update</button>
