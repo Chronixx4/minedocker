@@ -86,10 +86,22 @@ class Settings:
             self.filebrowser_max_upload_mb = 300
         # Crash-Watchdog/Alerts (optional): Discord-kompatibler Webhook und/oder
         # Telegram; ALERT_EVENTS wählt die Ereignisse (crash/start/stop).
+        # Öffentlicher Hostname (z. B. No-IP-Domain der Fritzbox) für die
+        # Server-Adresse und den Karten-Link im Dashboard.
+        self.public_host = os.getenv("PUBLIC_HOST", "").strip()
         self.alert_webhook_url = os.getenv("ALERT_WEBHOOK_URL", "").strip()
         self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         self.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-        self.alert_events = os.getenv("ALERT_EVENTS", "crash,start,stop").strip()
+        self.alert_events = os.getenv(
+            "ALERT_EVENTS", "crash,start,stop,backup_failed,disk_low,lag").strip()
+        try:
+            self.alert_disk_free_gb = max(1, int(os.getenv("ALERT_DISK_FREE_GB", "5")))
+        except ValueError:
+            self.alert_disk_free_gb = 5
+        # Off-Site-Backup per WebDAV (optional, leer = aus)
+        self.backup_webdav_url = os.getenv("BACKUP_WEBDAV_URL", "").strip()
+        self.backup_webdav_user = os.getenv("BACKUP_WEBDAV_USER", "").strip()
+        self.backup_webdav_password = os.getenv("BACKUP_WEBDAV_PASSWORD", "")
         if self.mod_loader not in ALLOWED_LOADERS:
             self.mod_loader = "fabric"
 

@@ -115,10 +115,15 @@ services:
       # Backups auf zweiter Platte: nur aktiv, wenn DASHBOARD_BACKUPS_DIR gesetzt ist
       BACKUPS_DIR: "${DASHBOARD_BACKUPS_DIR:+/backups}"
       # --- Crash-Watchdog/Alerts (optional, siehe SERVER-SETUP.md §8) ---
+      BACKUP_WEBDAV_URL: "${BACKUP_WEBDAV_URL:-}"  # Off-Site-Backup (WebDAV-Ordner); leer = aus
+      BACKUP_WEBDAV_USER: "${BACKUP_WEBDAV_USER:-}"
+      BACKUP_WEBDAV_PASSWORD: "${BACKUP_WEBDAV_PASSWORD:-}"
+      ALERT_DISK_FREE_GB: "${ALERT_DISK_FREE_GB:-5}"  # Alert „disk_low“ unter diesem freien Platz
+      PUBLIC_HOST: "${PUBLIC_HOST:-}"  # z. B. meinserver.ddns.net (No-IP) — wird als Server-Adresse angezeigt
       ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}" # Discord-kompatibler Webhook; leer = aus
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}" # alternativ Telegram (Token + Chat-ID)
       TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
-      ALERT_EVENTS: "${ALERT_EVENTS:-crash,start,stop}" # oder z. B. "crash", +update für Update-Alerts
+      ALERT_EVENTS: "${ALERT_EVENTS:-crash,start,stop,backup_failed,disk_low,lag}" # oder z. B. "crash", +update für Update-Alerts
       # --- Scheduler (Zeitplan je Instanz, siehe Dashboard → Zeitplan-Box) ---
       # Geplante Neustarts laufen in Container-Lokalzeit → TZ oben setzen.
     ports:

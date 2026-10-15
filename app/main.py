@@ -61,6 +61,7 @@ from . import livemap as livemap_mod
 from . import players as players_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
+from . import tps as tps_mod
 from . import updates as updates_mod
 from . import watchdog as watchdog_mod
 from . import whitelist as whitelist_mod
@@ -423,6 +424,11 @@ class MapToggleRequest(BaseModel):
     Download der Minecraft-Client-Ressourcen durch BlueMap (Mojang-EULA)."""
     enabled: bool
     accept_download: bool = False
+
+
+class MapPublicRequest(BaseModel):
+    """Karten-Port direkt im Netzwerk/Internet freigeben (ohne Dashboard-Login)."""
+    public: bool
 
 
 class GameruleSetRequest(BaseModel):
@@ -2383,6 +2389,20 @@ async def instance_map_toggle(instance_id: str, req: MapToggleRequest):
     return await asyncio.to_thread(livemap_mod.disable, instance_id)
 
 
+@api.get("/public-host")
+async def public_host():
+    """Öffentlicher Hostname (PUBLIC_HOST) für Adress-Anzeige im Frontend."""
+    return {"public_host": settings.public_host}
+
+
+@api.put("/instances/{instance_id}/map/public")
+async def instance_map_public(instance_id: str, req: MapPublicRequest):
+    """Karten-Port auf allen Interfaces statt nur 127.0.0.1 veröffentlichen
+    (wirksam beim nächsten Start)."""
+    instances.get_instance(instance_id)
+    return await asyncio.to_thread(livemap_mod.set_public, instance_id, req.public)
+
+
 # ---------------------------------------------------------------------------
 # Datei-Browser je Instanz (CRUD auf dem Instanz-Ordner, Pfadschutz in
 # filebrowser.py — verwaltete Dateien/packs/ sind geschützt)
@@ -2575,6 +2595,19 @@ async def instance_time_weather(instance_id: str, req: TimeWeatherRequest):
 # ---------------------------------------------------------------------------
 # Chunky: Pregeneration per RCON (nur wenn Chunky installiert ist)
 # ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/tps")
+async def instance_tps(instance_id: str):
+    """Aktuelle TPS/MSPT per RCON; tps=null, wenn der Server das nicht liefert."""
+    instance = instances.get_instance(instance_id)
+    if not await asyncio.to_thread(runtime.is_running, instance):
+        return {"tps": None, "mspt": None}
+    try:
+        sample = await asyncio.to_thread(tps_mod.query, instance)
+    except rcon_mod.RconError:
+        sample = None
+    return sample or {"tps": None, "mspt": None}
+
 
 @api.get("/instances/{instance_id}/chunky")
 async def instance_chunky_get(instance_id: str):

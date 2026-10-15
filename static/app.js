@@ -740,16 +740,45 @@
     return "< 1 min";
   }
 
+  // Öffentlicher Hostname (PUBLIC_HOST, z. B. No-IP-Domain); Fallback: aktuelle Adresse
+  let publicHost = "";
+  async function loadPublicHost() {
+    try {
+      const d = await api("/api/public-host");
+      publicHost = (d && d.public_host) || "";
+    } catch (e) { /* ohne Domain: aktuelle Adresse */ }
+  }
+
   function hostFor(inst) {
-    return `${location.hostname || "localhost"}:${inst.port}`;
+    return `${publicHost || location.hostname || "localhost"}:${inst.port}`;
+  }
+
+  // navigator.clipboard gibt es nur in sicheren Kontexten (HTTPS/localhost);
+  // über http://<LAN-IP> greift der execCommand-Fallback.
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (e) { /* weiter mit Fallback */ }
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
   }
 
   async function copyAddress(inst) {
     const addr = hostFor(inst);
-    try {
-      await navigator.clipboard.writeText(addr);
+    if (await copyText(addr)) {
       toast(`Adresse kopiert: ${addr}`, "success");
-    } catch (e) {
+    } else {
       toast(`Kopieren nicht möglich — Adresse: ${addr}`, "error");
     }
   }
@@ -1441,7 +1470,7 @@
   // die 5-s-Polls gegen 401, während der Login noch offen ist.
   initAuth().then((authorized) => {
     state.pollingAllowed = authorized;
-    if (authorized) startPolling();
+    if (authorized) { startPolling(); loadPublicHost(); }
     loadAppMeta();
   });
 
@@ -5115,6 +5144,11 @@
     show($("#map-setup"), st.supported && !st.enabled);
     show($("#map-disable"), st.enabled);
     show($("#map-restart"), false);
+    show($("#map-public"), st.enabled);
+    $("#map-public-toggle").checked = !!st.public;
+    const pubUrl = $("#map-public-url");
+    show(pubUrl, !!(st.enabled && st.public && st.port));
+    setText(pubUrl, `Adresse von außen: http://${publicHost || location.hostname}:${st.port}/`);
     const open = $("#map-open");
     show(open, !!(st.enabled && st.reachable));
     open.href = mapUrl(id);
@@ -5144,6 +5178,19 @@
     }
   }
   $("#map-reload").addEventListener("click", loadMapStatus);
+  $("#map-public-toggle").addEventListener("change", async (ev) => {
+    try {
+      await api(`/api/instances/${state.detailId}/map/public`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ public: ev.target.checked }),
+      });
+      if (state.detailRunning) toast("Gilt nach dem nächsten Neustart des Servers.", "info");
+    } catch (e) {
+      mapError(`Freigabe nicht änderbar: ${e.message}`);
+    }
+    loadMapStatus();
+  });
   $("#map-accept").addEventListener("change", () => {
     $("#map-enable").disabled = !$("#map-accept").checked;
   });
@@ -8301,6 +8348,29 @@
       r(2, 6, 4, 1, "#7a4a3a") + "</svg>");
   }
 
+  // TPS/MSPT: höchstens alle 15 s per RCON abfragen (nur bei laufendem Server)
+  let tpsFetchedAt = 0;
+  async function updateTps(inst, running) {
+    const val = $("#ws-tps-val"), bar = $("#ws-tps-bar"), sub = $("#ws-tps-sub");
+    if (!running) {
+      setText(val, "–"); setText(sub, "Server ist offline"); bar.style.width = "0%";
+      return;
+    }
+    if (Date.now() - tpsFetchedAt < 15000) return;
+    tpsFetchedAt = Date.now();
+    try {
+      const t = await api(`/api/instances/${inst.id}/tps`);
+      if (state.detailId !== inst.id) return;
+      if (t.tps == null) {
+        setText(val, "–"); setText(sub, "Von diesem Server nicht abfragbar"); bar.style.width = "0%";
+        return;
+      }
+      setText(val, `${t.tps} / 20`);
+      bar.style.width = `${Math.min(100, (t.tps / 20) * 100)}%`;
+      setText(sub, t.mspt != null ? `${t.mspt} ms pro Tick` : "");
+    } catch (e) { /* nächster Versuch */ }
+  }
+
   /* Übersicht-Slot: Spieler-Leiste, Version, Adresse, Online-Liste */
   function updateWsOverview() {
     if (!state.detailId) return;
@@ -8316,6 +8386,7 @@
       ? (ping.version || `Minecraft ${inst.game_version}`)
       : (running ? "Server antwortet noch nicht" : "Server ist offline"));
     setText($("#ws-addr"), hostFor(inst));
+    updateTps(inst, running);
 
     const list = $("#ws-online-list");
     list.textContent = "";
