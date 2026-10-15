@@ -3,7 +3,7 @@
 Der Container veröffentlicht neben dem Spiel-Port nur, was hier eingetragen
 ist. Host- und Container-Port sind identisch (Mods melden ihren Port an die
 Clients, ein abweichender Host-Port würde dort nicht passen). Wirksam beim
-nächsten (Neu-)Start; in der Fritzbox muss der Port ebenfalls freigegeben werden.
+nächsten (Neu-)Start; in der Fritzbox muss der Port ebenfalls freigegeben werden (siehe fritzbox.py).
 """
 from fastapi import HTTPException
 

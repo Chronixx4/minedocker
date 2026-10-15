@@ -53,6 +53,7 @@ from . import chunky as chunky_mod
 from . import datapacks as datapacks_mod
 from . import extraports as extraports_mod
 from . import filebrowser as filebrowser_mod
+from . import fritzbox as fritzbox_mod
 from . import gamerules as gamerules_mod
 from . import history as history_mod
 from . import icon as icon_mod
@@ -437,6 +438,14 @@ class ModConfigSaveRequest(BaseModel):
 
 class ExtraPortsRequest(BaseModel):
     ports: list[dict] = Field(max_length=10)
+
+
+class FritzboxConfigRequest(BaseModel):
+    host: str | None = Field(default=None, max_length=253)
+    user: str | None = Field(default=None, max_length=64)
+    password: str | None = Field(default=None, max_length=128)
+    lan_ip: str | None = Field(default=None, max_length=45)
+    auto: bool | None = None
 
 
 class MapPublicRequest(BaseModel):
@@ -2436,6 +2445,52 @@ async def instance_extra_ports_put(instance_id: str, req: ExtraPortsRequest):
     """Zusätzliche Ports (z. B. Voice-Chat UDP) — wirksam beim nächsten Start."""
     instances.get_instance(instance_id)
     return {"ports": await asyncio.to_thread(extraports_mod.set_ports, instance_id, req.ports)}
+
+
+@api.get("/fritzbox")
+async def fritzbox_get(request: Request):
+    auth_mod.require_admin(request)
+    return fritzbox_mod.public_view()
+
+
+@api.put("/fritzbox")
+async def fritzbox_put(request: Request, req: FritzboxConfigRequest):
+    """Fritzbox-Zugang speichern; leeres/fehlendes Passwort lässt das alte stehen."""
+    auth_mod.require_admin(request)
+    return await asyncio.to_thread(
+        fritzbox_mod.save, req.host, req.user, req.password, req.lan_ip, req.auto)
+
+
+@api.post("/fritzbox/test")
+async def fritzbox_test(request: Request):
+    auth_mod.require_admin(request)
+    return await asyncio.to_thread(fritzbox_mod.test)
+
+
+@api.get("/fritzbox/mappings")
+async def fritzbox_mappings(request: Request):
+    auth_mod.require_admin(request)
+    return {"mappings": await asyncio.to_thread(fritzbox_mod.list_mappings_api)}
+
+
+@api.get("/instances/{instance_id}/fritzbox")
+async def instance_fritzbox_status(instance_id: str):
+    instance = instances.get_instance(instance_id)
+    return await asyncio.to_thread(fritzbox_mod.instance_status, instance)
+
+
+@api.post("/instances/{instance_id}/fritzbox/open")
+async def instance_fritzbox_open(request: Request, instance_id: str):
+    auth_mod.require_admin(request)
+    instance = instances.get_instance(instance_id)
+    return {"opened": await asyncio.to_thread(fritzbox_mod.open_ports, instance)}
+
+
+@api.post("/instances/{instance_id}/fritzbox/close")
+async def instance_fritzbox_close(request: Request, instance_id: str):
+    auth_mod.require_admin(request)
+    instance = instances.get_instance(instance_id)
+    return {"closed": await asyncio.to_thread(fritzbox_mod.close_ports, instance)}
 
 
 @api.get("/public-host")

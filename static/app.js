@@ -259,7 +259,7 @@
   }
 
   // ESC schließt die Modal-Dialoge ebenfalls animiert
-  ["users-dialog", "password-dialog", "fb-editor", "mod-detail"].forEach((id) => {
+  ["users-dialog", "fritz-dialog", "password-dialog", "fb-editor", "mod-detail"].forEach((id) => {
     const dlg = document.getElementById(id);
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(dlg); });
   });
@@ -276,6 +276,7 @@
     setText($("#user-menu-info"), info);
     show($("#menu-change-password"), !!state.user);
     show($("#menu-users"), state.role === "admin");
+    show($("#menu-fritzbox"), state.role === "admin");
     show($("#menu-setup"),
       !state.user && !!state.me?.setup_available && !state.me?.api_key_required);
     show($("#menu-logout"), !!state.user);
@@ -467,6 +468,10 @@
   $("#menu-users").addEventListener("click", async () => {
     show($("#user-menu-drop"), false);
     openUsersDialog();
+  });
+  $("#menu-fritzbox").addEventListener("click", () => {
+    show($("#user-menu-drop"), false);
+    openFritzDialog();
   });
   $("#menu-change-password").addEventListener("click", () => {
     show($("#user-menu-drop"), false);
@@ -4237,6 +4242,96 @@
     $("#ports-new").value = "";
     $("#ports-label").value = "";
   });
+
+
+  /* ---------- Fritzbox (TR-064): Zugang + Portfreigabe ---------- */
+  function fritzDlgError(msg) { setText($("#fz-error"), msg || ""); show($("#fz-error"), !!msg); }
+  function fritzDlgInfo(msg) { setText($("#fz-result"), msg || ""); show($("#fz-result"), !!msg); }
+
+  async function openFritzDialog() {
+    fritzDlgError(""); fritzDlgInfo("");
+    $("#fz-pass").value = "";
+    try {
+      const c = await api("/api/fritzbox");
+      $("#fz-host").value = c.host || "";
+      $("#fz-user").value = c.user || "";
+      $("#fz-lan").value = c.lan_ip || "";
+      $("#fz-auto").checked = !!c.auto;
+      $("#fz-pass").placeholder = c.has_password ? "gespeichert — leer lassen = unverändert" : "Passwort";
+    } catch (e) { fritzDlgError(e.message); }
+    $("#fritz-dialog").showModal();
+  }
+
+  $("#fritz-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    fritzDlgError(""); fritzDlgInfo("");
+    try {
+      await api("/api/fritzbox", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host: $("#fz-host").value, user: $("#fz-user").value, password: $("#fz-pass").value,
+          lan_ip: $("#fz-lan").value, auto: $("#fz-auto").checked,
+        }),
+      });
+      $("#fz-pass").value = "";
+      fritzDlgInfo("Gespeichert.");
+    } catch (e) { fritzDlgError(e.message); }
+  });
+  $("#fz-test").addEventListener("click", async () => {
+    fritzDlgError(""); fritzDlgInfo("Teste Verbindung …");
+    try {
+      const r = await api("/api/fritzbox/test", { method: "POST" });
+      fritzDlgInfo(`Verbunden. Öffentliche IP: ${r.external_ip || "?"}, ${r.mappings} Portfreigabe(n) in der Fritzbox. (Zuerst speichern, falls du etwas geändert hast.)`);
+    } catch (e) { fritzDlgInfo(""); fritzDlgError(e.message); }
+  });
+  $("#fritz-dlg-close").addEventListener("click", () => closeDialog($("#fritz-dialog")));
+
+  function fritzError(msg) { setText($("#fritz-error"), msg || ""); show($("#fritz-error"), !!msg); }
+
+  async function loadFritzStatus() {
+    if (!state.detailId) return;
+    const list = $("#fritz-list");
+    try {
+      const st = await api(`/api/instances/${state.detailId}/fritzbox`);
+      list.textContent = "";
+      if (!st.configured) {
+        fritzError("Fritzbox noch nicht eingerichtet — Benutzermenü → „Fritzbox einrichten…“.");
+        setText($("#fritz-count"), "");
+        return;
+      }
+      fritzError(st.error || "");
+      const nOpen = st.ports.filter((p) => p.open).length;
+      setText($("#fritz-count"), `(${nOpen}/${st.ports.length} frei)`);
+      for (const p of st.ports) {
+        const li = document.createElement("li");
+        li.className = "mod-row";
+        const info = document.createElement("div");
+        info.className = "mod-info";
+        const name = document.createElement("span");
+        name.className = "mod-name";
+        name.textContent = `${p.port}/${p.proto.toUpperCase()} · ${p.label}`;
+        const meta = document.createElement("span");
+        meta.className = "muted small";
+        meta.textContent = p.open ? "freigegeben" : "nicht freigegeben";
+        info.append(name, meta);
+        li.append(info);
+        list.appendChild(li);
+      }
+    } catch (e) { fritzError(e.message); }
+  }
+
+  async function fritzAction(kind) {
+    fritzError("");
+    try {
+      await api(`/api/instances/${state.detailId}/fritzbox/${kind}`, { method: "POST" });
+      toast(kind === "open" ? "Ports in der Fritzbox freigegeben." : "Freigaben entfernt.", "success");
+    } catch (e) { fritzError(e.message); }
+    loadFritzStatus();
+  }
+  $("#fritz-box").addEventListener("toggle", (ev) => { if (ev.target.open) loadFritzStatus(); });
+  $("#fritz-open").addEventListener("click", () => fritzAction("open"));
+  $("#fritz-close").addEventListener("click", () => fritzAction("close"));
 
   $("#mods-collapse-btn").addEventListener("click", () => {
     state.modsCollapsed = !state.modsCollapsed;

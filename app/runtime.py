@@ -515,6 +515,8 @@ def start_instance(instance: dict) -> None:
             raise RuntimeError(_gpu_start_error(exc, gpu["id"])) from exc
         raise RuntimeError(f"Container-Start fehlgeschlagen: {exc}") from exc
     logger.info("Instanz-Container gestartet: %s (Port %s)", name, instance["port"])
+    from . import fritzbox  # lazy; Fehler stören den Start nie
+    fritzbox.auto_sync(instance, opening=True)
 
 
 def stop_instance(instance: dict) -> None:
@@ -529,6 +531,8 @@ def stop_instance(instance: dict) -> None:
     except Exception as exc:
         raise RuntimeError(f"Container-Stop fehlgeschlagen: {exc}") from exc
     logger.info("Instanz-Container gestoppt: %s", container_name(instance["id"]))
+    from . import fritzbox  # lazy; Fehler stören den Stopp nie
+    fritzbox.auto_sync(instance, opening=False)
 
 
 def _wake_for_stop(container, instance: dict) -> None:
