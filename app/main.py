@@ -61,6 +61,7 @@ from . import livemap as livemap_mod
 from . import players as players_mod
 from . import rcon as rcon_mod
 from . import scheduler as scheduler_mod
+from . import tps as tps_mod
 from . import updates as updates_mod
 from . import watchdog as watchdog_mod
 from . import whitelist as whitelist_mod
@@ -2594,6 +2595,19 @@ async def instance_time_weather(instance_id: str, req: TimeWeatherRequest):
 # ---------------------------------------------------------------------------
 # Chunky: Pregeneration per RCON (nur wenn Chunky installiert ist)
 # ---------------------------------------------------------------------------
+
+@api.get("/instances/{instance_id}/tps")
+async def instance_tps(instance_id: str):
+    """Aktuelle TPS/MSPT per RCON; tps=null, wenn der Server das nicht liefert."""
+    instance = instances.get_instance(instance_id)
+    if not await asyncio.to_thread(runtime.is_running, instance):
+        return {"tps": None, "mspt": None}
+    try:
+        sample = await asyncio.to_thread(tps_mod.query, instance)
+    except rcon_mod.RconError:
+        sample = None
+    return sample or {"tps": None, "mspt": None}
+
 
 @api.get("/instances/{instance_id}/chunky")
 async def instance_chunky_get(instance_id: str):

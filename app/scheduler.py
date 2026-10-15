@@ -32,7 +32,7 @@ import logging
 import threading
 from pathlib import Path
 
-from . import backups, instances, rcon, runtime, updates, watchdog
+from . import backups, instances, offsite, rcon, runtime, tps, updates, watchdog
 from .config import settings
 
 logger = logging.getLogger("dashboard.scheduler")
@@ -306,9 +306,23 @@ def handle_backup(instance: dict, entry: dict, now: dt.datetime) -> bool:
         return False
     if now_ts - float(last) < interval_seconds:
         return False
-    backups.scheduled_backup(instance["id"], instances.instance_dir(instance["id"]),
-                             keep)
-    entry["backup_last"] = now_ts
+    entry["backup_last"] = now_ts  # auch bei Fehler: nicht jede 30 s neu versuchen
+    name = instance.get("name") or instance["id"]
+    try:
+        result = backups.scheduled_backup(
+            instance["id"], instances.instance_dir(instance["id"]), keep)
+    except Exception as exc:
+        watchdog.notify("backup_failed",
+                        f"⚠️ Geplantes Backup von „{name}“ fehlgeschlagen: {exc}")
+        raise
+    if offsite.enabled():
+        try:
+            offsite.upload(instance["id"],
+                           backups.backup_path(instance["id"], result["name"]))
+        except Exception as exc:
+            watchdog.notify("backup_failed",
+                            f"⚠️ Off-Site-Upload für „{name}“ fehlgeschlagen: {exc}")
+            logger.warning("%s", exc)
     return True
 
 
@@ -358,6 +372,50 @@ def handle_update_check(instance: dict, entry: dict, now: dt.datetime) -> bool:
 # Tick + Loop
 # ---------------------------------------------------------------------------
 
+_lag_streak: dict[str, int] = {}
+_lag_alerted: set[str] = set()
+_disk_alert_ts = 0.0
+_DISK_ALERT_EVERY = 6 * 3600.0
+
+
+def _health_checks() -> None:
+    """Lag- und Speicherplatz-Alarm (unabhängig vom Zeitplan der Instanz)."""
+    global _disk_alert_ts
+    try:
+        import shutil
+        import time
+        free_gb = shutil.disk_usage(settings.instances_dir).free / 1024 ** 3
+        if (free_gb < settings.alert_disk_free_gb
+                and time.time() - _disk_alert_ts > _DISK_ALERT_EVERY):
+            _disk_alert_ts = time.time()
+            watchdog.notify("disk_low", f"⚠️ Nur noch {free_gb:.1f} GB Speicher frei "
+                                        f"auf dem Server-Laufwerk.")
+    except Exception:
+        logger.exception("Speicherplatz-Prüfung fehlgeschlagen")
+    if "lag" not in watchdog._alert_events():
+        return
+    for instance in instances.list_instances():
+        instance_id = str(instance.get("id") or "")
+        try:
+            if not runtime.is_running(instance):
+                _lag_streak.pop(instance_id, None)
+                _lag_alerted.discard(instance_id)
+                continue
+            sample = tps.query(instance)
+        except Exception:
+            continue
+        if sample is not None and tps.is_lagging(sample):
+            _lag_streak[instance_id] = _lag_streak.get(instance_id, 0) + 1
+            if (_lag_streak[instance_id] >= tps.LAG_TICKS
+                    and instance_id not in _lag_alerted):
+                _lag_alerted.add(instance_id)
+                watchdog.notify("lag", f"🐌 „{instance.get('name') or instance_id}“ laggt: "
+                                       f"{sample['tps']} TPS (normal: 20).")
+        else:
+            _lag_streak.pop(instance_id, None)
+            _lag_alerted.discard(instance_id)
+
+
 def tick() -> dict:
     """Ein Scheduler-Durchlauf: alle Instanzen prüfen, fällige Aktionen
     ausführen, Zustand wegschreiben, verwaiste Einträge entfernen.
@@ -397,6 +455,7 @@ def tick() -> dict:
             for stale in [k for k in entries if k not in live_ids]:
                 entries.pop(stale, None)
         save_state(state)
+    _health_checks()
     return counts
 
 

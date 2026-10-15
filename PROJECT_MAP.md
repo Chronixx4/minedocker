@@ -761,3 +761,10 @@ fail-closed bei RCON-Fehler, Routen, Viewer-403) in tests/test_datapacks.py,
   ueber Direktaufrufe.
 - PaperMC: Fill-API v3 (fill.papermc.io), v2 ist abgeschaltet (410).
 - Bukkit/Spigot: kein Auto-Download (BuildTools), Loader-Version leer lassen.
+
+## Ergänzungen (Alerts, TPS, Off-Site, Domain)
+- app/tps.py – TPS/MSPT per RCON (`tick query`, `tps`, `forge tps`, `neoforge tps`), `GET /api/instances/{id}/tps`; Lag-Alarm (<15 TPS über 4 Scheduler-Ticks) → Event `lag`
+- app/offsite.py – geplante Backups zusätzlich per WebDAV hochladen (`BACKUP_WEBDAV_URL/USER/PASSWORD`); Fehler → Event `backup_failed`
+- Alert-Events neu: `backup_failed`, `disk_low` (`ALERT_DISK_FREE_GB`, Default 5), `lag`
+- `PUBLIC_HOST` (z. B. No-IP-Domain) → Server-Adresse im Dashboard; `GET /api/public-host`
+- BlueMap: Port standardmäßig nur 127.0.0.1 (Zugriff über Dashboard-Proxy); `PUT /instances/{id}/map/public` bindet ihn auf 0.0.0.0 für direkten Zugriff von außen

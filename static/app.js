@@ -8348,6 +8348,29 @@
       r(2, 6, 4, 1, "#7a4a3a") + "</svg>");
   }
 
+  // TPS/MSPT: höchstens alle 15 s per RCON abfragen (nur bei laufendem Server)
+  let tpsFetchedAt = 0;
+  async function updateTps(inst, running) {
+    const val = $("#ws-tps-val"), bar = $("#ws-tps-bar"), sub = $("#ws-tps-sub");
+    if (!running) {
+      setText(val, "–"); setText(sub, "Server ist offline"); bar.style.width = "0%";
+      return;
+    }
+    if (Date.now() - tpsFetchedAt < 15000) return;
+    tpsFetchedAt = Date.now();
+    try {
+      const t = await api(`/api/instances/${inst.id}/tps`);
+      if (state.detailId !== inst.id) return;
+      if (t.tps == null) {
+        setText(val, "–"); setText(sub, "Von diesem Server nicht abfragbar"); bar.style.width = "0%";
+        return;
+      }
+      setText(val, `${t.tps} / 20`);
+      bar.style.width = `${Math.min(100, (t.tps / 20) * 100)}%`;
+      setText(sub, t.mspt != null ? `${t.mspt} ms pro Tick` : "");
+    } catch (e) { /* nächster Versuch */ }
+  }
+
   /* Übersicht-Slot: Spieler-Leiste, Version, Adresse, Online-Liste */
   function updateWsOverview() {
     if (!state.detailId) return;
@@ -8363,6 +8386,7 @@
       ? (ping.version || `Minecraft ${inst.game_version}`)
       : (running ? "Server antwortet noch nicht" : "Server ist offline"));
     setText($("#ws-addr"), hostFor(inst));
+    updateTps(inst, running);
 
     const list = $("#ws-online-list");
     list.textContent = "";
