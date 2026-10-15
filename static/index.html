@@ -63,6 +63,7 @@
         <button id="menu-notify" class="user-item" role="menuitemcheckbox" aria-checked="false">Benachrichtigungen: aus</button>
         <button id="menu-change-password" class="user-item hidden">Passwort ändern</button>
         <button id="menu-users" class="user-item hidden">Benutzer verwalten</button>
+        <button id="menu-fritzbox" class="user-item hidden">Fritzbox einrichten…</button>
         <button id="menu-setup" class="user-item hidden">Zugang einrichten…</button>
         <button id="menu-logout" class="user-item hidden">Abmelden</button>
       </div>
@@ -1283,6 +1284,17 @@
             </div>
             <div id="ports-error" class="err hidden"></div>
           </details>
+          <details id="fritz-box" class="mods-trash">
+            <summary>Fritzbox-Portfreigabe <span id="fritz-count" class="muted"></span></summary>
+            <p class="muted small">Gibt Spiel-Port, Karten-Port und zusätzliche Ports dieses Servers
+              direkt in der Fritzbox frei. Zugang unter „Fritzbox einrichten…“ im Benutzermenü.</p>
+            <ul id="fritz-list" class="mod-list compact"></ul>
+            <div class="row">
+              <button id="fritz-open" class="btn small-btn admin-only">Ports freigeben</button>
+              <button id="fritz-close" class="btn small-btn admin-only">Freigaben entfernen</button>
+            </div>
+            <div id="fritz-error" class="err hidden"></div>
+          </details>
           <details id="mods-trash" class="mods-trash hidden">
             <summary>Papierkorb <span id="mods-trash-count" class="muted"></span></summary>
             <p class="muted small">Gelöschte und per Update ersetzte Mods bleiben
@@ -1700,6 +1712,39 @@
     <ul id="users-list" class="mod-list compact"></ul>
     <p id="users-empty" class="muted small hidden">Keine Benutzer vorhanden.</p>
     <div id="users-error" class="err hidden"></div>
+  </div>
+</dialog>
+
+<!-- Fritzbox-Zugang (Admin) -->
+<dialog id="fritz-dialog" class="modal">
+  <div class="modal-body">
+    <div class="modal-head">
+      <h2>Fritzbox einrichten</h2>
+      <button id="fritz-dlg-close" type="button" class="btn">Schließen</button>
+    </div>
+    <p class="muted small">Das Dashboard öffnet Ports per TR-064. In der Fritzbox einen eigenen Benutzer
+      mit dem Recht „FRITZ!Box Einstellungen“ anlegen und unter Heimnetz → Netzwerk →
+      Netzwerkeinstellungen → Weitere Einstellungen den „Zugriff für Anwendungen“ erlauben.
+      Das Passwort wird nur auf dem Server gespeichert und nie wieder angezeigt.</p>
+    <form id="fritz-form" class="upload-box" autocomplete="off">
+      <label class="auth-field">Fritzbox-Adresse
+        <input id="fz-host" class="search-input" type="text" maxlength="253" placeholder="fritz.box oder 192.168.178.1"></label>
+      <label class="auth-field">Benutzer
+        <input id="fz-user" class="search-input" type="text" maxlength="64" autocomplete="off"></label>
+      <label class="auth-field">Passwort
+        <input id="fz-pass" class="search-input" type="password" maxlength="128" autocomplete="new-password"
+               placeholder="leer lassen = unverändert"></label>
+      <label class="auth-field">LAN-IP dieses Servers (ZimaOS)
+        <input id="fz-lan" class="search-input" type="text" maxlength="45" placeholder="z. B. 192.168.178.20"></label>
+      <label class="check"><input id="fz-auto" type="checkbox">
+        Ports beim Starten automatisch freigeben, beim Stoppen entfernen</label>
+      <div class="rcon-actions">
+        <button id="fz-save" type="submit" class="btn primary">Speichern</button>
+        <button id="fz-test" type="button" class="btn">Verbindung testen</button>
+      </div>
+    </form>
+    <p id="fz-result" class="muted small hidden"></p>
+    <div id="fz-error" class="err hidden"></div>
   </div>
 </dialog>
 
