@@ -541,7 +541,29 @@
             <p class="muted small">Spieler installieren einmalig die Mod „AutoModpack“. Beim Beitreten bekommen sie
               alle Mods dieses Servers, vom Server entfernte Mods verschwinden bei ihnen wieder.
               Läuft über den normalen Minecraft-Port, keine zusätzliche Freigabe nötig.</p>
-            <div id="amp-state" class="muted small"></div>
+            <div class="stat-row" id="amp-stats">
+              <div class="stat-tile">
+                <div class="stat-body">
+                  <div class="stat-value" id="amp-state">–</div>
+                  <div class="stat-label">Mod-Sync</div>
+                  <div class="stat-sub muted small" id="amp-state-sub"></div>
+                </div>
+              </div>
+              <div class="stat-tile">
+                <div class="stat-body">
+                  <div class="stat-value" id="amp-dist">–</div>
+                  <div class="stat-label">Mods gehen an Spieler</div>
+                  <div class="stat-sub muted small" id="amp-dist-sub"></div>
+                </div>
+              </div>
+              <div class="stat-tile">
+                <div class="stat-body">
+                  <div class="stat-value" id="amp-addr">–</div>
+                  <div class="stat-label">Adresse für Freunde</div>
+                  <div class="stat-sub muted small">Minecraft → Mehrspieler → Server hinzufügen</div>
+                </div>
+              </div>
+            </div>
             <div class="row">
               <button id="amp-install" class="btn primary small-btn admin-only hidden">AutoModpack installieren</button>
               <button id="amp-generate" class="btn small-btn admin-only hidden">Mod-Liste jetzt veröffentlichen</button>
@@ -554,7 +576,17 @@
                 Reine Server-Mods erkennt AutoModpack meist selbst. Wirksam nach „Mod-Liste jetzt veröffentlichen“
                 oder Neustart.</p>
               <p id="amp-mods-hint" class="muted small hidden"></p>
-              <ul id="amp-mod-list" class="mod-list compact"></ul>
+              <div class="row">
+                <input id="amp-search" class="search-input" type="search" placeholder="Mod suchen…"
+                       style="max-width: 16rem">
+                <select id="amp-filter" aria-label="Filter">
+                  <option value="">Alle</option>
+                  <option value="client">Nur Client</option>
+                  <option value="server">Nur Server</option>
+                  <option value="both">Client + Server</option>
+                </select>
+              </div>
+              <div id="amp-mod-groups"></div>
             </div>
             <div id="amp-clients" class="hidden">
               <h4>Nur für Spieler (Client-only-Mods, z. B. Shader-Mods)</h4>
