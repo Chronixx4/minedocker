@@ -228,10 +228,12 @@ def set_distribute(instance_id: str, filename: str, distribute: bool) -> bool:
 def server_mods(instance_id: str) -> list[dict]:
     excluded = excluded_paths(instance_id)
     result = []
-    for mod in instances.list_mods(instance_id):
+    for mod in instances.list_mods(instance_id, with_meta=True):
         if not mod["enabled"] or _JAR_RE.match(mod["filename"]):
             continue
+        env = (mod.get("meta") or {}).get("environment")
         result.append({"filename": mod["filename"],
+                       "environment": env if env in ("client", "server", "both") else None,
                        "distribute": None if excluded is None
                        else f"mods/{mod['filename']}" not in excluded})
     return result
