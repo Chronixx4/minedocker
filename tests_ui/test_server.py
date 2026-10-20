@@ -197,3 +197,13 @@ def test_server_loeschen_abbrechen(page, make_instance):
     expect(page.locator("#confirm-dialog")).to_be_hidden()
     expect(page.locator("#detail-title")).to_have_text("Bleibt-Da")
     expect(page.locator(f'#inst-tabs .inst-tab[data-id="{inst["id"]}"]')).to_have_count(1)
+
+
+def test_modsync_tab_zeigt_installieren(page, make_instance):
+    """Mod-Sync-Tab: ohne AutoModpack erscheint der Installieren-Knopf."""
+    _open(page, make_instance("Sync-Test"))
+    page.locator('#ws-tabs .slot[data-ws-tab="modsync"]').click()
+    expect(page.locator('.ws-panel[data-ws-panel="modsync"]')).to_be_visible()
+    expect(page.locator("#amp-state")).to_have_text("Nicht installiert.")
+    expect(page.locator("#amp-install")).to_be_visible()
+    expect(page.locator("#amp-mods")).to_be_hidden()

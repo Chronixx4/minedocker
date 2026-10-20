@@ -441,6 +441,11 @@ class AutoModpackSettingsRequest(BaseModel):
     require: bool
 
 
+class AutoModpackModRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    distribute: bool
+
+
 class ExtraPortsRequest(BaseModel):
     ports: list[dict] = Field(max_length=10)
 
@@ -2467,6 +2472,15 @@ async def instance_automodpack_put(instance_id: str, req: AutoModpackSettingsReq
     instances.get_instance(instance_id)
     require = await asyncio.to_thread(automodpack_mod.set_require, instance_id, req.require)
     return {"require": require}
+
+
+@api.put("/instances/{instance_id}/automodpack/mods")
+async def instance_automodpack_mod_put(instance_id: str, req: AutoModpackModRequest):
+    """Eine Server-Mod an Spieler verteilen oder davon ausnehmen (exclude-Liste)."""
+    instances.get_instance(instance_id)
+    distribute = await asyncio.to_thread(
+        automodpack_mod.set_distribute, instance_id, req.filename, req.distribute)
+    return {"filename": req.filename, "distribute": distribute}
 
 
 @api.post("/instances/{instance_id}/automodpack/generate")

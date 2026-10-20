@@ -8,8 +8,10 @@ automodpack/host-modpack/main/mods/ (laufen nicht auf dem Server).
 
 Das Config-Format von AutoModpack unterscheidet sich je nach Version
 (server.conf im HOCON-Stil, ältere Versionen automodpack-server.json); das
-Dashboard ändert deshalb nur den einen Schalter „Mod Pflicht“ zeilenweise
-und fasst sonst keine Config an.
+Dashboard ändert deshalb nur zwei Dinge zeilenweise: den Schalter „Mod Pflicht“
+und die Zeile `exclude: [...]` (Mods, die nicht an Spieler verteilt werden).
+Alles andere in der Config bleibt unangetastet; ist die Struktur nicht
+eindeutig (z. B. mehrere exclude-Zeilen), lehnt das Dashboard die Änderung ab.
 """
 import json
 import re
@@ -24,6 +26,9 @@ PROJECT_ID = "k68glP2e"  # Modrinth: automodpack
 LOADERS = ("fabric", "forge", "neoforge", "quilt")
 
 _REQUIRE_RE = re.compile(r"^(\s*)require-modpack(\s*[:=]\s*)\S+", re.MULTILINE)
+_EXCLUDE_RE = re.compile(r"^(?P<pre>[ \t]*exclude[ \t]*[:=][ \t]*)\[(?P<body>.*)\](?P<post>[ \t]*)$",
+                         re.MULTILINE)
+_BAD_NAME_CHARS = set('"\'[]{},\\*?!#')
 _JAR_RE = re.compile(r"^automodpack[-_.\w]*\.jar(\.disabled)?$", re.IGNORECASE)
 
 
@@ -134,5 +139,97 @@ def status(instance: dict) -> dict:
         "config": conf,
         "require": read_require(instance_id),
         "client_mods": list_client_mods(instance_id),
+        "server_mods": server_mods(instance_id) if jar else [],
+        "distribute_editable": excluded_paths(instance_id) is not None,
         "install_item": {"source": "modrinth", "project_id": PROJECT_ID},
     }
+
+
+def _split_items(body: str) -> list[str]:
+    """Rohe Listeneinträge trennen; Kommas in {…} oder "…" trennen nicht."""
+    items, cur, depth, quote = [], [], 0, False
+    for ch in body:
+        if ch == '"':
+            quote = not quote
+        elif not quote and ch == "{":
+            depth += 1
+        elif not quote and ch == "}":
+            depth = max(0, depth - 1)
+        if ch == "," and not quote and depth == 0:
+            items.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    if "".join(cur).strip():
+        items.append("".join(cur).strip())
+    return [i for i in items if i]
+
+
+def _unquote(raw: str) -> str:
+    return raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] == '"' else raw
+
+
+def _exclude_match(instance_id: str):
+    """(Pfad, Text, Match) der einzigen exclude-Zeile; None, wenn nicht eindeutig."""
+    conf = conf_path(instance_id)
+    if not conf.is_file():
+        return None
+    text = conf.read_text(encoding="utf-8", errors="replace")
+    found = list(_EXCLUDE_RE.finditer(text))
+    if len(found) != 1:
+        return None
+    return conf, text, found[0]
+
+
+def excluded_paths(instance_id: str) -> set[str] | None:
+    """Ausgenommene Pfade; None = nicht bearbeitbar (Config fehlt/mehrdeutig)."""
+    found = _exclude_match(instance_id)
+    if found is None:
+        return None
+    return {_unquote(i) for i in _split_items(found[2].group("body"))}
+
+
+def set_distribute(instance_id: str, filename: str, distribute: bool) -> bool:
+    """Mod an Spieler verteilen (True) oder ausnehmen (False)."""
+    validate_filename(filename)
+    if any(c in _BAD_NAME_CHARS for c in filename):
+        raise HTTPException(status_code=400,
+                            detail="Dateiname enthält Sonderzeichen — bitte Config von Hand anpassen")
+    mods = instances.mods_dir(instance_id)
+    if not ((mods / filename).is_file()):
+        raise HTTPException(status_code=404, detail="Mod nicht gefunden")
+    if _JAR_RE.match(filename):
+        raise HTTPException(status_code=400, detail="AutoModpack selbst wird nie verteilt")
+    found = _exclude_match(instance_id)
+    if found is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Config noch nicht erzeugt oder exclude-Zeile nicht eindeutig — "
+                   "Server einmal mit AutoModpack starten")
+    conf, text, match = found
+    entry = f"mods/{filename}"
+    raws = _split_items(match.group("body"))
+    kept = [r for r in raws if _unquote(r) != entry]
+    if not distribute:
+        quoted = not raws or any(r.startswith('"') for r in raws)
+        kept.append(f'"{entry}"' if quoted else entry)
+    if kept == raws:
+        return distribute
+    backup = conf.with_name(conf.name + ".dashboard-bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+    new_line = f"{match.group('pre')}[{', '.join(kept)}]{match.group('post')}"
+    conf.write_text(text[:match.start()] + new_line + text[match.end():], encoding="utf-8")
+    return distribute
+
+
+def server_mods(instance_id: str) -> list[dict]:
+    excluded = excluded_paths(instance_id)
+    result = []
+    for mod in instances.list_mods(instance_id):
+        if not mod["enabled"] or _JAR_RE.match(mod["filename"]):
+            continue
+        result.append({"filename": mod["filename"],
+                       "distribute": None if excluded is None
+                       else f"mods/{mod['filename']}" not in excluded})
+    return result
