@@ -204,6 +204,6 @@ def test_modsync_tab_zeigt_installieren(page, make_instance):
     _open(page, make_instance("Sync-Test"))
     page.locator('#ws-tabs .slot[data-ws-tab="modsync"]').click()
     expect(page.locator('.ws-panel[data-ws-panel="modsync"]')).to_be_visible()
-    expect(page.locator("#amp-state")).to_have_text("Nicht installiert.")
+    expect(page.locator("#amp-state")).to_have_text("Nicht installiert")
     expect(page.locator("#amp-install")).to_be_visible()
     expect(page.locator("#amp-mods")).to_be_hidden()

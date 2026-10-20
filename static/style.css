@@ -3512,3 +3512,7 @@ kbd {
 .chunky-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.6rem; margin-bottom: 0.8rem; }
 .chunky-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; }
 .chunky-form .search-input { max-width: none; width: 100%; }
+
+/* Mod-Sync: Gruppentitel der Mod-Liste */
+.amp-group-title { margin: 1rem 0 0.35rem; font-size: 0.9rem; color: var(--text-2); }
+#amp-stats { margin-top: 0.8rem; }

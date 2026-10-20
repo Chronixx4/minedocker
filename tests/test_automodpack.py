@@ -166,3 +166,12 @@ def test_umgebungs_etikett_aus_mod_metadaten(client, inst):
         (mods / name).write_bytes(buf.getvalue())
     got = {m["filename"]: m["environment"] for m in client.get(url(inst)).json()["server_mods"]}
     assert got == {"both.jar": "both", "sodium.jar": "client"}
+
+
+def test_beitrittsadresse(client, inst, monkeypatch):
+    monkeypatch.setattr(settings, "public_host", "claw-games.ddns.net")
+    d = client.get(url(inst)).json()
+    port = instances.get_instance(inst["id"])["port"]
+    assert d["join_address"] == f"claw-games.ddns.net:{port}"
+    monkeypatch.setattr(settings, "public_host", "")
+    assert client.get(url(inst)).json()["join_address"] == ""

@@ -20,6 +20,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from . import instances
+from .config import settings
 from .security import validate_filename
 
 PROJECT_ID = "k68glP2e"  # Modrinth: automodpack
@@ -127,6 +128,15 @@ def delete_client_mod(instance_id: str, filename: str) -> None:
     path.unlink()
 
 
+def join_address(instance: dict) -> str:
+    """Adresse, die Freunde in Minecraft eintragen (leer ohne PUBLIC_HOST)."""
+    host = settings.public_host
+    if not host:
+        return ""
+    port = int(instance.get("port") or 25565)
+    return host if port == 25565 else f"{host}:{port}"
+
+
 def status(instance: dict) -> dict:
     instance_id = instance["id"]
     jar = find_jar(instance_id)
@@ -136,6 +146,7 @@ def status(instance: dict) -> dict:
         "loader": instance.get("loader"),
         "installed": jar is not None,
         "jar": jar,
+        "join_address": join_address(instance),
         "config": conf,
         "require": read_require(instance_id),
         "client_mods": list_client_mods(instance_id),

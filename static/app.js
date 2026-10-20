@@ -4252,16 +4252,95 @@
     show($("#amp-error"), !!msg);
   }
 
+  const AMP_ENV = { client: "Nur Client", server: "Nur Server", both: "Client + Server" };
+
+  function renderAmpMods() {
+    const d = amp.data;
+    if (!d) return;
+    const base = `/api/instances/${state.detailId}/automodpack`;
+    const q = $("#amp-search").value.trim().toLowerCase();
+    const envFilter = $("#amp-filter").value;
+    const groups = $("#amp-mod-groups");
+    groups.textContent = "";
+    const shown = d.server_mods.filter((m) =>
+      (!q || m.filename.toLowerCase().includes(q)) && (!envFilter || m.environment === envFilter));
+    const sections = [
+      ["Wird an Spieler verteilt", shown.filter((m) => m.distribute !== false)],
+      ["Bleibt nur auf dem Server", shown.filter((m) => m.distribute === false)],
+    ];
+    for (const [title, mods] of sections) {
+      if (!mods.length) continue;
+      const h = document.createElement("h5");
+      h.className = "amp-group-title";
+      h.textContent = `${title} (${mods.length})`;
+      const ul = document.createElement("ul");
+      ul.className = "mod-list compact";
+      for (const m of mods) {
+        const li = document.createElement("li");
+        li.className = "mod-row";
+        const label = document.createElement("label");
+        label.className = "mod-info";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = m.distribute !== false;
+        box.disabled = !d.distribute_editable;
+        box.classList.add("admin-only");
+        box.addEventListener("change", async () => {
+          try {
+            await api(`${base}/mods`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ filename: m.filename, distribute: box.checked }),
+            });
+            m.distribute = box.checked;
+            ampError("");
+            renderAmp();
+          } catch (e) {
+            box.checked = !box.checked;
+            ampError(e.message);
+          }
+        });
+        const name = document.createElement("span");
+        name.className = "mod-name";
+        name.textContent = " " + m.filename;
+        label.append(box, name);
+        if (AMP_ENV[m.environment]) {
+          const tag = document.createElement("span");
+          tag.className = "mod-meta muted small";
+          tag.textContent = ` · ${AMP_ENV[m.environment]}`;
+          label.append(tag);
+        }
+        li.appendChild(label);
+        ul.appendChild(li);
+      }
+      groups.append(h, ul);
+    }
+    if (!shown.length) {
+      const p = document.createElement("p");
+      p.className = "muted small";
+      p.textContent = d.server_mods.length ? "Keine Mod passt zum Filter." : "Keine Mods auf dem Server.";
+      groups.appendChild(p);
+    }
+  }
+
   function renderAmp() {
     const d = amp.data;
     if (!d) return;
     const base = `/api/instances/${state.detailId}/automodpack`;
-    let text;
-    if (!d.supported) text = `Für ${d.loader || "diesen Loader"} nicht verfügbar (nur Fabric, Forge, NeoForge, Quilt).`;
-    else if (!d.installed) text = "Nicht installiert.";
-    else if (!d.config) text = `Installiert (${d.jar}). Server einmal starten, dann erscheint die Config.`;
-    else text = `Aktiv (${d.jar}).`;
-    setText($("#amp-state"), text);
+    let value;
+    let sub = "";
+    if (!d.supported) { value = "Nicht verfügbar"; sub = `Nur Fabric, Forge, NeoForge, Quilt (hier: ${d.loader || "?"})`; }
+    else if (!d.installed) { value = "Nicht installiert"; sub = "Mit „AutoModpack installieren“ einrichten"; }
+    else if (!d.config) { value = "Wartet auf Start"; sub = "Server einmal starten, dann erscheint die Config"; }
+    else { value = "Aktiv"; sub = d.jar; }
+    setText($("#amp-state"), value);
+    setText($("#amp-state-sub"), sub);
+    const total = d.server_mods.length;
+    const dist = d.server_mods.filter((m) => m.distribute !== false).length;
+    setText($("#amp-dist"), d.installed ? `${dist} von ${total}` : "–");
+    setText($("#amp-dist-sub"), d.installed
+      ? `+ ${d.client_mods.length} Client-only-Mod${d.client_mods.length === 1 ? "" : "s"}` : "");
+    setText($("#amp-addr"), d.join_address || "nicht eingestellt");
     setText($("#amp-count"), d.installed ? "(aktiv)" : "");
     show($("#amp-install"), d.supported && !d.installed);
     show($("#amp-generate"), d.installed && state.detailRunning);
@@ -4273,45 +4352,7 @@
     setText(hint, d.distribute_editable ? ""
       : "Auswahl noch nicht möglich: Server einmal mit AutoModpack starten (Config wird erzeugt).");
     show(hint, !d.distribute_editable);
-    const modList = $("#amp-mod-list");
-    modList.textContent = "";
-    for (const m of d.server_mods) {
-      const li = document.createElement("li");
-      li.className = "mod-row";
-      const label = document.createElement("label");
-      label.className = "mod-info";
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = m.distribute !== false;
-      box.disabled = !d.distribute_editable;
-      box.classList.add("admin-only");
-      box.addEventListener("change", async () => {
-        try {
-          await api(`${base}/mods`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ filename: m.filename, distribute: box.checked }),
-          });
-          ampError("");
-        } catch (e) {
-          box.checked = !box.checked;
-          ampError(e.message);
-        }
-      });
-      const name = document.createElement("span");
-      name.className = "mod-name";
-      name.textContent = " " + m.filename;
-      const env = { client: "Nur Client", server: "Nur Server", both: "Client + Server" }[m.environment];
-      label.append(box, name);
-      if (env) {
-        const tag = document.createElement("span");
-        tag.className = "mod-meta muted small";
-        tag.textContent = ` · ${env}`;
-        label.append(tag);
-      }
-      li.appendChild(label);
-      modList.appendChild(li);
-    }
+    renderAmpMods();
     const list = $("#amp-client-list");
     list.textContent = "";
     for (const m of d.client_mods) {
@@ -4351,6 +4392,8 @@
     }
   }
 
+  $("#amp-search").addEventListener("input", renderAmpMods);
+  $("#amp-filter").addEventListener("change", renderAmpMods);
   $("#amp-install").addEventListener("click", async () => {
     const btn = $("#amp-install");
     btn.disabled = true;
