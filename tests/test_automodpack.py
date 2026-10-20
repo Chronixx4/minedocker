@@ -120,8 +120,9 @@ class TestVerteilen:
         conf = self._setup(inst)
         d = client.get(url(inst)).json()
         assert d["distribute_editable"] is True
-        assert d["server_mods"] == [{"filename": "lithium.jar", "distribute": True},
-                                    {"filename": "serveronly.jar", "distribute": True}]
+        assert d["server_mods"] == [
+            {"filename": "lithium.jar", "environment": None, "distribute": True},
+            {"filename": "serveronly.jar", "environment": None, "distribute": True}]
         r = client.put(url(inst, "/mods"), json={"filename": "serveronly.jar", "distribute": False})
         assert r.status_code == 200
         assert 'exclude: ["**/.*", "**/*.{tmp,disabled,bak}", "mods/serveronly.jar"]' in conf.read_text()
@@ -148,3 +149,20 @@ class TestVerteilen:
                            ("../x.jar", 400)):
             r = client.put(url(inst, "/mods"), json={"filename": name, "distribute": False})
             assert r.status_code == code, name
+
+
+def test_umgebungs_etikett_aus_mod_metadaten(client, inst):
+    import io
+    import json
+    import zipfile
+    mods = instances.mods_dir(inst["id"])
+    mods.mkdir(parents=True, exist_ok=True)
+    (mods / "automodpack-fabric-4.0.jar").write_bytes(b"x")
+    for name, env in (("sodium.jar", "client"), ("both.jar", "*")):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("fabric.mod.json", json.dumps(
+                {"schemaVersion": 1, "id": "m", "version": "1", "environment": env}))
+        (mods / name).write_bytes(buf.getvalue())
+    got = {m["filename"]: m["environment"] for m in client.get(url(inst)).json()["server_mods"]}
+    assert got == {"both.jar": "both", "sodium.jar": "client"}

@@ -4301,7 +4301,14 @@
       const name = document.createElement("span");
       name.className = "mod-name";
       name.textContent = " " + m.filename;
+      const env = { client: "Nur Client", server: "Nur Server", both: "Client + Server" }[m.environment];
       label.append(box, name);
+      if (env) {
+        const tag = document.createElement("span");
+        tag.className = "mod-meta muted small";
+        tag.textContent = ` · ${env}`;
+        label.append(tag);
+      }
       li.appendChild(label);
       modList.appendChild(li);
     }
