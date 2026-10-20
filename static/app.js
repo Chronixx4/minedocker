@@ -4244,6 +4244,122 @@
   });
 
 
+  /* ---------- Mod-Sync für Spieler (AutoModpack) ---------- */
+  const amp = { data: null };
+
+  function ampError(msg) {
+    setText($("#amp-error"), msg || "");
+    show($("#amp-error"), !!msg);
+  }
+
+  function renderAmp() {
+    const d = amp.data;
+    if (!d) return;
+    const base = `/api/instances/${state.detailId}/automodpack`;
+    let text;
+    if (!d.supported) text = `Für ${d.loader || "diesen Loader"} nicht verfügbar (nur Fabric, Forge, NeoForge, Quilt).`;
+    else if (!d.installed) text = "Nicht installiert.";
+    else if (!d.config) text = `Installiert (${d.jar}). Server einmal starten, dann erscheint die Config.`;
+    else text = `Aktiv (${d.jar}).`;
+    setText($("#amp-state"), text);
+    setText($("#amp-count"), d.installed ? "(aktiv)" : "");
+    show($("#amp-install"), d.supported && !d.installed);
+    show($("#amp-generate"), d.installed && state.detailRunning);
+    show($("#amp-require-row"), d.installed && d.require !== null);
+    $("#amp-require").checked = !!d.require;
+    show($("#amp-clients"), d.installed);
+    const list = $("#amp-client-list");
+    list.textContent = "";
+    for (const m of d.client_mods) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const info = document.createElement("div");
+      info.className = "mod-info";
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = m.name;
+      const meta = document.createElement("span");
+      meta.className = "mod-meta muted small";
+      meta.textContent = fmtBytes(m.size);
+      info.append(name, meta);
+      const del = document.createElement("button");
+      del.className = "btn danger small-btn admin-only";
+      del.textContent = "Entfernen";
+      del.addEventListener("click", async () => {
+        try {
+          await api(`${base}/client-mods/${encodeURIComponent(m.name)}`, { method: "DELETE" });
+          loadAmp();
+        } catch (e) { ampError(e.message); }
+      });
+      li.append(info, del);
+      list.appendChild(li);
+    }
+  }
+
+  async function loadAmp() {
+    if (!state.detailId) return;
+    try {
+      amp.data = await api(`/api/instances/${state.detailId}/automodpack`);
+      ampError("");
+      renderAmp();
+    } catch (e) {
+      ampError(`Mod-Sync nicht ladbar: ${e.message}`);
+    }
+  }
+
+  $("#amp-box").addEventListener("toggle", (ev) => {
+    if (ev.target.open) loadAmp();
+  });
+  $("#amp-install").addEventListener("click", async () => {
+    const btn = $("#amp-install");
+    btn.disabled = true;
+    try {
+      const job = await api(`/api/instances/${state.detailId}/automodpack/install`, { method: "POST" });
+      await pollJob(job, null, btn);
+      toast("AutoModpack installiert — Server (neu) starten.", "info");
+      await loadAmp();
+    } catch (e) {
+      ampError(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "AutoModpack installieren";
+    }
+  });
+  $("#amp-require").addEventListener("change", async (ev) => {
+    try {
+      await api(`/api/instances/${state.detailId}/automodpack`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ require: ev.target.checked }),
+      });
+      ampError("");
+      toast("Gilt nach dem nächsten Neustart des Servers.", "info");
+    } catch (e) {
+      ev.target.checked = !ev.target.checked;
+      ampError(e.message);
+    }
+  });
+  $("#amp-generate").addEventListener("click", async () => {
+    try {
+      await api(`/api/instances/${state.detailId}/automodpack/generate`, { method: "POST" });
+      ampError("");
+      toast("Mod-Liste veröffentlicht.", "info");
+    } catch (e) { ampError(e.message); }
+  });
+  $("#amp-client-upload").addEventListener("click", async () => {
+    const file = $("#amp-client-file").files[0];
+    if (!file) { ampError("Bitte eine .jar-Datei wählen."); return; }
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await apiUpload(`/api/instances/${state.detailId}/automodpack/client-mods`, form);
+      $("#amp-client-file").value = "";
+      ampError("");
+      loadAmp();
+    } catch (e) { ampError(e.message); }
+  });
+
+
   /* ---------- Fritzbox (TR-064): Zugang + Portfreigabe ---------- */
   function fritzDlgError(msg) { setText($("#fz-error"), msg || ""); show($("#fz-error"), !!msg); }
   function fritzDlgInfo(msg) { setText($("#fz-result"), msg || ""); show($("#fz-result"), !!msg); }

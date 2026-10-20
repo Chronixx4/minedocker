@@ -502,3 +502,15 @@ Stacks.
 - **Docker-Images:** liegen auf der Systemplatte (`/var/lib/docker`); bei
   Platzmangel den ZimaOS-„Data Migration"-Mechanismus nutzen (Docker-
   Daten zwischen Platten verschieben) — Instanzdaten sind davon unabhängig.
+
+---
+
+## Mod-Sync für Spieler (AutoModpack)
+
+Damit Freunde Mods nicht einzeln bekommen: Im Server-Tab unter **Mod-Sync für
+Spieler (AutoModpack)** die Mod installieren und den Server (neu) starten.
+Spieler installieren AutoModpack einmalig (Modrinth) und bekommen beim Join
+alle Server-Mods; vom Server entfernte Mods werden bei ihnen wieder gelöscht.
+Reine Server-Mods lässt AutoModpack selbst weg. Client-only-Mods (z. B.
+Shader-Mods) lädst du im selben Bereich hoch. Der Standardmodus nutzt den
+Minecraft-Port, es ist keine neue Fritzbox-Freigabe nötig.
