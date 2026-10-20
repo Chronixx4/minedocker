@@ -147,7 +147,9 @@ def status(instance: dict) -> dict:
 
 def _split_items(body: str) -> list[str]:
     """Rohe Listeneinträge trennen; Kommas in {…} oder "…" trennen nicht."""
-    items, cur, depth, quote = [], [], 0, False
+    items: list[str] = []
+    cur: list[str] = []
+    depth, quote = 0, False
     for ch in body:
         if ch == '"':
             quote = not quote
