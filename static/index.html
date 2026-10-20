@@ -1269,6 +1269,28 @@
             </div>
             <div id="modcfg-error" class="err hidden"></div>
           </details>
+          <details id="amp-box" class="mods-trash">
+            <summary>Mod-Sync für Spieler (AutoModpack) <span id="amp-count" class="muted"></span></summary>
+            <p class="muted small">Spieler installieren einmalig die Mod „AutoModpack“. Beim Beitreten bekommen sie
+              alle Mods dieses Servers, vom Server entfernte Mods verschwinden bei ihnen wieder.
+              Läuft über den normalen Minecraft-Port, keine zusätzliche Freigabe nötig.</p>
+            <div id="amp-state" class="muted small"></div>
+            <div class="row">
+              <button id="amp-install" class="btn primary small-btn admin-only hidden">AutoModpack installieren</button>
+              <button id="amp-generate" class="btn small-btn admin-only hidden">Mod-Liste jetzt veröffentlichen</button>
+            </div>
+            <label id="amp-require-row" class="hidden"><input id="amp-require" type="checkbox" class="admin-only">
+              Mod ist Pflicht (Spieler ohne AutoModpack werden abgewiesen, wirksam nach Neustart)</label>
+            <div id="amp-clients" class="hidden">
+              <h4>Nur für Spieler (Client-only-Mods, z. B. Shader-Mods)</h4>
+              <ul id="amp-client-list" class="mod-list compact"></ul>
+              <div class="row">
+                <input id="amp-client-file" type="file" accept=".jar" class="admin-only">
+                <button id="amp-client-upload" class="btn small-btn admin-only">Hochladen</button>
+              </div>
+            </div>
+            <div id="amp-error" class="err hidden"></div>
+          </details>
           <details id="ports-box" class="mods-trash">
             <summary>Zusätzliche Ports <span id="ports-count" class="muted"></span></summary>
             <p class="muted small">Für Mods mit eigenem Port, z. B. Simple Voice Chat (UDP 24454).

@@ -34,6 +34,7 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES as GZIP_DEF
 from starlette.middleware.gzip import GZipMiddleware
 
 from . import auth as auth_mod
+from . import automodpack as automodpack_mod
 from . import backups as backups_mod
 from . import (
     catalog,
@@ -434,6 +435,10 @@ class ModConfigSaveRequest(BaseModel):
     path: str = Field(min_length=1, max_length=512)
     sha: str = Field(min_length=1, max_length=64)
     changes: list[dict] = Field(max_length=500)
+
+
+class AutoModpackSettingsRequest(BaseModel):
+    require: bool
 
 
 class ExtraPortsRequest(BaseModel):
@@ -2434,6 +2439,72 @@ async def instance_modconfig_save(instance_id: str, req: ModConfigSaveRequest):
     return result
 
 
+@api.get("/instances/{instance_id}/automodpack")
+async def instance_automodpack_get(instance_id: str):
+    instance = instances.get_instance(instance_id)
+    return await asyncio.to_thread(automodpack_mod.status, instance)
+
+
+@api.post("/instances/{instance_id}/automodpack/install")
+async def instance_automodpack_install(instance_id: str):
+    """AutoModpack passend zu Loader und Version von Modrinth installieren."""
+    instance = instances.get_instance(instance_id)
+    if instance.get("loader") not in automodpack_mod.LOADERS:
+        raise HTTPException(status_code=400,
+                            detail="AutoModpack gibt es nur für Fabric, Forge, NeoForge und Quilt")
+    try:
+        result = await modinstall.start_install(
+            instance, [{"source": "modrinth", "project_id": automodpack_mod.PROJECT_ID}], True)
+    except modinstall.InstallConflict:
+        raise HTTPException(status_code=409, detail="AutoModpack ist schon installiert")
+    instances.invalidate_disk_cache(instance_id)
+    return result
+
+
+@api.put("/instances/{instance_id}/automodpack")
+async def instance_automodpack_put(instance_id: str, req: AutoModpackSettingsRequest):
+    """Schalter „Mod Pflicht“ — wirksam nach Neustart des Servers."""
+    instances.get_instance(instance_id)
+    require = await asyncio.to_thread(automodpack_mod.set_require, instance_id, req.require)
+    return {"require": require}
+
+
+@api.post("/instances/{instance_id}/automodpack/generate")
+async def instance_automodpack_generate(instance_id: str):
+    """Mod-Liste für Spieler neu veröffentlichen (RCON: /automodpack generate)."""
+    instance = instances.get_instance(instance_id)
+    output = await _rcon_run(instance, "automodpack generate")
+    return {"output": output}
+
+
+@api.post("/instances/{instance_id}/automodpack/client-mods")
+async def instance_automodpack_client_mod_upload(instance_id: str,
+                                                  file: UploadFile = File(...)):
+    """Client-only-Mod (z. B. Shader-Mod) für Spieler hochladen — nicht für den Server."""
+    instances.get_instance(instance_id)
+    dest = automodpack_mod.client_mod_path(instance_id, file.filename or "")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".upload.tmp")
+    try:
+        written = await _stream_upload(file, tmp, 200 * 1024 * 1024, label="200 MiB")
+        os.replace(tmp, dest)
+    except HTTPException:
+        tmp.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Upload fehlgeschlagen: {exc}")
+    logger.info("Client-Mod hochgeladen: %s (%d Bytes) → %s", dest.name, written, instance_id)
+    return {"name": dest.name, "size": written}
+
+
+@api.delete("/instances/{instance_id}/automodpack/client-mods/{filename}")
+async def instance_automodpack_client_mod_delete(instance_id: str, filename: str):
+    instances.get_instance(instance_id)
+    await asyncio.to_thread(automodpack_mod.delete_client_mod, instance_id, filename)
+    return {"deleted": filename}
+
+
 @api.get("/instances/{instance_id}/ports")
 async def instance_extra_ports_get(instance_id: str):
     instance = instances.get_instance(instance_id)
@@ -2869,7 +2940,7 @@ async def instance_pack_retry_failed(instance_id: str):
 
 @api.post("/instances/{instance_id}/modpacks/upload")
 async def instance_pack_upload(instance_id: str, force: bool = Form(False),
-                               auto_version: bool = Form(True),
+                               auto_version: str | None = Form(None),
                                staged: str = Form(""),
                                file: UploadFile | None = File(None)):
     """Installiert ein hochgeladenes Modpack-Archiv (.mrpack oder CurseForge-.zip).
@@ -2907,7 +2978,8 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
 
     try:
         job = await packs.install_upload(instance_id, dest, filename,
-                                         force=force, auto_version=auto_version)
+                                         force=force, auto_version=(auto_version or "true").strip().lower()
+                                         not in ("false", "0", "off", "no"))
     except HTTPException:
         dest.unlink(missing_ok=True)
         raise
