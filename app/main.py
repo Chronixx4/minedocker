@@ -2940,7 +2940,7 @@ async def instance_pack_retry_failed(instance_id: str):
 
 @api.post("/instances/{instance_id}/modpacks/upload")
 async def instance_pack_upload(instance_id: str, force: bool = Form(False),
-                               auto_version: bool = Form(True),
+                               auto_version: str | None = Form(None),
                                staged: str = Form(""),
                                file: UploadFile | None = File(None)):
     """Installiert ein hochgeladenes Modpack-Archiv (.mrpack oder CurseForge-.zip).
@@ -2978,7 +2978,8 @@ async def instance_pack_upload(instance_id: str, force: bool = Form(False),
 
     try:
         job = await packs.install_upload(instance_id, dest, filename,
-                                         force=force, auto_version=auto_version)
+                                         force=force, auto_version=(auto_version or "true").strip().lower()
+                                         not in ("false", "0", "off", "no"))
     except HTTPException:
         dest.unlink(missing_ok=True)
         raise
