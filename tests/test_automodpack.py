@@ -94,3 +94,57 @@ class TestClientMods:
 
 def test_generate_braucht_laufenden_server(client, inst):
     assert client.post(url(inst, "/generate")).status_code == 409
+
+
+CONF_EXCLUDE = """modpack-host: true
+require-modpack: true
+exclude: ["**/.*", "**/*.{tmp,disabled,bak}"]
+"""
+
+
+class TestVerteilen:
+    def _setup(self, inst, conf=CONF_EXCLUDE):
+        mods = instances.mods_dir(inst["id"])
+        mods.mkdir(parents=True, exist_ok=True)
+        (mods / "automodpack-fabric-4.0.jar").write_bytes(b"x")
+        (mods / "lithium.jar").write_bytes(b"x")
+        (mods / "serveronly.jar").write_bytes(b"x")
+        (mods / "off.jar.disabled").write_bytes(b"x")
+        if conf is not None:
+            c = instances.instance_dir(inst["id"]) / "automodpack" / "server.conf"
+            c.parent.mkdir(parents=True, exist_ok=True)
+            c.write_text(conf)
+            return c
+
+    def test_liste_und_umschalten(self, client, inst):
+        conf = self._setup(inst)
+        d = client.get(url(inst)).json()
+        assert d["distribute_editable"] is True
+        assert d["server_mods"] == [{"filename": "lithium.jar", "distribute": True},
+                                    {"filename": "serveronly.jar", "distribute": True}]
+        r = client.put(url(inst, "/mods"), json={"filename": "serveronly.jar", "distribute": False})
+        assert r.status_code == 200
+        assert 'exclude: ["**/.*", "**/*.{tmp,disabled,bak}", "mods/serveronly.jar"]' in conf.read_text()
+        assert conf.with_name("server.conf.dashboard-bak").read_text() == CONF_EXCLUDE
+        d = client.get(url(inst)).json()
+        assert {m["filename"]: m["distribute"] for m in d["server_mods"]}["serveronly.jar"] is False
+        client.put(url(inst, "/mods"), json={"filename": "serveronly.jar", "distribute": True})
+        assert conf.read_text() == CONF_EXCLUDE
+
+    def test_ohne_anfuehrungszeichen_bleibt_stil(self, client, inst):
+        conf = self._setup(inst, "exclude: [**/.*]\n")
+        client.put(url(inst, "/mods"), json={"filename": "lithium.jar", "distribute": False})
+        assert conf.read_text() == "exclude: [**/.*, mods/lithium.jar]\n"
+
+    def test_mehrdeutige_oder_fehlende_config(self, client, inst):
+        self._setup(inst, "exclude: []\nexclude: []\n")
+        assert client.get(url(inst)).json()["distribute_editable"] is False
+        r = client.put(url(inst, "/mods"), json={"filename": "lithium.jar", "distribute": False})
+        assert r.status_code == 409
+
+    def test_eingabe_geprueft(self, client, inst):
+        self._setup(inst)
+        for name, code in (("fehlt.jar", 404), ("automodpack-fabric-4.0.jar", 400),
+                           ("../x.jar", 400)):
+            r = client.put(url(inst, "/mods"), json={"filename": name, "distribute": False})
+            assert r.status_code == code, name

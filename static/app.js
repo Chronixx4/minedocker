@@ -4268,6 +4268,43 @@
     show($("#amp-require-row"), d.installed && d.require !== null);
     $("#amp-require").checked = !!d.require;
     show($("#amp-clients"), d.installed);
+    show($("#amp-mods"), d.installed);
+    const hint = $("#amp-mods-hint");
+    setText(hint, d.distribute_editable ? ""
+      : "Auswahl noch nicht möglich: Server einmal mit AutoModpack starten (Config wird erzeugt).");
+    show(hint, !d.distribute_editable);
+    const modList = $("#amp-mod-list");
+    modList.textContent = "";
+    for (const m of d.server_mods) {
+      const li = document.createElement("li");
+      li.className = "mod-row";
+      const label = document.createElement("label");
+      label.className = "mod-info";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = m.distribute !== false;
+      box.disabled = !d.distribute_editable;
+      box.classList.add("admin-only");
+      box.addEventListener("change", async () => {
+        try {
+          await api(`${base}/mods`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename: m.filename, distribute: box.checked }),
+          });
+          ampError("");
+        } catch (e) {
+          box.checked = !box.checked;
+          ampError(e.message);
+        }
+      });
+      const name = document.createElement("span");
+      name.className = "mod-name";
+      name.textContent = " " + m.filename;
+      label.append(box, name);
+      li.appendChild(label);
+      modList.appendChild(li);
+    }
     const list = $("#amp-client-list");
     list.textContent = "";
     for (const m of d.client_mods) {
@@ -4307,9 +4344,6 @@
     }
   }
 
-  $("#amp-box").addEventListener("toggle", (ev) => {
-    if (ev.target.open) loadAmp();
-  });
   $("#amp-install").addEventListener("click", async () => {
     const btn = $("#amp-install");
     btn.disabled = true;
@@ -8773,6 +8807,7 @@
     ["einstellungen", "Einstellungen", "anvil"],
     ["update", "Update", "arrow"],
     ["chunky", "Chunky", "grid"], // ohne Zifferntaste (nur 1–9)
+    ["modsync", "Mod-Sync", "arrow"], // ohne Zifferntaste
   ];
 
   const SLOT_ICONS = {
@@ -8911,6 +8946,7 @@
     if (key === "mods" && state.modsView === "add" && state.detailId) mountSearch(true);
     // Welt-Slot: Welten + Karte laden; beim Verlassen die Karte entladen
     if (key === "update") updRefreshState();
+    if (key === "modsync") loadAmp();
     if (key === "welt" && state.detailId && state.wsLoaded?.has("welt")) loadWorldInfo();
     else if (key !== "welt" && typeof resetMapFrame === "function") resetMapFrame();
     loadWsTabData(key);
