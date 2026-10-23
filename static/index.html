@@ -734,6 +734,27 @@
               und Versionswechseln entsteht automatisch ein Sicherheits-Backup.
               Wiederherstellen ersetzt alle aktuellen Dateien und stoppt die Instanz!</p>
             <p id="backup-location" class="muted small hidden"></p>
+            <p id="backup-usage" class="muted small hidden"></p>
+            <details id="backup-settings" class="admin-only">
+              <summary>Backup-Einstellungen (gelten für alle Server)</summary>
+              <p class="muted small">Immer ausgeschlossen (jederzeit neu erzeugbar):
+                <span id="backup-always-excluded"></span></p>
+              <div class="row">
+                <label>Zusätzlich ausschließen (ein Pfad pro Zeile, z. B. <code>dynmap</code>)
+                  <textarea id="backup-extra-excludes" rows="3" spellcheck="false"></textarea></label>
+              </div>
+              <div class="row">
+                <label>Kompression (1 schnell – 9 klein)
+                  <input type="number" id="backup-compress" class="sched-num" min="1" max="9"></label>
+                <label>Sicherheits-Snapshots behalten
+                  <input type="number" id="backup-safety-keep" class="sched-num" min="1" max="10"></label>
+                <label>Manuelle Backups behalten (0 = alle)
+                  <input type="number" id="backup-manual-keep" class="sched-num" min="0" max="50"></label>
+              </div>
+              <p class="muted small">Geplante Backups: Anzahl im Zeitplan der Instanz.
+                Überzählige Backups werden erst beim nächsten neuen Backup gelöscht.</p>
+              <button id="backup-settings-save" class="btn primary">Speichern</button>
+            </details>
             <div id="backup-error" class="err hidden"></div>
             <ul id="backup-list" class="mod-list"></ul>
             <p id="backup-empty" class="muted hidden">Noch keine Backups vorhanden.</p>
