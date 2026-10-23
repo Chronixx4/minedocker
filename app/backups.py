@@ -7,13 +7,17 @@ Sondernfälle leeren. Mit BACKUPS_DIR auf einer zweiten Platte überstehen sie
 auch einen Ausfall der Server-Platte (SERVER-SETUP.md §5).
 """
 import contextlib
+import json
 import logging
+import os
 import re
 import shutil
 import tarfile
+import threading
 from datetime import datetime
 from pathlib import Path
 
+from . import auth
 from .config import settings
 
 logger = logging.getLogger("dashboard.backups")
@@ -31,6 +35,7 @@ _SAFETY_KEEP = 3
 # Zeitgesteuerte Backups (Scheduler): eigenes Namensschema + eigene Rotation,
 # damit sie Sicherheits-Snapshots und manuelle Backups nicht verdrängen.
 _SCHEDULED_NAME_RE = re.compile(r"^scheduled-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
+_MANUAL_NAME_RE = re.compile(r"^backup-\d{8}-\d{6}(-\d+)?\.tar\.gz$")
 
 
 def backups_root() -> Path:
@@ -67,18 +72,128 @@ def _safe_backup_path(instance_id: str, name: str) -> Path:
     return candidate
 
 
-# Ordner, die nie ins Backup gehören: BlueMap-Renderdaten (Live-Karte) sind
-# jederzeit neu erzeugbar, aber bei großen Welten mehrere GB groß.
-_ALWAYS_EXCLUDE = {"bluemap"}
+# Pfade, die nie ins Backup gehören: alles, was jederzeit neu erzeugt wird
+# (BlueMap-Renderdaten, Logs, Crash-Reports, Caches, Remapping-Ordner) oder
+# bereits anderswo liegt (alte Backups, Welt-Backups, AutoModpack-Hostcontent
+# = Kopie der Mods). Relative Pfade ab Instanz-Ordner; ein Eintrag schließt
+# den ganzen Unterbaum aus.
+_ALWAYS_EXCLUDE = {
+    "bluemap", "logs", "crash-reports", "cache", ".cache", ".fabric",
+    "debug", "backups", "world-backups", ".paper-remapped",
+    "automodpack/host-modpack",
+}
+
+_SETTINGS_LOCK = threading.Lock()
+SETTINGS_DEFAULTS = {
+    "compress_level": 6,   # gzip 1 (schnell) .. 9 (klein)
+    "safety_keep": _SAFETY_KEEP,  # Sicherheits-Snapshots je Typ
+    "manual_keep": 0,      # manuelle Backups; 0 = nie automatisch löschen
+    "extra_excludes": [],  # zusätzliche Pfade (z. B. "dynmap")
+}
+_EXCLUDE_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
+
+
+def settings_path() -> Path:
+    return auth.users_path().parent / "backup_settings.json"
+
+
+def _clamp(value, lo, hi, default):
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clean_excludes(raw) -> list:
+    out = []
+    for item in raw if isinstance(raw, list) else []:
+        item = str(item).strip().strip("/")
+        if item.startswith("./"):
+            item = item[2:]
+        if item and ".." not in item.split("/") and _EXCLUDE_RE.match(item) \
+                and item not in out:
+            out.append(item)
+    return out[:50]
+
+
+def load_settings() -> dict:
+    try:
+        data = json.loads(settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    d = SETTINGS_DEFAULTS
+    return {
+        "compress_level": _clamp(data.get("compress_level"), 1, 9, d["compress_level"]),
+        "safety_keep": _clamp(data.get("safety_keep"), 1, 10, d["safety_keep"]),
+        "manual_keep": _clamp(data.get("manual_keep"), 0, 50, d["manual_keep"]),
+        "extra_excludes": _clean_excludes(data.get("extra_excludes")),
+    }
+
+
+def save_settings(**changes) -> dict:
+    """Teil-Update der Backup-Einstellungen (None = unverändert)."""
+    with _SETTINGS_LOCK:
+        cfg = load_settings()
+        for key, value in changes.items():
+            if value is not None and key in cfg:
+                cfg[key] = value
+        cfg = {**cfg, "extra_excludes": _clean_excludes(cfg["extra_excludes"])}
+        cfg["compress_level"] = _clamp(cfg["compress_level"], 1, 9, 6)
+        cfg["safety_keep"] = _clamp(cfg["safety_keep"], 1, 10, _SAFETY_KEEP)
+        cfg["manual_keep"] = _clamp(cfg["manual_keep"], 0, 50, 0)
+        path = settings_path()
+        tmp = path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle)
+        os.replace(tmp, path)
+    return cfg
+
+
+def exclude_set(cfg: dict | None = None) -> set:
+    cfg = cfg or load_settings()
+    return set(_ALWAYS_EXCLUDE) | set(cfg["extra_excludes"])
 
 
 def _top_filter(excludes: set):
-    """tarfile-Filter: lässt Einträge weg, deren oberster Ordner in excludes liegt."""
+    """tarfile-Filter: lässt Einträge weg, deren Pfad (oder ein Elternpfad)
+    in excludes liegt."""
     def _filter(info):
         name = info.name[2:] if info.name.startswith("./") else info.name
-        top = name.split("/", 1)[0]
-        return None if top in excludes else info
+        parts = name.split("/")
+        for i in range(1, len(parts) + 1):
+            if "/".join(parts[:i]) in excludes:
+                return None
+        return info
     return _filter
+
+
+def usage() -> dict:
+    """Speicherverbrauch aller Backups (je Instanz) + freier Platz der Ablage."""
+    root = backups_root()
+    per = {}
+    total = 0
+    if root.is_dir():
+        for sub in root.iterdir():
+            if not sub.is_dir():
+                continue
+            size = count = 0
+            for f in sub.glob("*.tar.gz"):
+                try:
+                    size += f.stat().st_size
+                    count += 1
+                except OSError:
+                    pass
+            per[sub.name] = {"bytes": size, "count": count}
+            total += size
+    try:
+        probe = root if root.exists() else root.parent
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        free = None
+    return {"total_bytes": total, "free_bytes": free, "instances": per}
 
 
 def _rcon_quiet(instance: dict, command: str) -> bool:
@@ -128,8 +243,12 @@ def create_backup(instance_id: str, instance_dir: Path) -> dict:
     bdir.mkdir(parents=True, exist_ok=True)
     name = f"backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
     dest = bdir / name
-    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=6) as tar:
-        tar.add(str(instance_dir), arcname=".", filter=_top_filter(_ALWAYS_EXCLUDE))
+    cfg = load_settings()
+    with world_flushed(instance_id), tarfile.open(
+            dest, "w:gz", compresslevel=cfg["compress_level"]) as tar:
+        tar.add(str(instance_dir), arcname=".", filter=_top_filter(exclude_set(cfg)))
+    if cfg["manual_keep"]:
+        _rotate_matching(instance_id, _MANUAL_NAME_RE, cfg["manual_keep"])
     stat = dest.stat()
     return {"name": name, "size_bytes": stat.st_size, "created": int(stat.st_mtime)}
 
@@ -139,7 +258,7 @@ def _safety_excludes(kind: str, instance_dir: Path) -> set:
     - pre-install: Welt (bleibt unberührt) + packs (Installations-Quellen)
     - pre-restore/pre-update: nur packs (Restore ersetzt ALLE Daten, neue
       Mod-/Spielversionen können die Welt beim ersten Start umschreiben)"""
-    excludes = {"packs", *_ALWAYS_EXCLUDE}
+    excludes = {"packs", *exclude_set()}
     if kind == "pre-install":
         from .instances import find_world_dir  # lazy, vermeidet Import-Zirkel
         world = find_world_dir(instance_dir)
@@ -164,7 +283,8 @@ def safety_backup(instance_id: str, instance_dir: Path, kind: str) -> dict:
         dest = bdir / f"{kind}-{stamp}-{counter}.tar.gz"
         counter += 1
     excludes = _safety_excludes(kind, instance_dir)
-    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=6) as tar:
+    level = load_settings()["compress_level"]
+    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=level) as tar:
         tar.add(str(instance_dir), arcname=".", filter=_top_filter(excludes))
     _rotate_safety(instance_id)
     stat = dest.stat()
@@ -173,23 +293,30 @@ def safety_backup(instance_id: str, instance_dir: Path, kind: str) -> dict:
     return {"name": dest.name, "size_bytes": stat.st_size, "created": int(stat.st_mtime)}
 
 
-def _rotate_safety(instance_id: str) -> int:
-    """Löscht ältere Sicherheits-Snapshots über _SAFETY_KEEP; Rückgabe: Anzahl."""
+def _rotate_matching(instance_id: str, name_re, keep: int) -> int:
+    """Löscht ältere Backups, deren Name name_re trifft, über keep hinaus."""
     bdir = instance_backups_dir(instance_id)
     try:
-        safety = sorted(
-            (p for p in bdir.glob("*.tar.gz") if _SAFETY_NAME_RE.match(p.name)),
+        items = sorted(
+            (p for p in bdir.glob("*.tar.gz") if name_re.match(p.name)),
             key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return 0
     removed = 0
-    for path in safety[_SAFETY_KEEP:]:
+    for path in items[keep:]:
         try:
             path.unlink()
             removed += 1
         except OSError:
             pass
     return removed
+
+
+def _rotate_safety(instance_id: str) -> int:
+    """Rotiert Sicherheits-Snapshots (alle Typen zusammen) auf die Einstellung
+    safety_keep; Rückgabe: Anzahl gelöschter Dateien."""
+    return _rotate_matching(instance_id, _SAFETY_NAME_RE,
+                            load_settings()["safety_keep"])
 
 
 def scheduled_backup(instance_id: str, instance_dir: Path, keep: int = 5) -> dict:
@@ -205,8 +332,10 @@ def scheduled_backup(instance_id: str, instance_dir: Path, keep: int = 5) -> dic
     while dest.exists():  # zwei Backups in derselben Sekunde
         dest = bdir / f"scheduled-{stamp}-{counter}.tar.gz"
         counter += 1
-    with world_flushed(instance_id), tarfile.open(dest, "w:gz", compresslevel=6) as tar:
-        tar.add(str(instance_dir), arcname=".", filter=_top_filter(_ALWAYS_EXCLUDE))
+    cfg = load_settings()
+    with world_flushed(instance_id), tarfile.open(
+            dest, "w:gz", compresslevel=cfg["compress_level"]) as tar:
+        tar.add(str(instance_dir), arcname=".", filter=_top_filter(exclude_set(cfg)))
     _rotate_scheduled(instance_id, keep)
     stat = dest.stat()
     logger.info("Geplantes Backup: %s (%d Bytes) → %s",

@@ -5304,6 +5304,49 @@
     openPackUpload(mpTarget()?.instanceId || "");
   });
   /* ---------- Backups je Instanz ---------- */
+  async function loadBackupSettings() {
+    const usageEl = $("#backup-usage");
+    try {
+      const cfg = await api("/api/backup-settings");
+      const u = cfg.usage || {};
+      const n = Object.values(u.instances || {}).reduce((a, i) => a + i.count, 0);
+      setText(usageEl, `Alle Backups zusammen: ${n} Stück, ${fmtBytes(u.total_bytes || 0)}`
+        + (u.free_bytes != null ? ` · frei auf der Ablage: ${fmtBytes(u.free_bytes)}` : ""));
+      show(usageEl, true);
+      setText($("#backup-always-excluded"), cfg.always_excluded.join(", "));
+      const box = $("#backup-settings");
+      if (!box.open) {
+        $("#backup-extra-excludes").value = cfg.extra_excludes.join("\n");
+        $("#backup-compress").value = cfg.compress_level;
+        $("#backup-safety-keep").value = cfg.safety_keep;
+        $("#backup-manual-keep").value = cfg.manual_keep;
+      }
+    } catch (e) {
+      show(usageEl, false);  // Nicht-Admins: keine Einstellungen/Statistik
+    }
+  }
+
+  $("#backup-settings-save").addEventListener("click", async () => {
+    try {
+      await api("/api/backup-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compress_level: Number($("#backup-compress").value) || 6,
+          safety_keep: Number($("#backup-safety-keep").value) || 3,
+          manual_keep: Number($("#backup-manual-keep").value) || 0,
+          extra_excludes: $("#backup-extra-excludes").value
+            .split("\n").map((l) => l.trim()).filter(Boolean),
+        }),
+      });
+      toast("Backup-Einstellungen gespeichert.", "success");
+      $("#backup-settings").open = false;
+      loadBackupSettings();
+    } catch (e) {
+      toast(`Speichern fehlgeschlagen: ${e.message}`, "error");
+    }
+  });
+
   async function loadBackups() {
     if (!state.detailId) return;
     show($("#backup-error"), false);
@@ -5320,6 +5363,7 @@
             + "eine zweite Platte setzen oder Backups herunterladen.");
       }
       show(loc, !!data.location);
+      loadBackupSettings();
       show($("#backup-empty"), data.backups.length === 0);
       for (const b of data.backups) {
         const row = document.createElement("li");

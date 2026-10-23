@@ -340,3 +340,54 @@ class TestBackupAblage:
         data = client.get(f"/api/instances/{inst['id']}/backups").json()
         assert data["external"] is False
         assert data["location"].endswith("backups")
+
+
+class TestBackupAusschluesseUndEinstellungen:
+    def test_unnoetige_ordner_ausgeschlossen(self):
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        for rel in ("logs/latest.log", "crash-reports/c.txt", "bluemap/web/x.png",
+                    "automodpack/host-modpack/main/a.jar", "dynmap/t.png"):
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_text("x")
+        (d / "automodpack" / "server.conf").write_text("keep")
+        backups_mod.save_settings(extra_excludes=["dynmap"])
+        res = backups_mod.create_backup(inst["id"], d)
+        path = backups_mod.backup_path(inst["id"], res["name"])
+        with tarfile.open(path, "r:gz") as tar:
+            names = {n[2:] if n.startswith("./") else n for n in tar.getnames()}
+        assert "world/level.dat" in names and "automodpack/server.conf" in names
+        assert not any(n.startswith(("logs", "crash-reports", "bluemap", "dynmap",
+                                     "automodpack/host-modpack")) for n in names)
+
+    def test_einstellungen_validiert(self):
+        cfg = backups_mod.save_settings(compress_level=99, safety_keep=0,
+                                        extra_excludes=["../etc", "ok/pfad", "a b"])
+        assert cfg["compress_level"] == 9 and cfg["safety_keep"] == 1
+        assert cfg["extra_excludes"] == ["ok/pfad"]
+
+    def test_manuelle_rotation_nur_wenn_aktiv(self):
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        bdir = backups_mod.instance_backups_dir(inst["id"])
+        bdir.mkdir(parents=True, exist_ok=True)
+        import os
+        for i in range(3):
+            f = bdir / f"backup-20240101-00000{i}.tar.gz"
+            f.write_bytes(b"x")
+            os.utime(f, (1000 + i, 1000 + i))
+        backups_mod.create_backup(inst["id"], d)
+        assert len(backups_mod.list_backups(inst["id"])) == 4  # Default: keine Löschung
+        backups_mod.save_settings(manual_keep=2)
+        backups_mod.create_backup(inst["id"], d)
+        assert len(backups_mod.list_backups(inst["id"])) == 2
+
+    def test_usage(self):
+        inst = _create_instance()
+        d = instances_mod.instance_dir(inst["id"])
+        _write_instance_data(d)
+        backups_mod.create_backup(inst["id"], d)
+        u = backups_mod.usage()
+        assert u["instances"][inst["id"]]["count"] == 1 and u["total_bytes"] > 0

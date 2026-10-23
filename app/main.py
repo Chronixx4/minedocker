@@ -2532,6 +2532,40 @@ async def instance_extra_ports_put(instance_id: str, req: ExtraPortsRequest):
     return {"ports": await asyncio.to_thread(extraports_mod.set_ports, instance_id, req.ports)}
 
 
+class BackupSettingsRequest(BaseModel):
+    compress_level: int | None = Field(default=None, ge=1, le=9)
+    safety_keep: int | None = Field(default=None, ge=1, le=10)
+    manual_keep: int | None = Field(default=None, ge=0, le=50)
+    extra_excludes: list[str] | None = Field(default=None, max_length=50)
+
+
+def _backup_settings_view() -> dict:
+    return {**backups_mod.load_settings(),
+            "always_excluded": sorted(backups_mod._ALWAYS_EXCLUDE),
+            "usage": backups_mod.usage()}
+
+
+@api.get("/backup-settings")
+async def backup_settings_get(request: Request):
+    auth_mod.require_admin(request)
+    return await asyncio.to_thread(_backup_settings_view)
+
+
+@api.put("/backup-settings")
+async def backup_settings_put(request: Request, req: BackupSettingsRequest):
+    """Backup-Einstellungen (Kompression, Aufbewahrung, Ausschlüsse) speichern."""
+    auth_mod.require_admin(request)
+    try:
+        await asyncio.to_thread(
+            backups_mod.save_settings, compress_level=req.compress_level,
+            safety_keep=req.safety_keep, manual_keep=req.manual_keep,
+            extra_excludes=req.extra_excludes)
+    except OSError as exc:
+        raise HTTPException(status_code=500,
+                            detail=f"backup_settings.json nicht schreibbar: {exc}") from exc
+    return await asyncio.to_thread(_backup_settings_view)
+
+
 @api.get("/fritzbox")
 async def fritzbox_get(request: Request):
     auth_mod.require_admin(request)
