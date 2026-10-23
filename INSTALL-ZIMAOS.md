@@ -21,7 +21,7 @@ Der ZimaOS-App-Import hat zwei Eigenheiten (empirisch bestätigt):
 2. Er verschluckt `$$`-Escapes in Compose-Commands (Backups hießen dann
    `mcdata-.tgz` mit leerem Zeitstempel). Deshalb kommt diese YAML komplett
    **ohne `$`-Zeichen** aus: Das Backup rotiert per Umbenennungskette
-   (14 Generationen à 24 h = 14 Tage Retention, `latest.tgz` = neuester
+   (3 Generationen à 24 h = 3 Tage Retention, `latest.tgz` = neuester
    Snapshot) statt per `$(date ...)`.
 
 ## Einmalig per SSH vorbereiten
@@ -105,20 +105,9 @@ services:
       - /DATA/AppData/mc-dashboard/backups:/backups
     command: >
       sh -c "while true; do
-               mv /backups/13.tgz /backups/14.tgz 2>/dev/null;
-               mv /backups/12.tgz /backups/13.tgz 2>/dev/null;
-               mv /backups/11.tgz /backups/12.tgz 2>/dev/null;
-               mv /backups/10.tgz /backups/11.tgz 2>/dev/null;
-               mv /backups/9.tgz /backups/10.tgz 2>/dev/null;
-               mv /backups/8.tgz /backups/9.tgz 2>/dev/null;
-               mv /backups/7.tgz /backups/8.tgz 2>/dev/null;
-               mv /backups/6.tgz /backups/7.tgz 2>/dev/null;
-               mv /backups/5.tgz /backups/6.tgz 2>/dev/null;
-               mv /backups/4.tgz /backups/5.tgz 2>/dev/null;
-               mv /backups/3.tgz /backups/4.tgz 2>/dev/null;
                mv /backups/2.tgz /backups/3.tgz 2>/dev/null;
                mv /backups/1.tgz /backups/2.tgz 2>/dev/null;
-               tar -czf /backups/1.tgz -C /data .;
+               tar --exclude='./backups' --exclude='*/bluemap' --exclude='*/logs' --exclude='*/crash-reports' --exclude='*/cache' --exclude='*/.fabric' --exclude='*/world-backups' --exclude='*/host-modpack' -czf /backups/1.tgz -C /data .;
                ln -sf 1.tgz /backups/latest.tgz;
                echo backup 1.tgz ok;
                sleep 24h;

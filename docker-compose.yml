@@ -155,9 +155,11 @@ services:
 
   backup:
     # Wartungsfreier Backup-Daemon: tar't das gesamte mcdata-Volume (alle
-    # Instanzen, Mods, Benutzer, Einstellungen) im 6-h-Takt, behält 14 Tage,
+    # Instanzen, Mods, Benutzer, Einstellungen) im 24-h-Takt, behält 3 Tage,
     # legt latest.tgz-Symlink. Die Dashboard-eigenen Backups (/data/backups)
-    # werden ausgelassen.
+    # werden ausgelassen, ebenso BlueMap-Renderdaten, Logs, Caches u. Ä.
+    # (jederzeit neu erzeugbar). ACHTUNG: Das sind trotzdem volle Welt-Kopien —
+    # bei großen Welten Retention klein halten oder den Service entfernen.
     # Achtung: Der Daemon kennt die RCON-Passwörter der Instanzen nicht und
     # sichert laufende Welten daher OHNE save-off/save-all — Regionen, die
     # gerade geschrieben werden, können im Archiv halb fertig sein. Für
@@ -173,12 +175,15 @@ services:
     command: >
       sh -c "while true; do
                ts=$$(date +%F-%H%M);
-               tar --exclude='./backups' -czf /backups/mcdata-$$ts.tgz -C /data . &&
+               tar --exclude='./backups' --exclude='*/bluemap' --exclude='*/logs' \
+                   --exclude='*/crash-reports' --exclude='*/cache' --exclude='*/.fabric' \
+                   --exclude='*/world-backups' --exclude='*/host-modpack' \
+                   -czf /backups/mcdata-$$ts.tgz -C /data . &&
                ln -sf mcdata-$$ts.tgz /backups/latest.tgz &&
                echo backup mcdata-$$ts.tgz ok ||
                echo backup mcdata-$$ts.tgz FEHLGESCHLAGEN >&2;
-               find /backups -name 'mcdata-*.tgz' -mtime +14 -delete;
-               sleep 6h;
+               find /backups -name 'mcdata-*.tgz' -mtime +3 -delete;
+               sleep 24h;
              done"
     mem_limit: 128m
     cpus: 0.25
