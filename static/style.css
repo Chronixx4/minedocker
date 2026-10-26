@@ -3516,3 +3516,60 @@ kbd {
 /* Mod-Sync: Gruppentitel der Mod-Liste */
 .amp-group-title { margin: 1rem 0 0.35rem; font-size: 0.9rem; color: var(--text-2); }
 #amp-stats { margin-top: 0.8rem; }
+
+/* ============================================================================
+   Handy-Feinschliff (≤ 640 px): lesbare Dateinamen, mehr Inhaltsbreite,
+   aufgeräumte Werkzeugleisten. Desktop bleibt unverändert.
+   ========================================================================== */
+@media (max-width: 640px) {
+  /* Kopfzeile scrollt mit weg; Benutzername nur als Icon */
+  .topbar { position: static; }
+  .topbar #user-name { display: none; }
+
+  /* Verschachtelte Boxen im Server-Detail abflachen */
+  .ws-panel .upload-box {
+    background: none;
+    border: 0;
+    box-shadow: none;
+    padding: 0.2rem 0;
+    margin: 0;
+  }
+  .ws-panel .upload-box h3 { flex-wrap: wrap; gap: 0.4rem; }
+  .ws-panels { margin-top: 0.4rem; }
+
+  /* Werkzeugleiste der Mod-Liste: Suche volle Breite, Buttons im Raster */
+  .mods-toolbar { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .mods-toolbar .search-input { grid-column: 1 / -1; max-width: none; }
+  .mods-toolbar select { width: 100% !important; }
+  .mods-toolbar .btn { width: 100%; }
+
+  /* Dateimanager: Name in voller Breite, Aktionen als Raster darunter */
+  .fb-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .fb-actions .file-input { grid-column: 1 / -1; }
+  .fb-actions .btn { width: 100%; }
+  #fb-list.mod-list.compact { max-height: none; }
+  #fb-list .mod-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.7rem 0.8rem;
+  }
+  #fb-list .mod-info { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.5rem; }
+  #fb-list .mod-name {
+    flex: 1 1 calc(100% - 2rem);
+    font-size: 1rem;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  #fb-list .mod-meta { flex: 1 0 100%; padding-left: 1.6rem; }
+  #fb-list .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr)); gap: 0.4rem; }
+  #fb-list .row .btn { min-height: 40px; }
+
+  /* Hotbar: größere Slots, Name des Bereichs immer sichtbar, Verlauf statt Überlagerung */
+  .slot { width: 46px; height: 50px; }
+  .slot-name { opacity: 1; font-size: 0.85rem; }
+  .hotbar-wrap { background: linear-gradient(transparent, rgba(10, 13, 12, 0.9) 45%); padding-top: 14px; }
+  body.has-hotbar main { padding-bottom: 120px; }
+}
