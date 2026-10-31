@@ -1,6 +1,6 @@
 -c requirements.txt
-pytest>=8.0
-ruff>=0.6
+pytest>=9.2.0
+ruff>=0.17.3
 mypy>=1.10
 # Oberflächen-Tests (tests_ui/): Browser-Steuerung, Chromium per `playwright install`
 playwright>=1.45
