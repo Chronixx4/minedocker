@@ -1,5 +1,5 @@
 # Produktionsimage: schlank, nicht-privilegiert (Default), mit Healthcheck
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 LABEL org.opencontainers.image.title="mc-dashboard" \
       org.opencontainers.image.description="Web-Dashboard zur Verwaltung von Minecraft-Server-Instanzen (Docker)" \
